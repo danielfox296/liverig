@@ -1,0 +1,43 @@
+#include "SettingsStore.h"
+
+namespace rig
+{
+
+juce::File SettingsStore::getFile()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+              .getChildFile ("Application Support")
+              .getChildFile ("LiveRig")
+              .getChildFile ("settings.json");
+}
+
+void SettingsStore::load (ParamStore& params)
+{
+    const auto file = getFile();
+
+    if (! file.existsAsFile())
+        return;
+
+    const auto parsed = juce::JSON::parse (file.loadFileAsString());
+
+    if (auto* obj = parsed.getDynamicObject())
+    {
+        params.fromVar (obj->getProperty ("params"));
+        songFolder = obj->getProperty ("songFolder").toString();
+        deviceState = obj->getProperty ("audioDeviceState").toString();
+    }
+}
+
+void SettingsStore::save (const ParamStore& params) const
+{
+    auto* root = new juce::DynamicObject();
+    root->setProperty ("params", params.toVar());
+    root->setProperty ("songFolder", songFolder);
+    root->setProperty ("audioDeviceState", deviceState);
+
+    const auto file = getFile();
+    file.getParentDirectory().createDirectory();
+    file.replaceWithText (juce::JSON::toString (juce::var (root), false));
+}
+
+} // namespace rig
