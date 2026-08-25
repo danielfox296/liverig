@@ -71,6 +71,15 @@ const ParamSpec& spec (int paramId) noexcept
     return specs[(size_t) paramId];
 }
 
+int paramIndexForId (juce::StringRef id) noexcept
+{
+    for (int i = 0; i < NumParams; ++i)
+        if (id == juce::StringRef (specs[(size_t) i].id))
+            return i;
+
+    return -1;
+}
+
 ParamStore::ParamStore()
 {
     resetToDefaults();

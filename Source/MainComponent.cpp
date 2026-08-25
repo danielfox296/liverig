@@ -55,7 +55,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     addAndMakeVisible (songList);
 
     presetBox.setEditableText (true);
-    presetBox.setTextWhenNothingSelected ("Presets");
+    presetBox.setTextWhenNothingSelected ("Whole chain preset");
     presetBox.onChange = [this] { applySelectedPreset(); };
     addAndMakeVisible (presetBox);
 
@@ -68,15 +68,15 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
                                                           pStemGain0 + i,
                                                           pStemMute0 + i)));
 
-    panels.add (new FxPanel (params, "1  Input",      -1,         { pInGain }, &inputMeter));
-    panels.add (new FxPanel (params, "2  Compressor", pCompOn,    { pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup }));
-    panels.add (new FxPanel (params, "3  EQ",         pEqOn,      { pEqLoFreq, pEqLoGain, pEqMidFreq, pEqMidGain, pEqMidQ, pEqHiFreq, pEqHiGain }));
-    panels.add (new FxPanel (params, "4  Overdrive",  pDriveOn,   { pDriveAmount, pDriveTone, pDriveLevel }));
-    panels.add (new FxPanel (params, "5  Octave",     pOctOn,     { pOctInterval, pOctMix }));
-    panels.add (new FxPanel (params, "6  Phaser",     pPhaserOn,  { pPhaserRate, pPhaserDepth, pPhaserFeedback }));
-    panels.add (new FxPanel (params, "7  Delay",      pDelayOn,   { pDelayTime, pDelayFeedback, pDelayMix, pDelayHighcut }));
-    panels.add (new FxPanel (params, "8  Reverb",     pRevOn,     { pRevSize, pRevDamp, pRevMix }));
-    panels.add (new FxPanel (params, "9  Live out",   -1,         { pLiveOut }));
+    panels.add (new FxPanel (params, presets, "",       "1  Input",      -1,        { pInGain }, &inputMeter));
+    panels.add (new FxPanel (params, presets, "comp",   "2  Compressor", pCompOn,   { pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup }));
+    panels.add (new FxPanel (params, presets, "eq",     "3  EQ",         pEqOn,     { pEqLoFreq, pEqLoGain, pEqMidFreq, pEqMidGain, pEqMidQ, pEqHiFreq, pEqHiGain }));
+    panels.add (new FxPanel (params, presets, "drive",  "4  Overdrive",  pDriveOn,  { pDriveAmount, pDriveTone, pDriveLevel }));
+    panels.add (new FxPanel (params, presets, "octave", "5  Octave",     pOctOn,    { pOctInterval, pOctMix }));
+    panels.add (new FxPanel (params, presets, "phaser", "6  Phaser",     pPhaserOn, { pPhaserRate, pPhaserDepth, pPhaserFeedback }));
+    panels.add (new FxPanel (params, presets, "delay",  "7  Delay",      pDelayOn,  { pDelayTime, pDelayFeedback, pDelayMix, pDelayHighcut }));
+    panels.add (new FxPanel (params, presets, "reverb", "8  Reverb",     pRevOn,    { pRevSize, pRevDamp, pRevMix }));
+    panels.add (new FxPanel (params, presets, "",       "9  Live out",   -1,        { pLiveOut }));
 
     for (auto* panel : panels)
     {

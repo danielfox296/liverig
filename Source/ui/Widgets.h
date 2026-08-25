@@ -3,6 +3,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "../Parameters.h"
+#include "../PresetStore.h"
 
 namespace rig
 {
@@ -298,9 +299,11 @@ class FxPanel : public juce::Component
 public:
     static constexpr int headerHeight = 34;
 
-    FxPanel (ParamStore& p, const juce::String& titleText, int bypassParam,
+    FxPanel (ParamStore& p, PresetStore& ps, const juce::String& effectKey,
+             const juce::String& titleText, int bypassParam,
              const std::vector<int>& paramIds, juce::Component* extra = nullptr)
-        : params (p), bypassId (bypassParam), extraComponent (extra)
+        : params (p), presets (ps), effect (effectKey), bypassId (bypassParam),
+          ids (paramIds), extraComponent (extra)
     {
         title.setText (titleText, juce::dontSendNotification);
         title.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
@@ -326,6 +329,29 @@ public:
         for (int id : paramIds)
             addAndMakeVisible (rows.add (new ParamRow (params, id)));
 
+        // One knob is not worth a preset.
+        hasPresets = effect.isNotEmpty() && paramIds.size() > 1;
+
+        if (hasPresets)
+        {
+            presetBox.setEditableText (true);
+            presetBox.setTextWhenNothingSelected ("Preset");
+            presetBox.onChange = [this] { applyPreset(); };
+            addAndMakeVisible (presetBox);
+
+            presetSave.setButtonText ("Save");
+            presetSave.setWantsKeyboardFocus (false);
+            presetSave.onClick = [this] { savePreset(); };
+            addAndMakeVisible (presetSave);
+
+            presetDelete.setButtonText ("Del");
+            presetDelete.setWantsKeyboardFocus (false);
+            presetDelete.onClick = [this] { deletePreset(); };
+            addAndMakeVisible (presetDelete);
+
+            reloadPresetList();
+        }
+
         if (extraComponent != nullptr)
             addAndMakeVisible (extraComponent);
 
@@ -344,6 +370,13 @@ public:
         for (auto* r : rows)
             r->setVisible (expanded);
 
+        if (hasPresets)
+        {
+            presetBox.setVisible (expanded);
+            presetSave.setVisible (expanded);
+            presetDelete.setVisible (expanded);
+        }
+
         if (onExpandChanged != nullptr)
             onExpandChanged();
 
@@ -353,17 +386,21 @@ public:
 
     int getPreferredHeight() const
     {
-        return expanded ? headerHeight + rows.size() * ParamRow::preferredHeight + 6
-                        : headerHeight;
+        if (! expanded)
+            return headerHeight;
+
+        return headerHeight + (hasPresets ? presetRowHeight : 0)
+                 + rows.size() * ParamRow::preferredHeight + 6;
     }
 
+    // Called when something outside changed the values, so the preset name on
+    // show is no longer necessarily what you are hearing.
     void refresh()
     {
-        if (bypassId >= 0)
-            power.setToggleState (params.getBool (bypassId), juce::dontSendNotification);
+        refreshRows();
 
-        for (auto* r : rows)
-            r->refresh();
+        if (hasPresets)
+            presetBox.setSelectedId (0, juce::dontSendNotification);
     }
 
     void mouseDown (const juce::MouseEvent& e) override
@@ -404,17 +441,89 @@ public:
             b = b.reduced (10, 0);
             b.removeFromBottom (6);
 
+            if (hasPresets)
+            {
+                auto row = b.removeFromTop (presetRowHeight).reduced (0, 3);
+                presetDelete.setBounds (row.removeFromRight (44));
+                row.removeFromRight (4);
+                presetSave.setBounds (row.removeFromRight (52));
+                row.removeFromRight (6);
+                presetBox.setBounds (row);
+            }
+
             for (auto* r : rows)
                 r->setBounds (b.removeFromTop (ParamRow::preferredHeight));
         }
     }
 
 private:
+    static constexpr int presetRowHeight = 30;
+
+    void refreshRows()
+    {
+        if (bypassId >= 0)
+            power.setToggleState (params.getBool (bypassId), juce::dontSendNotification);
+
+        for (auto* r : rows)
+            r->refresh();
+    }
+
+    void reloadPresetList (const juce::String& selectName = {})
+    {
+        presetBox.clear (juce::dontSendNotification);
+
+        const auto names = presets.getEffectNames (effect);
+
+        for (int i = 0; i < names.size(); ++i)
+            presetBox.addItem (names[i], i + 1);
+
+        const int index = names.indexOf (selectName);
+
+        if (index >= 0)
+            presetBox.setSelectedId (index + 1, juce::dontSendNotification);
+        else if (selectName.isNotEmpty())
+            presetBox.setText (selectName, juce::dontSendNotification);
+    }
+
+    void applyPreset()
+    {
+        if (presets.applyEffect (effect, presetBox.getText(), params))
+            refreshRows();
+    }
+
+    void savePreset()
+    {
+        const auto name = presetBox.getText().trim();
+
+        if (name.isEmpty())
+            return;
+
+        presets.storeEffect (effect, name, params, ids);
+        reloadPresetList (name);
+    }
+
+    void deletePreset()
+    {
+        const auto name = presetBox.getText().trim();
+
+        if (name.isEmpty() || ! presets.effectContains (effect, name))
+            return;
+
+        presets.removeEffect (effect, name);
+        reloadPresetList();
+    }
+
     ParamStore& params;
+    PresetStore& presets;
+    juce::String effect;
     int bypassId;
+    std::vector<int> ids;
     bool expanded = false;
+    bool hasPresets = false;
     juce::Label title;
     juce::TextButton disclosure, power;
+    juce::ComboBox presetBox;
+    juce::TextButton presetSave, presetDelete;
     juce::OwnedArray<ParamRow> rows;
     juce::Component* extraComponent = nullptr;
 };

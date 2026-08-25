@@ -50,6 +50,9 @@ struct ParamSpec
 
 const ParamSpec& spec (int paramId) noexcept;
 
+// -1 if no parameter has that string id.
+int paramIndexForId (juce::StringRef id) noexcept;
+
 class ParamStore
 {
 public:

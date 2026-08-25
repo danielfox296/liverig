@@ -38,11 +38,21 @@ Everything happens in the window. There is nothing to run in a terminal.
 - **Effects** are collapsed to a single row each: name, and an ON toggle you can
   hit without looking. Tap the row or the **+** to open its controls, tap again
   to put it away. Which ones are open is remembered between sessions.
-- **Presets** across the top of the effect column store the whole live chain —
-  everything from input trim to live out, but not the stem faders, which belong
-  to the song rather than the sound. Type a name and hit **Save** to add one.
-  Six ship with it: Clean DI, Fingerstyle comp, Octave lead, Dirty octave,
-  Phaser funk, Ambient swell.
+- **Presets** come at two scales. The bar across the top of the effect column
+  stores the **whole chain** — everything from input trim to live out, but not
+  the stem faders, which belong to the song rather than the sound. Six ship
+  with it: Clean DI, Fingerstyle comp, Octave lead, Dirty octave, Phaser funk,
+  Ambient swell.
+
+  Each effect also has **its own preset row** when you open it, for building a
+  sound rather than recalling one — Fast FET on the compressor, Cut mud on the
+  EQ, Sub -12 on the octave, Slapback on the delay, and so on. Type a name and
+  hit **Save** on either bar to add your own.
+
+  An effect preset deliberately does *not* carry the ON state. Recalling how
+  something sounds should not decide whether it is engaged — that is what the
+  ON button is for, mid-song. A whole-chain preset does carry it, because there
+  the point is to recall an entire sound.
 - **Footer**: the audio device picker, the current rate and buffer size, and the
   chain's reported latency.
 
@@ -53,7 +63,7 @@ jumps straight there. Everything double-clicks back to its default.
 
 All parameters, the last song, the audio device choice and which effects are
 open are saved to `~/Library/Application Support/LiveRig/settings.json` and
-restored on launch. Presets live beside it in `presets.json`.
+restored on launch. Both kinds of preset live beside it in `presets.json`.
 
 Songs live in `/Users/fox296/LiveRig/Songs/<song name>/`, four WAVs named
 `drums`, `bass`, `other`, `vocals`. Anything with that shape loads, so you can
