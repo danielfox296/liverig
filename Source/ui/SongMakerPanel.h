@@ -53,8 +53,6 @@ public:
                       "It is about 900 MB and installs itself into the LiveRig folder. "
                       "This only happens once.",
                       juce::dontSendNotification);
-        primary.setButtonText ("Install it");
-        secondary.setButtonText ("Not now");
         show();
     }
 
@@ -78,7 +76,6 @@ public:
         mode = Mode::failed;
         title.setText ("That did not work", juce::dontSendNotification);
         body.setText (text, juce::dontSendNotification);
-        secondary.setButtonText ("Close");
         show();
     }
 
@@ -100,9 +97,35 @@ private:
 
     void show()
     {
+        applyModeText();
         setVisible (true);
         toFront (false);
         updateLayout();
+    }
+
+    // Every label the mode owns, in one place.
+    void applyModeText()
+    {
+        switch (mode)
+        {
+            case Mode::offerInstall:
+                primary.setButtonText ("Install it");
+                secondary.setButtonText ("Not now");
+                break;
+
+            case Mode::confirm:
+                primary.setButtonText ("Split it");
+                secondary.setButtonText ("Cancel");
+                break;
+
+            case Mode::failed:
+                primary.setButtonText ({});
+                secondary.setButtonText ("Close");
+                break;
+
+            case Mode::hidden:
+                break;
+        }
     }
 
     void dismiss()

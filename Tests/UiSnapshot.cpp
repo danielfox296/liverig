@@ -13,6 +13,35 @@
 #include "ui/SongMakerPanel.h"
 #include "ui/Widgets.h"
 
+// A button with no text is invisible to the person using it. Catch it here
+// rather than in front of an audience.
+static int countBlankButtons (juce::Component& parent, const juce::String& context)
+{
+    int blanks = 0;
+
+    for (auto* child : parent.getChildren())
+    {
+        if (! child->isVisible())
+            continue;
+
+        if (auto* button = dynamic_cast<juce::TextButton*> (child))
+        {
+            if (button->getButtonText().trim().isEmpty())
+            {
+                ++blanks;
+                std::printf ("  BLANK BUTTON in %s at %d,%d %dx%d\n",
+                             context.toRawUTF8(),
+                             button->getX(), button->getY(),
+                             button->getWidth(), button->getHeight());
+            }
+        }
+
+        blanks += countBlankButtons (*child, context);
+    }
+
+    return blanks;
+}
+
 static void writePng (const juce::Image& image, const juce::File& file)
 {
     file.deleteFile();
@@ -21,6 +50,8 @@ static void writePng (const juce::Image& image, const juce::File& file)
     png.writeImageToStream (image, stream);
     std::printf ("wrote %s\n", file.getFullPathName().toRawUTF8());
 }
+
+static int problems = 0;
 
 int main (int argc, char* argv[])
 {
@@ -60,6 +91,7 @@ int main (int argc, char* argv[])
             panel.paintEntireComponent (g, true);
         }
         writePng (withPanel, outDir.getChildFile ("new-song.png"));
+        problems += countBlankButtons (panel, "the new-song dialog");
 
         rig::SongMakerPanel installPanel (maker);
         installPanel.setBounds (0, 0, main.getWidth(), main.getHeight());
@@ -72,6 +104,7 @@ int main (int argc, char* argv[])
             installPanel.paintEntireComponent (g, true);
         }
         writePng (withInstall, outDir.getChildFile ("install-prompt.png"));
+        problems += countBlankButtons (installPanel, "the install prompt");
 
         // A background job running: the window stays fully usable behind it.
         main.showJobStripForSnapshot();
@@ -82,6 +115,7 @@ int main (int argc, char* argv[])
             main.paintEntireComponent (g, true);
         }
         writePng (working, outDir.getChildFile ("job-running.png"));
+        problems += countBlankButtons (main, "the main window");
 
         // Everything open, to check the effect list scrolls rather than clips.
         main.expandAllForSnapshot();
@@ -95,5 +129,8 @@ int main (int argc, char* argv[])
     }
 
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
-    return 0;
+
+    std::printf ("%s\n", problems == 0 ? "no blank controls"
+                                        : "FOUND UNLABELLED CONTROLS");
+    return problems == 0 ? 0 : 1;
 }
