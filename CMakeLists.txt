@@ -82,6 +82,7 @@ target_sources(LiveRig PRIVATE
     Source/AudioEngine.cpp
     Source/SettingsStore.cpp
     Source/SongMaker.cpp
+    Source/PresetStore.cpp
     ${RIG_DSP_SOURCES})
 
 target_compile_definitions(LiveRig PRIVATE ${RIG_COMPILE_DEFS})
@@ -126,6 +127,7 @@ target_sources(rig_uishot PRIVATE
     Source/AudioEngine.cpp
     Source/SettingsStore.cpp
     Source/SongMaker.cpp
+    Source/PresetStore.cpp
     ${RIG_DSP_SOURCES})
 
 target_compile_definitions(rig_uishot PRIVATE ${RIG_COMPILE_DEFS} JUCE_STANDALONE_APPLICATION=1)

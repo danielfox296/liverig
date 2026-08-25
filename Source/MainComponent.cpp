@@ -3,13 +3,15 @@
 namespace rig
 {
 
-static constexpr int panelHeight = 84;
 static constexpr int panelGap = 4;
 
 MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     : params (p), engine (e), settings (s)
 {
-    for (auto* b : { &loadButton, &newSongButton, &transportButton, &deviceButton })
+    presets.load();
+
+    for (auto* b : { &loadButton, &newSongButton, &transportButton, &deviceButton,
+                     &savePresetButton, &deletePresetButton })
     {
         b->setWantsKeyboardFocus (false);
         addAndMakeVisible (b);
@@ -21,10 +23,15 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     deviceButton.onClick = [this] { showDeviceSettings(); };
     transportButton.onClick = [this] { engine.getStemPlayer().togglePlay(); };
 
+    songsHeader.setText ("SONGS", juce::dontSendNotification);
     stemsHeader.setText ("STEMS", juce::dontSendNotification);
-    stemsHeader.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
-    stemsHeader.setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
-    addAndMakeVisible (stemsHeader);
+
+    for (auto* l : { &songsHeader, &stemsHeader })
+    {
+        l->setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+        l->setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
+        addAndMakeVisible (l);
+    }
 
     songLabel.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
     songLabel.setText ("no song loaded", juce::dontSendNotification);
@@ -40,6 +47,20 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     addAndMakeVisible (latencyLabel);
 
     addAndMakeVisible (masterMeter);
+
+    songList.setRowHeight (26);
+    songList.setColour (juce::ListBox::backgroundColourId, juce::Colour (0xff17181c));
+    songList.setColour (juce::ListBox::outlineColourId, juce::Colour (0xff26272d));
+    songList.setOutlineThickness (1);
+    addAndMakeVisible (songList);
+
+    presetBox.setEditableText (true);
+    presetBox.setTextWhenNothingSelected ("Presets");
+    presetBox.onChange = [this] { applySelectedPreset(); };
+    addAndMakeVisible (presetBox);
+
+    savePresetButton.onClick = [this] { saveCurrentPreset(); };
+    deletePresetButton.onClick = [this] { deleteSelectedPreset(); };
 
     for (int i = 0; i < StemPlayer::numStems; ++i)
         addAndMakeVisible (stemStrips.add (new StemStrip (params,
@@ -58,17 +79,24 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     panels.add (new FxPanel (params, "9  Live out",   -1,         { pLiveOut }));
 
     for (auto* panel : panels)
+    {
+        panel->onExpandChanged = [this] { layoutFxPanels(); };
         fxHolder.addAndMakeVisible (panel);
+    }
 
     fxViewport.setViewedComponent (&fxHolder, false);
     fxViewport.setScrollBarsShown (true, false);
     addAndMakeVisible (fxViewport);
 
-    songPanel.onSongReady = [this] (juce::File folder) { loadSong (folder); grabKeyboardFocus(); };
-    songPanel.onSplitterInstalled = [this] { chooseAudioFile(); };
+    songPanel.onJobStarted = [this] { resized(); grabKeyboardFocus(); };
     addChildComponent (songPanel);
+    addChildComponent (jobStrip);
 
     setWantsKeyboardFocus (true);
+
+    applyExpandedState (settings.expandedPanels);
+    refreshPresetList();
+    refreshSongList();
 
     for (int i = 0; i < NumParams; ++i)
         snapshot[(size_t) i] = params.get (i);
@@ -82,7 +110,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     }
 
     startTimerHz (30);
-    setSize (960, 920);
+    setSize (1020, 780);
 }
 
 MainComponent::~MainComponent()
@@ -97,12 +125,12 @@ void MainComponent::paint (juce::Graphics& g)
 
 void MainComponent::resized()
 {
-    auto b = getLocalBounds().reduced (10);
-
     songPanel.setBounds (getLocalBounds());
 
+    auto b = getLocalBounds().reduced (10);
+
     auto top = b.removeFromTop (44);
-    loadButton.setBounds (top.removeFromLeft (110).reduced (0, 6));
+    loadButton.setBounds (top.removeFromLeft (118).reduced (0, 6));
     top.removeFromLeft (8);
     newSongButton.setBounds (top.removeFromLeft (110).reduced (0, 6));
     top.removeFromLeft (8);
@@ -114,15 +142,26 @@ void MainComponent::resized()
 
     b.removeFromTop (8);
 
-    auto footer = b.removeFromBottom (32);
-    deviceButton.setBounds (footer.removeFromLeft (132).reduced (0, 3));
+    if (jobStripShowing)
+    {
+        jobStrip.setBounds (b.removeFromTop (32));
+        b.removeFromTop (8);
+    }
+
+    auto footer = b.removeFromBottom (30);
+    deviceButton.setBounds (footer.removeFromLeft (132).reduced (0, 2));
     footer.removeFromLeft (10);
     latencyLabel.setBounds (footer.removeFromRight (190));
     statusLabel.setBounds (footer);
 
     b.removeFromBottom (8);
 
-    auto left = b.removeFromLeft (268);
+    auto left = b.removeFromLeft (300);
+
+    songsHeader.setBounds (left.removeFromTop (18));
+    left.removeFromTop (4);
+    songList.setBounds (left.removeFromTop (juce::jmin (208, left.getHeight() / 3)));
+    left.removeFromTop (12);
     stemsHeader.setBounds (left.removeFromTop (18));
     left.removeFromTop (4);
 
@@ -135,18 +174,51 @@ void MainComponent::resized()
     }
 
     b.removeFromLeft (10);
+
+    auto presetBar = b.removeFromTop (30);
+    deletePresetButton.setBounds (presetBar.removeFromRight (72));
+    presetBar.removeFromRight (6);
+    savePresetButton.setBounds (presetBar.removeFromRight (66));
+    presetBar.removeFromRight (8);
+    presetBox.setBounds (presetBar);
+
+    b.removeFromTop (8);
     fxViewport.setBounds (b);
 
-    const int w = b.getWidth() - fxViewport.getScrollBarThickness() - 2;
+    layoutFxPanels();
+}
+
+void MainComponent::expandAllForSnapshot()
+{
+    for (auto* panel : panels)
+        panel->setExpanded (true);
+}
+
+void MainComponent::showJobStripForSnapshot()
+{
+    jobStripShowing = true;
+    jobStrip.setVisible (true);
+    jobStrip.refresh();
+    resized();
+}
+
+void MainComponent::layoutFxPanels()
+{
+    const int width = fxViewport.getWidth() - fxViewport.getScrollBarThickness() - 2;
+
+    if (width <= 0)
+        return;
+
     int y = 0;
 
     for (auto* panel : panels)
     {
-        panel->setBounds (0, y, w, panelHeight);
-        y += panelHeight + panelGap;
+        const int height = panel->getPreferredHeight();
+        panel->setBounds (0, y, width, height);
+        y += height + panelGap;
     }
 
-    fxHolder.setSize (w, y);
+    fxHolder.setSize (width, y);
 }
 
 void MainComponent::parentHierarchyChanged()
@@ -169,9 +241,75 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
     return false;
 }
 
+//==============================================================================
+int MainComponent::getNumRows()
+{
+    return songNames.size();
+}
+
+void MainComponent::paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected)
+{
+    if (! juce::isPositiveAndBelow (row, songNames.size()))
+        return;
+
+    if (selected)
+    {
+        g.setColour (juce::Colour (0xff2f3138));
+        g.fillRect (0, 0, width, height);
+        g.setColour (juce::Colour (0xffd87b3a));
+        g.fillRect (0, 0, 3, height);
+    }
+
+    g.setColour (juce::Colour (selected ? 0xffe8e8ea : 0xffb4b6bd));
+    g.setFont (juce::Font (juce::FontOptions (13.0f)));
+    g.drawText (songNames[row], 12, 0, width - 18, height, juce::Justification::centredLeft, true);
+}
+
+void MainComponent::listBoxItemClicked (int row, const juce::MouseEvent&)
+{
+    if (juce::isPositiveAndBelow (row, songNames.size()))
+        loadSong (SongMaker::songsDir().getChildFile (songNames[row]));
+}
+
+void MainComponent::refreshSongList()
+{
+    songNames.clear();
+
+    const auto dir = SongMaker::songsDir();
+
+    if (dir.isDirectory())
+    {
+        for (const auto& entry : juce::RangedDirectoryIterator (dir, false, "*", juce::File::findDirectories))
+        {
+            const auto folder = entry.getFile();
+            bool hasStem = false;
+
+            for (int i = 0; i < StemPlayer::numStems; ++i)
+                hasStem = hasStem || folder.getChildFile (juce::String (StemPlayer::stemNames[i]) + ".wav")
+                                         .existsAsFile();
+
+            if (hasStem)
+                songNames.add (folder.getFileName());
+        }
+    }
+
+    songNames.sort (true);
+    songList.updateContent();
+
+    const int index = songNames.indexOf (loadedFolder.getFileName());
+
+    if (index >= 0)
+        songList.selectRow (index, true, true);
+    else
+        songList.deselectAllRows();
+
+    songList.repaint();
+}
+
+//==============================================================================
 void MainComponent::chooseSongFolder()
 {
-    juce::File start ("/Users/fox296/LiveRig/Songs");
+    juce::File start = SongMaker::songsDir();
 
     if (! start.isDirectory())
         start = juce::File::getSpecialLocation (juce::File::userHomeDirectory);
@@ -193,6 +331,9 @@ void MainComponent::chooseSongFolder()
 
 void MainComponent::startNewSong()
 {
+    if (songMaker.isBusy())
+        return;
+
     if (! SongMaker::isSplitterInstalled())
         songPanel.offerInstall();
     else
@@ -232,6 +373,8 @@ void MainComponent::loadSong (const juce::File& folder)
         return;
     }
 
+    loadedFolder = folder;
+
     songLabel.setColour (juce::Label::textColourId, juce::Colour (0xffc8c9ce));
     songLabel.setText (engine.getStemPlayer().getSongName()
                         + "   " + juce::String (engine.getStemPlayer().getLengthSeconds(), 1) + " s",
@@ -239,6 +382,11 @@ void MainComponent::loadSong (const juce::File& folder)
 
     settings.songFolder = folder.getFullPathName();
     saveSettings();
+
+    const int index = songNames.indexOf (folder.getFileName());
+
+    if (index >= 0)
+        songList.selectRow (index, true, true);
 }
 
 void MainComponent::showDeviceSettings()
@@ -255,6 +403,87 @@ void MainComponent::showDeviceSettings()
     options.useNativeTitleBar = true;
     options.resizable = false;
     options.launchAsync();
+}
+
+//==============================================================================
+void MainComponent::refreshPresetList (const juce::String& selectName)
+{
+    presetBox.clear (juce::dontSendNotification);
+
+    const auto names = presets.getNames();
+
+    for (int i = 0; i < names.size(); ++i)
+        presetBox.addItem (names[i], i + 1);
+
+    const int index = names.indexOf (selectName);
+
+    if (index >= 0)
+        presetBox.setSelectedId (index + 1, juce::dontSendNotification);
+    else
+        presetBox.setText (selectName, juce::dontSendNotification);
+}
+
+void MainComponent::applySelectedPreset()
+{
+    const auto name = presetBox.getText();
+
+    if (presets.apply (name, params))
+        refreshAllControls();
+}
+
+void MainComponent::saveCurrentPreset()
+{
+    const auto name = presetBox.getText().trim();
+
+    if (name.isEmpty())
+        return;
+
+    presets.store (name, params);
+    refreshPresetList (name);
+}
+
+void MainComponent::deleteSelectedPreset()
+{
+    const auto name = presetBox.getText().trim();
+
+    if (name.isEmpty() || ! presets.contains (name))
+        return;
+
+    presets.remove (name);
+    refreshPresetList();
+}
+
+void MainComponent::refreshAllControls()
+{
+    for (auto* panel : panels)
+        panel->refresh();
+
+    for (auto* strip : stemStrips)
+        strip->refresh();
+}
+
+//==============================================================================
+juce::String MainComponent::expandedStateString() const
+{
+    juce::String state;
+
+    for (auto* panel : panels)
+        state << (panel->isExpanded() ? '1' : '0');
+
+    return state;
+}
+
+void MainComponent::applyExpandedState (const juce::String& state)
+{
+    if (state.isEmpty())
+    {
+        panels[0]->setExpanded (true);   // input trim
+        panels[4]->setExpanded (true);   // the octave
+        return;
+    }
+
+    for (int i = 0; i < panels.size() && i < state.length(); ++i)
+        panels[i]->setExpanded (state[i] == '1');
 }
 
 bool MainComponent::paramsChangedSinceSnapshot()
@@ -280,18 +509,63 @@ void MainComponent::saveSettings()
     if (auto state = engine.getDeviceManager().createStateXml())
         settings.deviceState = state->toString();
 
+    settings.expandedPanels = expandedStateString();
     settings.save (params);
 }
 
 void MainComponent::timerCallback()
 {
-    if (songPanel.isVisible())
-        songPanel.refresh();
-
     auto& player = engine.getStemPlayer();
 
     if (player.reloadNeeded())
         player.reloadForCurrentRate();
+
+    // Background job: report it, never block on it.
+    const bool busy = songMaker.isBusy();
+
+    if (busy != jobStripShowing)
+    {
+        jobStripShowing = busy;
+        jobStrip.setVisible (busy);
+        resized();
+    }
+
+    if (busy)
+        jobStrip.refresh();
+
+    switch (songMaker.getState())
+    {
+        case SongMaker::State::done:
+        {
+            const auto folder = songMaker.getResultFolder();
+            songMaker.clearFinishedState();
+
+            if (folder.isDirectory())
+            {
+                refreshSongList();
+                loadSong (folder);
+            }
+            else
+            {
+                chooseAudioFile();   // the install finished; carry on to the track
+            }
+
+            break;
+        }
+
+        case SongMaker::State::failed:
+            // A job you stopped on purpose is not an error worth a dialog.
+            if (! songMaker.wasCancelledByUser())
+                songPanel.showFailure (songMaker.getMessage());
+
+            songMaker.clearFinishedState();
+            break;
+
+        case SongMaker::State::idle:
+        case SongMaker::State::installing:
+        case SongMaker::State::splitting:
+            break;
+    }
 
     inputMeter.setLevel (0, engine.getInputPeak());
     masterMeter.setLevel (0, engine.getOutputPeakL());

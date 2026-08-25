@@ -19,6 +19,7 @@ public:
 
     juce::String songFolder;
     juce::String deviceState;   // AudioDeviceManager state, as XML text
+    juce::String expandedPanels;
 };
 
 } // namespace rig

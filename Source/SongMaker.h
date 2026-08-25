@@ -44,12 +44,14 @@ public:
     juce::String getMessage() const;
     juce::String getSongName() const;
     juce::File getResultFolder() const;
+    bool wasCancelledByUser() const noexcept { return cancelled.load(); }
 
     void clearFinishedState();
 
 private:
     void run() override;
-    bool runCommand (const juce::StringArray& args, bool parsePercent);
+    bool runCommand (const juce::StringArray& args, bool parsePercent,
+                     const juce::String& label);
     void doInstall();
     void doSplit();
     void setStatus (const juce::String& text);

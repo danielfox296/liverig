@@ -7,15 +7,15 @@
 namespace rig
 {
 
-// The whole song pipeline as a panel over the main window: install the
-// splitter, name the song, watch it run. No terminal anywhere.
+// The decisions in the song pipeline: install the splitter, name the song,
+// report a failure. It is only up while it is waiting on you — the actual
+// work happens behind a strip so the rest of the app stays live.
 class SongMakerPanel : public juce::Component
 {
 public:
     explicit SongMakerPanel (SongMaker& m) : maker (m)
     {
         title.setFont (juce::Font (juce::FontOptions (17.0f, juce::Font::bold)));
-        title.setJustificationType (juce::Justification::centredLeft);
         addAndMakeVisible (title);
 
         body.setFont (juce::Font (juce::FontOptions (13.0f)));
@@ -32,14 +32,10 @@ public:
         nameEditor.onReturnKey = [this] { primary.triggerClick(); };
         addAndMakeVisible (nameEditor);
 
-        status.setFont (juce::Font (juce::FontOptions (12.0f)));
-        status.setColour (juce::Label::textColourId, juce::Colour (0xff8b8e97));
-        addAndMakeVisible (status);
-
-        addAndMakeVisible (bar);
-
+        primary.setWantsKeyboardFocus (false);
+        secondary.setWantsKeyboardFocus (false);
         primary.onClick = [this] { primaryClicked(); };
-        secondary.onClick = [this] { secondaryClicked(); };
+        secondary.onClick = [this] { dismiss(); };
         addAndMakeVisible (primary);
         addAndMakeVisible (secondary);
 
@@ -47,8 +43,7 @@ public:
         setVisible (false);
     }
 
-    std::function<void (juce::File)> onSongReady;
-    std::function<void()> onSplitterInstalled;
+    std::function<void()> onJobStarted;
 
     void offerInstall()
     {
@@ -60,8 +55,7 @@ public:
                       juce::dontSendNotification);
         primary.setButtonText ("Install it");
         secondary.setButtonText ("Not now");
-        setVisible (true);
-        updateLayout();
+        show();
     }
 
     void confirmSong (const juce::File& audioFile)
@@ -69,63 +63,28 @@ public:
         mode = Mode::confirm;
         pendingFile = audioFile;
         title.setText ("New song from a track", juce::dontSendNotification);
-        body.setText (audioFile.getFileName() + "\n\nSplitting takes a minute or two. "
-                      "The song loads by itself when it is done.",
+        body.setText (audioFile.getFileName() + "\n\nSplitting takes a minute or two. It runs in "
+                      "the background — you can keep playing while it works, and the song "
+                      "appears in the list when it is done.",
                       juce::dontSendNotification);
         nameEditor.setText (audioFile.getFileNameWithoutExtension(), juce::dontSendNotification);
-        primary.setButtonText ("Split it");
-        secondary.setButtonText ("Cancel");
-        setVisible (true);
-        updateLayout();
+        show();
         nameEditor.grabKeyboardFocus();
         nameEditor.selectAll();
     }
 
-    // Polled by the main window's timer while this panel is up.
-    void refresh()
+    void showFailure (const juce::String& text)
     {
-        if (mode != Mode::working)
-            return;
-
-        const auto state = maker.getState();
-
-        if (state == SongMaker::State::done)
-        {
-            const auto folder = maker.getResultFolder();
-            maker.clearFinishedState();
-            setVisible (false);
-            mode = Mode::hidden;
-
-            if (folder.isDirectory())
-            {
-                if (onSongReady != nullptr)
-                    onSongReady (folder);
-            }
-            else if (onSplitterInstalled != nullptr)
-            {
-                onSplitterInstalled();
-            }
-
-            return;
-        }
-
-        if (state == SongMaker::State::failed)
-        {
-            mode = Mode::failed;
-            title.setText ("That did not work", juce::dontSendNotification);
-            body.setText (maker.getMessage(), juce::dontSendNotification);
-            secondary.setButtonText ("Close");
-            updateLayout();
-            return;
-        }
-
-        progressValue = maker.getProgress();
-        status.setText (maker.getStatusLine(), juce::dontSendNotification);
+        mode = Mode::failed;
+        title.setText ("That did not work", juce::dontSendNotification);
+        body.setText (text, juce::dontSendNotification);
+        secondary.setButtonText ("Close");
+        show();
     }
 
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (juce::Colour (0xd0000000));
+        g.fillAll (juce::Colour (0xc0000000));
 
         const auto card = cardBounds().toFloat();
         g.setColour (juce::Colour (0xff1b1c21));
@@ -137,35 +96,36 @@ public:
     void resized() override { updateLayout(); }
 
 private:
-    enum class Mode { hidden, offerInstall, confirm, working, failed };
+    enum class Mode { hidden, offerInstall, confirm, failed };
+
+    void show()
+    {
+        setVisible (true);
+        toFront (false);
+        updateLayout();
+    }
+
+    void dismiss()
+    {
+        maker.clearFinishedState();
+        mode = Mode::hidden;
+        setVisible (false);
+    }
 
     juce::Rectangle<int> cardBounds() const
     {
-        return juce::Rectangle<int> (0, 0, juce::jmin (520, getWidth() - 40), cardHeight())
-                   .withCentre (getLocalBounds().getCentre());
-    }
+        const int height = mode == Mode::confirm ? 276 : (mode == Mode::failed ? 224 : 196);
 
-    int cardHeight() const
-    {
-        switch (mode)
-        {
-            case Mode::confirm:      return 268;
-            case Mode::working:      return 210;
-            case Mode::failed:       return 220;
-            case Mode::offerInstall: return 190;
-            case Mode::hidden:       return 200;
-        }
+        return juce::Rectangle<int> (0, 0, juce::jmin (520, getWidth() - 40), height)
+                   .withCentre (getLocalBounds().getCentre());
     }
 
     void updateLayout()
     {
         const bool showName = mode == Mode::confirm;
-        const bool showBar = mode == Mode::working;
 
         nameLabel.setVisible (showName);
         nameEditor.setVisible (showName);
-        bar.setVisible (showBar);
-        status.setVisible (showBar);
         primary.setVisible (mode == Mode::offerInstall || mode == Mode::confirm);
 
         auto b = cardBounds().reduced (22, 20);
@@ -173,7 +133,7 @@ private:
         title.setBounds (b.removeFromTop (24));
         b.removeFromTop (8);
 
-        auto buttons = b.removeFromBottom (30);
+        auto buttons = b.removeFromBottom (32);
         secondary.setBounds (buttons.removeFromRight (110));
         buttons.removeFromRight (8);
 
@@ -182,17 +142,9 @@ private:
 
         b.removeFromBottom (14);
 
-        if (showBar)
-        {
-            status.setBounds (b.removeFromBottom (18));
-            b.removeFromBottom (8);
-            bar.setBounds (b.removeFromBottom (20));
-            b.removeFromBottom (10);
-        }
-
         if (showName)
         {
-            nameEditor.setBounds (b.removeFromBottom (30));
+            nameEditor.setBounds (b.removeFromBottom (32));
             nameLabel.setBounds (b.removeFromBottom (18));
             b.removeFromBottom (10);
         }
@@ -204,57 +156,100 @@ private:
     void primaryClicked()
     {
         if (mode == Mode::offerInstall)
-        {
             maker.installSplitter();
-            startWorking ("Installing the song splitter");
-        }
         else if (mode == Mode::confirm)
-        {
-            auto name = nameEditor.getText().trim().replaceCharacter ('/', '-');
-
-            if (name.isEmpty())
-                name = pendingFile.getFileNameWithoutExtension();
-
-            maker.makeSong (pendingFile, name);
-            startWorking ("Splitting " + name);
-        }
-    }
-
-    void secondaryClicked()
-    {
-        if (mode == Mode::working)
-        {
-            maker.cancel();
+            maker.makeSong (pendingFile, cleanName());
+        else
             return;
-        }
 
-        maker.clearFinishedState();
-        setVisible (false);
         mode = Mode::hidden;
+        setVisible (false);
+
+        if (onJobStarted != nullptr)
+            onJobStarted();
     }
 
-    void startWorking (const juce::String& what)
+    juce::String cleanName() const
     {
-        mode = Mode::working;
-        title.setText (what, juce::dontSendNotification);
-        body.setText ("You can leave this running. Audio keeps playing.", juce::dontSendNotification);
-        status.setText ("Starting...", juce::dontSendNotification);
-        secondary.setButtonText ("Cancel");
-        progressValue = maker.getProgress();
-        updateLayout();
+        auto name = nameEditor.getText().trim().replaceCharacter ('/', '-');
+        return name.isEmpty() ? pendingFile.getFileNameWithoutExtension() : name;
     }
 
     SongMaker& maker;
     Mode mode = Mode::hidden;
     juce::File pendingFile;
 
-    juce::Label title, body, nameLabel, status;
+    juce::Label title, body, nameLabel;
     juce::TextEditor nameEditor;
-    double progressValue = 0.0;
-    juce::ProgressBar bar { progressValue };
     juce::TextButton primary, secondary;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SongMakerPanel)
+};
+
+//==============================================================================
+// A job running in the background, reported without taking the app hostage.
+class JobStrip : public juce::Component
+{
+public:
+    explicit JobStrip (SongMaker& m) : maker (m)
+    {
+        label.setFont (juce::Font (juce::FontOptions (12.0f)));
+        label.setColour (juce::Label::textColourId, juce::Colour (0xffc8c9ce));
+        addAndMakeVisible (label);
+
+        detail.setFont (juce::Font (juce::FontOptions (11.0f)));
+        detail.setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
+        detail.setJustificationType (juce::Justification::centredRight);
+        addAndMakeVisible (detail);
+
+        addAndMakeVisible (bar);
+
+        cancel.setButtonText ("Cancel");
+        cancel.setWantsKeyboardFocus (false);
+        cancel.onClick = [this] { maker.cancel(); };
+        addAndMakeVisible (cancel);
+
+        setVisible (false);
+    }
+
+    void refresh()
+    {
+        const bool installing = maker.getState() == SongMaker::State::installing;
+
+        label.setText (installing ? "Installing the song splitter"
+                                  : "Splitting " + maker.getSongName(),
+                       juce::dontSendNotification);
+        detail.setText (maker.getStatusLine(), juce::dontSendNotification);
+        progressValue = maker.getProgress();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (juce::Colour (0xff1b1c21));
+        g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
+        g.setColour (juce::Colour (0xff34363f));
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 4.0f, 1.0f);
+    }
+
+    void resized() override
+    {
+        auto b = getLocalBounds().reduced (10, 5);
+        cancel.setBounds (b.removeFromRight (76));
+        b.removeFromRight (10);
+        label.setBounds (b.removeFromLeft (200));
+        bar.setBounds (b.removeFromLeft (juce::jmax (80, b.getWidth() / 2)).reduced (0, 3));
+        b.removeFromLeft (10);
+        detail.setBounds (b);
+    }
+
+private:
+    SongMaker& maker;
+    juce::Label label, detail;
+    double progressValue = 0.0;
+    juce::ProgressBar bar { progressValue };
+    juce::TextButton cancel;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (JobStrip)
 };
 
 } // namespace rig

@@ -23,22 +23,37 @@ microphone.
 
 Everything happens in the window. There is nothing to run in a terminal.
 
+- **SONGS** lists every song you have split. Tap one to load it. It refreshes
+  itself whenever a new split finishes.
 - **New song...** takes any audio file — a Suno download, an MP3, a WAV — and
-  splits it into four stems, then loads it. It takes a minute or two per track
-  and shows progress while it works; you can keep playing over whatever is
-  already loaded. The first time you use it, it offers to install the splitter
-  (about 900 MB, once).
-- **Load song...** opens a song folder you have already made.
+  splits it into four stems. **It runs in the background**: the dialog closes as
+  soon as you hit Split, a progress strip appears under the top bar, and the
+  rest of the app stays live. Keep playing over whatever is already loaded; the
+  new song drops into the list when it is done. The first time, it offers to
+  install the splitter (about 900 MB, once).
+- **Load folder...** opens a song folder from anywhere else on disk.
 - **Spacebar** or the transport button starts and stops. Stop returns to the top.
-- **Left**: the four stems as a mixer — fader and mute each. Missing stems are
+- **STEMS**: the four stems as a mixer — fader and mute each. Missing stems are
   greyed out. You will normally pull `bass` down or mute it.
-- **Right**: the FX chain in signal order, each with an ON toggle.
+- **Effects** are collapsed to a single row each: name, and an ON toggle you can
+  hit without looking. Tap the row or the **+** to open its controls, tap again
+  to put it away. Which ones are open is remembered between sessions.
+- **Presets** across the top of the effect column store the whole live chain —
+  everything from input trim to live out, but not the stem faders, which belong
+  to the song rather than the sound. Type a name and hit **Save** to add one.
+  Six ship with it: Clean DI, Fingerstyle comp, Octave lead, Dirty octave,
+  Phaser funk, Ambient swell.
 - **Footer**: the audio device picker, the current rate and buffer size, and the
   chain's reported latency.
 
-Every knob double-clicks back to its default. All parameters, the last song and
-the audio device choice are saved to
-`~/Library/Application Support/LiveRig/settings.json` and restored on launch.
+The controls are horizontal faders rather than rotary knobs on purpose. A knob
+needs a slow, accurate circular drag; a fader is a wide target you can shove
+with one hand while the other keeps playing, and tapping anywhere on the track
+jumps straight there. Everything double-clicks back to its default.
+
+All parameters, the last song, the audio device choice and which effects are
+open are saved to `~/Library/Application Support/LiveRig/settings.json` and
+restored on launch. Presets live beside it in `presets.json`.
 
 Songs live in `/Users/fox296/LiveRig/Songs/<song name>/`, four WAVs named
 `drums`, `bass`, `other`, `vocals`. Anything with that shape loads, so you can
@@ -81,7 +96,9 @@ delay and reverb tails, and a constant per-block cost, so nothing spikes when
 you stamp on something at 64 samples.
 
 Splitting a song runs on a worker thread driving a child process, so a
-two-minute separation never touches the audio thread.
+two-minute separation never touches the audio thread — and never blocks the
+UI either. The separator is niced and told to leave two cores alone, so the
+device keeps its headroom while a track is being pulled apart.
 
 ### The octave shifter
 

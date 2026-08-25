@@ -37,8 +37,7 @@ int main (int argc, char* argv[])
         rig::ParamStore params;
         rig::SettingsStore settings;
         rig::AudioEngine engine (params);          // deliberately not opened
-        rig::MainComponent main (params, engine, settings);
-        main.setSize (960, 920);   // triggers the layout synchronously
+        rig::MainComponent main (params, engine, settings);   // sizes itself
 
         juce::Image shot (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
         {
@@ -73,6 +72,26 @@ int main (int argc, char* argv[])
             installPanel.paintEntireComponent (g, true);
         }
         writePng (withInstall, outDir.getChildFile ("install-prompt.png"));
+
+        // A background job running: the window stays fully usable behind it.
+        main.showJobStripForSnapshot();
+
+        juce::Image working (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
+        {
+            juce::Graphics g (working);
+            main.paintEntireComponent (g, true);
+        }
+        writePng (working, outDir.getChildFile ("job-running.png"));
+
+        // Everything open, to check the effect list scrolls rather than clips.
+        main.expandAllForSnapshot();
+
+        juce::Image expanded (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
+        {
+            juce::Graphics g (expanded);
+            main.paintEntireComponent (g, true);
+        }
+        writePng (expanded, outDir.getChildFile ("all-expanded.png"));
     }
 
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);

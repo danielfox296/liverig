@@ -168,8 +168,14 @@ void SongMaker::run()
 
 // Streams a child process, keeping the last useful line and any percentage it
 // prints. Returns false if it failed, was cancelled, or could not start.
-bool SongMaker::runCommand (const juce::StringArray& args, bool parsePercent)
+bool SongMaker::runCommand (const juce::StringArray& args, bool parsePercent,
+                            const juce::String& label)
 {
+    // Separation is a CPU hog. Run it niced so that playing over the top of it
+    // stays smooth, and leave a couple of cores for the audio device.
+    juce::StringArray niced { "/usr/bin/nice", "-n", "10" };
+    niced.addArray (args);
+
     auto proc = std::make_shared<juce::ChildProcess>();
 
     {
@@ -177,14 +183,14 @@ bool SongMaker::runCommand (const juce::StringArray& args, bool parsePercent)
         currentProcess = proc;
     }
 
-    const bool started = proc->start (args, juce::ChildProcess::wantStdOut
-                                                | juce::ChildProcess::wantStdErr);
+    const bool started = proc->start (niced, juce::ChildProcess::wantStdOut
+                                                 | juce::ChildProcess::wantStdErr);
 
     if (! started)
     {
         const juce::ScopedLock sl (procLock);
         currentProcess = nullptr;
-        fail ("Could not start " + args[0]);
+        fail ("Could not start " + label);
         return false;
     }
 
@@ -258,14 +264,14 @@ bool SongMaker::runCommand (const juce::StringArray& args, bool parsePercent)
 
     if (wasCancelled)
     {
-        fail ("Cancelled.");
+        fail ("Cancelled.");   // the UI checks wasCancelledByUser and stays quiet
         return false;
     }
 
     if (exitCode != 0)
     {
-        fail (juce::File (args[0]).getFileName() + " failed (exit code "
-                + juce::String ((int) exitCode) + ").\n\n" + getStatusLine());
+        fail (label + " failed (exit code " + juce::String ((int) exitCode) + ").\n\n"
+                + getStatusLine());
         return false;
     }
 
@@ -291,18 +297,20 @@ void SongMaker::doInstall()
     {
         setStatus ("Creating the Python environment...");
 
-        if (! runCommand ({ python.getFullPathName(), "-m", "venv", venv.getFullPathName() }, false))
+        if (! runCommand ({ python.getFullPathName(), "-m", "venv", venv.getFullPathName() },
+                          false, "Creating the Python environment"))
             return;
     }
 
     progress.store (-1.0);
     setStatus ("Downloading the splitter (about 900 MB)...");
 
-    if (! runCommand ({ pip.getFullPathName(), "install", "--upgrade", "pip" }, false))
+    if (! runCommand ({ pip.getFullPathName(), "install", "--upgrade", "pip" }, false, "pip"))
         return;
 
     // numpy is listed because demucs 4.1.0 imports it without declaring it.
-    if (! runCommand ({ pip.getFullPathName(), "install", "demucs", "numpy" }, false))
+    if (! runCommand ({ pip.getFullPathName(), "install", "demucs", "numpy" }, false,
+                      "Installing demucs"))
         return;
 
     if (! isSplitterInstalled())
@@ -345,13 +353,17 @@ void SongMaker::doSplit()
 
     setStatus ("Separating " + audio.getFileName() + "...");
 
+    // Leave the audio device some cores of its own.
+    const int cores = juce::SystemStats::getNumCpus();
+    setenv ("OMP_NUM_THREADS", juce::String (juce::jmax (1, cores - 2)).toRawUTF8(), 1);
+
     const bool ok = runCommand ({ demucsExecutable().getFullPathName(),
                                   "--name", modelName,
                                   "--device", "cpu",
                                   "--int24",
                                   "--out", temp.getFullPathName(),
                                   "--filename", "{stem}.{ext}",
-                                  audio.getFullPathName() }, true);
+                                  audio.getFullPathName() }, true, "The splitter");
 
     if (! ok)
     {

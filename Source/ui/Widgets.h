@@ -31,6 +31,36 @@ public:
                            float sliderPos, float minSliderPos, float maxSliderPos,
                            juce::Slider::SliderStyle style, juce::Slider& slider) override
     {
+        if (style == juce::Slider::LinearHorizontal)
+        {
+            const float centreY = (float) y + (float) height * 0.5f;
+            const float trackHeight = 6.0f;
+
+            const juce::Rectangle<float> track ((float) x, centreY - trackHeight * 0.5f,
+                                                (float) width, trackHeight);
+            g.setColour (juce::Colour (0xff2a2c33));
+            g.fillRoundedRectangle (track, trackHeight * 0.5f);
+
+            if (sliderPos > (float) x)
+            {
+                g.setColour (slider.isEnabled() ? juce::Colour (0xffd87b3a)
+                                                : juce::Colour (0xff43454e));
+                g.fillRoundedRectangle (track.withRight (sliderPos), trackHeight * 0.5f);
+            }
+
+            const float thumbWidth = 15.0f;
+            const float thumbHeight = juce::jmin (24.0f, (float) height - 2.0f);
+            const juce::Rectangle<float> thumb (sliderPos - thumbWidth * 0.5f,
+                                                centreY - thumbHeight * 0.5f,
+                                                thumbWidth, thumbHeight);
+
+            g.setColour (slider.isEnabled() ? juce::Colour (0xffe8e8ea) : juce::Colour (0xff6a6c75));
+            g.fillRoundedRectangle (thumb, 3.0f);
+            g.setColour (juce::Colour (0xff101114));
+            g.drawLine (sliderPos, thumb.getY() + 5.0f, sliderPos, thumb.getBottom() - 5.0f, 1.0f);
+            return;
+        }
+
         if (style != juce::Slider::LinearVertical)
         {
             LookAndFeel_V4::drawLinearSlider (g, x, y, width, height, sliderPos,
@@ -68,17 +98,25 @@ public:
 };
 
 //==============================================================================
-class ParamKnob : public juce::Component
+// One parameter as a labelled horizontal fader. Rotary knobs need a slow,
+// accurate drag; this is a wide target you can shove with one hand mid-song.
+class ParamRow : public juce::Component
 {
 public:
-    ParamKnob (ParamStore& p, int paramId) : params (p), id (paramId)
+    static constexpr int preferredHeight = 30;
+
+    ParamRow (ParamStore& p, int paramId) : params (p), id (paramId)
     {
         const auto& s = spec (id);
 
         name.setText (s.label, juce::dontSendNotification);
-        name.setJustificationType (juce::Justification::centred);
-        name.setFont (juce::Font (juce::FontOptions (11.0f)));
+        name.setFont (juce::Font (juce::FontOptions (12.0f)));
+        name.setColour (juce::Label::textColourId, juce::Colour (0xff9a9da6));
         addAndMakeVisible (name);
+
+        value.setFont (juce::Font (juce::FontOptions (12.0f)));
+        value.setJustificationType (juce::Justification::centredRight);
+        addAndMakeVisible (value);
 
         juce::NormalisableRange<double> range ((double) s.minValue, (double) s.maxValue, (double) s.step);
 
@@ -86,40 +124,47 @@ public:
             range.setSkewForCentre ((double) s.skewCentre);
 
         slider.setNormalisableRange (range);
-        slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 58, 15);
+        slider.setSliderStyle (juce::Slider::LinearHorizontal);
+        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         slider.setDoubleClickReturnValue (true, (double) s.defaultValue);
-
-        // Set before the first setValue, or the text box renders the raw double.
-        const auto localSpec = s;
-        slider.textFromValueFunction = [localSpec] (double v)
-        {
-            return juce::String (v, localSpec.decimals) + localSpec.suffix;
-        };
-
+        slider.setSliderSnapsToMousePosition (true);   // tap anywhere to jump there
         slider.setValue ((double) params.get (id), juce::dontSendNotification);
-        slider.updateText();
-        slider.onValueChange = [this] { params.set (id, (float) slider.getValue()); };
+        slider.onValueChange = [this]
+        {
+            params.set (id, (float) slider.getValue());
+            updateValueText();
+        };
         addAndMakeVisible (slider);
+
+        updateValueText();
     }
 
     void refresh()
     {
         slider.setValue ((double) params.get (id), juce::dontSendNotification);
-        slider.updateText();
+        updateValueText();
     }
 
     void resized() override
     {
-        auto b = getLocalBounds();
-        name.setBounds (b.removeFromTop (13));
+        auto b = getLocalBounds().reduced (0, 2);
+        name.setBounds (b.removeFromLeft (74));
+        value.setBounds (b.removeFromRight (72));
+        b.removeFromRight (6);
         slider.setBounds (b);
     }
 
 private:
+    void updateValueText()
+    {
+        const auto& s = spec (id);
+        value.setText (juce::String (slider.getValue(), s.decimals) + s.suffix,
+                       juce::dontSendNotification);
+    }
+
     ParamStore& params;
     int id;
-    juce::Label name;
+    juce::Label name, value;
     juce::Slider slider;
 };
 
@@ -246,16 +291,26 @@ private:
 };
 
 //==============================================================================
+// One effect. Collapsed it is a single row — name, on/off, and nothing to
+// catch a sleeve on. Expanded it shows its faders.
 class FxPanel : public juce::Component
 {
 public:
+    static constexpr int headerHeight = 34;
+
     FxPanel (ParamStore& p, const juce::String& titleText, int bypassParam,
-             const std::vector<int>& knobIds, juce::Component* extra = nullptr)
+             const std::vector<int>& paramIds, juce::Component* extra = nullptr)
         : params (p), bypassId (bypassParam), extraComponent (extra)
     {
         title.setText (titleText, juce::dontSendNotification);
         title.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        title.setInterceptsMouseClicks (false, false);
         addAndMakeVisible (title);
+
+        disclosure.setButtonText ("+");
+        disclosure.setWantsKeyboardFocus (false);
+        disclosure.onClick = [this] { setExpanded (! expanded); };
+        addAndMakeVisible (disclosure);
 
         if (bypassId >= 0)
         {
@@ -268,11 +323,38 @@ public:
             addAndMakeVisible (power);
         }
 
-        for (int id : knobIds)
-            addAndMakeVisible (knobs.add (new ParamKnob (params, id)));
+        for (int id : paramIds)
+            addAndMakeVisible (rows.add (new ParamRow (params, id)));
 
         if (extraComponent != nullptr)
             addAndMakeVisible (extraComponent);
+
+        setExpanded (false);
+    }
+
+    std::function<void()> onExpandChanged;
+
+    bool isExpanded() const noexcept { return expanded; }
+
+    void setExpanded (bool shouldExpand)
+    {
+        expanded = shouldExpand;
+        disclosure.setButtonText (expanded ? "-" : "+");
+
+        for (auto* r : rows)
+            r->setVisible (expanded);
+
+        if (onExpandChanged != nullptr)
+            onExpandChanged();
+
+        resized();
+        repaint();
+    }
+
+    int getPreferredHeight() const
+    {
+        return expanded ? headerHeight + rows.size() * ParamRow::preferredHeight + 6
+                        : headerHeight;
     }
 
     void refresh()
@@ -280,48 +362,60 @@ public:
         if (bypassId >= 0)
             power.setToggleState (params.getBool (bypassId), juce::dontSendNotification);
 
-        for (auto* k : knobs)
-            k->refresh();
+        for (auto* r : rows)
+            r->refresh();
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (e.y < headerHeight)
+            setExpanded (! expanded);
     }
 
     void paint (juce::Graphics& g) override
     {
         g.setColour (juce::Colour (0xff17181c));
         g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
-        g.setColour (juce::Colour (0xff26272d));
+        g.setColour (juce::Colour (expanded ? 0xff3c3f49 : 0xff26272d));
         g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 4.0f, 1.0f);
     }
 
     void resized() override
     {
-        auto b = getLocalBounds().reduced (8, 5);
-        auto left = b.removeFromLeft (86);
-        title.setBounds (left.removeFromTop (16));
+        auto b = getLocalBounds();
+        auto header = b.removeFromTop (headerHeight).reduced (8, 5);
+
+        disclosure.setBounds (header.removeFromLeft (24));
+        header.removeFromLeft (6);
 
         if (bypassId >= 0)
-            power.setBounds (left.removeFromTop (22).removeFromLeft (52));
+            power.setBounds (header.removeFromRight (58));
 
         if (extraComponent != nullptr)
         {
-            left.removeFromTop (4);
-            extraComponent->setBounds (left.removeFromTop (10).removeFromLeft (78));
+            header.removeFromRight (8);
+            extraComponent->setBounds (header.removeFromRight (90).reduced (0, 6));
         }
 
-        if (! knobs.isEmpty())
-        {
-            const int each = b.getWidth() / knobs.size();
+        title.setBounds (header);
 
-            for (auto* k : knobs)
-                k->setBounds (b.removeFromLeft (each).reduced (2, 0));
+        if (expanded)
+        {
+            b = b.reduced (10, 0);
+            b.removeFromBottom (6);
+
+            for (auto* r : rows)
+                r->setBounds (b.removeFromTop (ParamRow::preferredHeight));
         }
     }
 
 private:
     ParamStore& params;
     int bypassId;
+    bool expanded = false;
     juce::Label title;
-    juce::TextButton power;
-    juce::OwnedArray<ParamKnob> knobs;
+    juce::TextButton disclosure, power;
+    juce::OwnedArray<ParamRow> rows;
     juce::Component* extraComponent = nullptr;
 };
 
