@@ -7,6 +7,7 @@
 #include "FxChain.h"
 #include "Parameters.h"
 #include "StemPlayer.h"
+#include "dsp/Limiter.h"
 
 namespace rig
 {
@@ -30,9 +31,17 @@ public:
     int getBufferSize() const noexcept      { return currentBlock.load (std::memory_order_relaxed); }
     float getFxLatencyMs() const noexcept;
 
+    // What the device itself costs: input and output buffering plus the
+    // driver's safety offsets, as reported by CoreAudio.
+    float getIoLatencyMs() noexcept;
+
     float getInputPeak() const noexcept     { return inPeak.load (std::memory_order_relaxed); }
     float getOutputPeakL() const noexcept   { return outPeakL.load (std::memory_order_relaxed); }
     float getOutputPeakR() const noexcept   { return outPeakR.load (std::memory_order_relaxed); }
+
+    // How hard the master limiter is working, in positive dB of reduction —
+    // zero when the sum is under the ceiling.
+    float getLimiterReductionDb() const noexcept { return limiterGr.load (std::memory_order_relaxed); }
 
     void audioDeviceIOCallbackWithContext (const float* const* inputChannelData,
                                            int numInputChannels,
@@ -44,10 +53,18 @@ public:
     void audioDeviceStopped() override;
 
 private:
+    void preferLowLatencyBuffer();
+
     juce::AudioDeviceManager deviceManager;
 
+    ParamStore& params;
     StemPlayer stems;
     FxChain fx;
+
+    // The master bus: one gain over the whole sum, then the safety limiter,
+    // so the device is never handed a sample it would hard-clip.
+    juce::SmoothedValue<float> masterGain;
+    MasterLimiter limiter;
 
     juce::AudioBuffer<float> scratch;   // monoIn, liveL, liveR, mixL, mixR
     int maxBlock = 512;
@@ -55,6 +72,7 @@ private:
     std::atomic<double> currentRate { 0.0 };
     std::atomic<int> currentBlock { 0 };
     std::atomic<float> inPeak { 0.0f }, outPeakL { 0.0f }, outPeakR { 0.0f };
+    std::atomic<float> limiterGr { 0.0f };
     bool callbackAdded = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)

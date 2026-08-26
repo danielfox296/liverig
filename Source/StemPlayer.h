@@ -40,6 +40,16 @@ public:
     void togglePlay() noexcept           { isPlaying() ? stop() : play(); }
     bool isPlaying() const noexcept      { return playing.load (std::memory_order_relaxed); }
 
+    // Section loop. The points come from taps, so they are wherever the
+    // playhead was — the player just cycles them with a crossfaded seam.
+    // Returns false if the region is too short to loop sensibly.
+    bool setLoop (int startSample, int endSample) noexcept;
+    void clearLoop() noexcept            { loopOn.store (false, std::memory_order_relaxed);
+                                           loopRange.store (0, std::memory_order_relaxed); }
+    bool isLooping() const noexcept      { return loopOn.load (std::memory_order_relaxed); }
+
+    int getPositionSamples() const noexcept { return playhead.load (std::memory_order_relaxed); }
+
     // --- audio thread ---
     void process (float* left, float* right, int numSamples) noexcept;
 
@@ -83,6 +93,17 @@ private:
     std::atomic<int> command { 0 };       // 1 = play, 2 = stop
     std::atomic<bool> playing { false };
     std::atomic<int> playhead { 0 };
+
+    // Loop start in the low word, end in the high word — one atomic store so
+    // the audio thread never sees half a loop.
+    std::atomic<uint64_t> loopRange { 0 };
+    std::atomic<bool> loopOn { false };
+    static_assert (std::atomic<uint64_t>::is_always_lock_free, "need a lock-free loop word");
+
+    // Seam crossfade, audio thread only: for a few hundred samples after the
+    // jump, the pre-seam audio ghosts forward and fades into the loop start.
+    bool fading = false;
+    int fadeLen = 0, fadePos = 0, ghostPos = 0;
 
     juce::SmoothedValue<float> gains[numStems];
 

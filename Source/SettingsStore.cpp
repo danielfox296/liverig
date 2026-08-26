@@ -26,6 +26,9 @@ void SettingsStore::load (ParamStore& params)
         songFolder = obj->getProperty ("songFolder").toString();
         deviceState = obj->getProperty ("audioDeviceState").toString();
         expandedPanels = obj->getProperty ("expandedPanels").toString();
+        chainOrder = obj->getProperty ("chainOrder").toString();
+        tuner = obj->getProperty ("tuner").toString();
+        ampModel = obj->getProperty ("ampModel").toString();
     }
 }
 
@@ -36,6 +39,9 @@ void SettingsStore::save (const ParamStore& params) const
     root->setProperty ("songFolder", songFolder);
     root->setProperty ("audioDeviceState", deviceState);
     root->setProperty ("expandedPanels", expandedPanels);
+    root->setProperty ("chainOrder", chainOrder);
+    root->setProperty ("tuner", tuner);
+    root->setProperty ("ampModel", ampModel);
 
     const auto file = getFile();
     file.getParentDirectory().createDirectory();

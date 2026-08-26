@@ -33,28 +33,63 @@ Everything happens in the window. There is nothing to run in a terminal.
   install the splitter (about 900 MB, once).
 - **Load folder...** opens a song folder from anywhere else on disk.
 - **Spacebar** or the transport button starts and stops. Stop returns to the top.
+- **LOOP** (or the **L** key) is the section looper, and it is a tap
+  instrument, not a drag one: while the song plays, tap at the top of the
+  section, tap again at the end, and the song cycles that stretch with a
+  crossfaded seam until you tap it off. Your taps *are* the loop points —
+  musicians place a downbeat with a key press far better than anyone places
+  one with a mouse. The loop survives stop (play runs back into it) and
+  clears when you switch songs.
 - **STEMS**: the four stems as a mixer — fader and mute each. Missing stems are
   greyed out. You will normally pull `bass` down or mute it.
-- **Effects** are collapsed to a single row each: name, and an ON toggle you can
-  hit without looking. Tap the row or the **+** to open its controls, tap again
-  to put it away. Which ones are open is remembered between sessions.
+- **Effects** are a list: each row is a name and an ON toggle you can hit
+  without looking. Tap a row and its controls come up in the **parameter
+  panel** beside the list — one effect's controls at a time, nothing stacked,
+  nothing to scroll past. Tap the row again to put them away; with nothing
+  selected the panel just says so. Which effect is up is remembered between
+  sessions.
+- **The list is the signal chain**, top to bottom, and the rows with a
+  gripper can be **dragged into any order** — put drive before the filter,
+  chorus before the octave, whatever the song wants. Input stays at the top,
+  Live out at the bottom, and Reverb keeps the second-to-last slot because it
+  is where the lane becomes stereo. The order applies live as you drop the
+  row and is saved with your settings — and **whole-chain presets capture it
+  too**: recalling a preset rewires the chain the way it sounded when it was
+  saved. A preset from before order was captured carries none, and leaves
+  your wiring alone.
 - **Presets** come at two scales. The bar across the top of the effect column
   stores the **whole chain** — everything from input trim to live out, but not
-  the stem faders, which belong to the song rather than the sound. Six ship
-  with it: Clean DI, Fingerstyle comp, Octave lead, Dirty octave, Phaser funk,
-  Ambient swell.
+  the stem faders, which belong to the song rather than the sound. Eleven
+  ship with it: Clean DI, Warm DI, Fingerstyle comp, Octave lead, Dirty
+  octave, Phaser funk, Ambient swell, Funk filter, Synth bass, Stacked lead,
+  Analog wash.
 
-  Each effect also has **its own preset row** when you open it, for building a
-  sound rather than recalling one — Fast FET on the compressor, Cut mud on the
-  EQ, Sub -12 on the octave, Slapback on the delay, and so on. Type a name and
-  hit **Save** on either bar to add your own.
+  Each effect also has **its own preset row** at the top of the parameter
+  panel, for building a sound rather than recalling one — Fast FET on the
+  compressor, Quack on the filter, Fusion lead on the drive, Square sub on the
+  synth, Tri lush on the chorus, Carbon copy on the delay, and so on. Type a
+  name and hit **Save** on either bar to add your own. When an update ships
+  new factory presets, they are merged in once by name; anything you saved
+  yourself is never touched.
 
   An effect preset deliberately does *not* carry the ON state. Recalling how
   something sounds should not decide whether it is engaged — that is what the
   ON button is for, mid-song. A whole-chain preset does carry it, because there
   the point is to recall an entire sound.
-- **Footer**: the audio device picker, the current rate and buffer size, and the
-  chain's reported latency.
+- **The panel beside the effect list has tabs.** EFFECT is the parameter
+  editor; **TUNER** is a chromatic tuner running on the same pitch tracker as
+  the octave and synth — accurate to well under a cent across the whole bass
+  register. Big note name, cents needle with a green in-tune zone, and a
+  string row for reference — the BASS/GUITAR switch picks which strings are
+  drawn, and is remembered. Tap any effect row to come back to the editor.
+- **Master** is the last row: one gain over the whole mix — stems and live
+  summed — feeding an always-on safety limiter. When the limiter is working,
+  an orange **LIM** readout appears beside the master meter with the dB it is
+  catching. Occasional flickers on peaks are healthy; a constant large number
+  means the mix is genuinely too hot — pull the master or the stems down.
+- **Footer**: the audio device picker, the current rate and buffer size, and
+  the latency you are actually playing against, split into its two honest
+  parts — what the device costs (I/O) and what the chain adds (FX).
 
 The controls are horizontal faders rather than rotary knobs on purpose. A knob
 needs a slow, accurate circular drag; a fader is a wide target you can shove
@@ -71,20 +106,85 @@ drop stems in by hand if you have them from somewhere else.
 
 ### Signal chain
 
+The default order. Everything between Input and Reverb can be dragged into
+any order in the app; Input, Reverb and Live out hold their places.
+
 | # | Effect | Controls |
 |---|--------|----------|
 | 1 | Input gain | trim, meter (a 5 Hz DC blocker sits here too) |
 | 2 | Compressor | threshold, ratio, attack, release, makeup |
 | 3 | EQ | low shelf, parametric mid (freq/gain/Q), high shelf |
-| 4 | Overdrive | drive, tone, level — `tanh` soft clip, 4x oversampled |
-| 5 | Octave | interval (±12 semitones), dry/wet |
-| 6 | Phaser | rate, depth, feedback — 4-stage |
-| 7 | Delay | time, feedback, mix, high cut in the feedback path |
-| 8 | Reverb | size, damping, mix — Freeverb, mono in / stereo out |
-| 9 | Live out | lane gain |
+| 4 | Filter | sens, attack, release, from, to, res, mix — envelope filter |
+| 5 | Boost | boost, sheen, hair — clean gain with a JFET-style knee |
+| 6 | Overdrive | drive, tone, level, stack, bite — two voices, 4x oversampled |
+| 7 | Octave | interval (±12 semitones), dry/wet |
+| 8 | Synth | shape, sub, cutoff, env, res, glide, mix — tracked synth voice |
+| 9 | Phaser | rate, depth, feedback — 4-stage |
+| 10 | Chorus | rate, depth, voices, tone, keep lows, mix |
+| 11 | Delay | time, feedback, mix, high cut, mod rate, mod depth, sat |
+| 12 | Tape | drive, soften, bump, mix — tape-machine warmth |
+| 13 | Reverb | size, damping, mix — Freeverb, mono in / stereo out |
+| 14 | Live out | lane gain |
+| 15 | Master | gain over the whole mix — stems and live — into the safety limiter |
 
 Attack and release are exposed on the compressor because "fast attack
 available" is the whole point of a FET-style feel on bass.
+
+### The pedal-shaped effects
+
+Five of the stages are modelled on specific boxes rather than invented:
+
+- **Filter** is a Mu-Tron-style envelope filter: your playing level drives a
+  state-variable lowpass between **From** and **To**. The two faders replace
+  the usual range-and-direction switches — set To *below* From and the sweep
+  runs downward. Res is the quack. The filter core is a TPT (Zavalishin) SVF,
+  chosen because it stays stable no matter how fast the envelope shoves it.
+- **Boost** is the Keeley Katana idea: up to +30 dB that stays honest at
+  stage level. **Sheen** is a ±6 dB shelf at 2.8 kHz (cut for warm, boost for
+  presence), and **Hair** lowers the knee of a soft clip so a slammed input
+  folds over the way cascaded JFETs give out. With the Overdrive on, the
+  boost shoves its front end exactly like a boost pedal into a dirt pedal.
+- **Overdrive** grew a second voice, after the Wampler Dual Fusion: the
+  original `tanh` stage is the smooth side, and **Stack** blends in a second,
+  mid-tilted stage that clips around a biased operating point — even
+  harmonics, the warmth a symmetric clipper cannot make. **Bite** voices how
+  hard its mid-forward tilt pushes. Both run inside the same 4x oversampler,
+  and a DC blocker mops up what asymmetric clipping rectifies.
+- **Chorus** is Corona-shaped: **Voices** picks one modulated tap (vibrato
+  flavour at full mix), the classic pair, or all three offset in rate, depth
+  and phase — the tri-chorus wash. **Tone** darkens only the wet voices, and
+  **Keep lows** highpasses the *difference* signal so everything below it
+  stays untouched dry bass. Chorus that does not eat the low end.
+- **Delay** learned the Carbon Copy tricks: **Mod rate/depth** put a slow
+  warble on the read tap (the BBD clock wobble that reads as tape), and
+  **Sat** squashes the feedback path through a compander-style curve — unity
+  for quiet repeats, folding over as they get hot, so high feedback rings
+  and swims instead of running away. Repeats read through the same 4-point
+  Hermite interpolator as the octave shifter, so the moving tap stays clean.
+- **Tape** is the warmth stage — the cure for "harsh and digital". **Drive**
+  pushes into a softly biased saturator wrapped in pre/de-emphasis, so the
+  highs saturate first: that is the mechanism that makes tape smooth on top,
+  and it means digital sheen and string clank get rounded before anything
+  else distorts. The bias puts a little second harmonic under it. **Soften**
+  sets how strong that spectral tilt is (plus a gentle final rolloff),
+  **Bump** is the tape head bump — up to +4.5 dB at 80 Hz, free weight for
+  bass — and quiet playing always passes at unity, so it can idle engaged.
+  It defaults to sitting just before the reverb and drags anywhere.
+
+### The synth voice
+
+The one that is not a pedal copy — because the app already had the part
+every synth pedal struggles with. The same pitch tracker that drives the
+octave shifter drives a pair of polyBLEP oscillators: **Shape** morphs square
+to saw, **Sub** adds a square an octave down, **Glide** slews between notes.
+
+There is no gate. The voice is keyed by an envelope follower on the live
+signal — play harder and it opens, stop and it dies with the string — and the
+same envelope sweeps a resonant TPT lowpass (**Cutoff** up to **Env** octaves),
+which is what makes it read as a synth rather than a fuzz. At full **Mix** the
+bass *is* a synth; at half it is a layer underneath your real sound. It sits
+after the octave and before the modulation, so phaser, chorus, delay and
+reverb all treat it as a first-class citizen.
 
 ---
 
@@ -115,8 +215,9 @@ device keeps its headroom while a track is being pulled apart.
 This is the part worth reading. It is a pitch-synchronous delay-line shifter,
 not a generic granular one.
 
-A pitch tracker runs as a side chain on the compressor output — clean, before
-the overdrive adds harmonics that fool detectors. It lowpasses and decimates to
+A pitch tracker runs as a side chain on the trimmed input, ahead of all the
+movable stages — so no arrangement of dirt or modulation can feed it
+harmonics that fool detectors. It lowpasses and decimates to
 about 3 kHz, runs YIN (squared difference function, cumulative mean
 normalisation, first dip below threshold so it does not fall for the
 sub-octave), then refines the winning lag at full rate with a normalised
@@ -141,6 +242,59 @@ rather than being a fixed worst case: 20 ms on a low B, 15 ms on a low E,
 as the number you feel rather than wherever in the grain cycle the UI sampled.
 
 The backing lane is deliberately **not** compensated against it.
+
+### Loudness, peaks and the master limiter
+
+"It sounds quiet but it's clipping" is one problem, not two. Loudness is the
+*average* level; digital clipping happens at the *peaks*. Bass is peaky, the
+Demucs stems come back close to full scale, and four stems plus the live lane
+is a sum that can pass 0 dBFS on its own — so the peaks were hitting the
+ceiling while the average stayed modest. Inside the chain nothing clips
+(floats have effectively unlimited headroom); the hard edge is the device
+boundary, where anything past ±1.0 is simply cut off. That crackle was the
+DAC, not an effect.
+
+The master bus now ends in a **safety limiter**: instant attack, ~120 ms
+release, ceiling at −1 dBFS, zero lookahead because this is a live path. By
+construction its output cannot pass the ceiling — the alternative sound is
+the DAC hard-clipping, which is never the better one. On sustained material
+the envelope rides the waveform, so it stays clean; only transient tips get
+caught. The **LIM** readout by the master meter shows its gain reduction
+live, which is also the honest answer to "was that clipping?" — it is the dB
+that *would have been* clipped.
+
+That changes how to set levels: get the input trim so your hardest playing
+sits high and green on the input meter, balance stems and live lane to
+taste, then use **Master** for the overall level. If LIM flickers a dB or
+two on digs and hits, all is well — that is the limiter doing its job. If it
+sits on constantly, everything is just turned up too far; pull Master down
+and turn your interface or monitors up instead.
+
+### Where the latency lives
+
+Three places, very unevenly:
+
+- **The device.** Input buffer + output buffer + the driver's safety offsets.
+  This is the big one nobody sees: the OS default is typically 512 samples,
+  which is over 20 ms of round trip before a single effect runs. LiveRig now
+  asks a fresh device for the smallest buffer of at least 64 samples instead
+  (a few ms round trip), and the footer shows the real figure as "I/O".
+  Whatever you pick in the device dialog is saved and wins from then on. The
+  whole chain costs under a fifth of the callback budget even at 32-sample
+  buffers, so small buffers are safe.
+- **The octave shifter**, when it is on. Roughly three quarters of a period —
+  9 ms around A, 18 ms on a low E, more below. That is the price of
+  period-synchronous shifting and it cannot drop much below one period
+  without giving back the phase-aligned crossfades that make it clean on
+  bass. It scales with the note, and the footer's FX figure tracks it live.
+- **Everything else is free.** Filter, boost, synth, phaser, chorus are
+  zero-latency; delay and reverb are wet mixes on top of an uncoloured dry
+  path; the drive's oversampler costs about a tenth of a millisecond.
+
+One stage trick falls out of this: the synth's **Sub** is an octave-down
+voice with effectively no latency (a 2.5 ms envelope), so when a part needs
+tight sub-octave weight rather than the shifter's tracked-down voice, the
+synth is the low-latency way to get it.
 
 ---
 
@@ -218,15 +372,26 @@ It prints the folder path on stdout, progress on stderr. A 2:34 Suno track took
 
 It covers pitch tracking accuracy across the bass register and a 40 → 120 Hz
 glide, the shifter's actual output pitch at +12/+7/−12 semitones and across
-note changes, grain-boundary discontinuity, bypass toggling, stem loading and
-sample-rate conversion, and worst-case per-block cost at 32 and 64 samples.
+note changes, grain-boundary discontinuity, bypass toggling across all eleven
+switches, stem loading and sample-rate conversion, and worst-case per-block
+cost at 32 and 64 samples with every stage engaged.
+
+The newer stages are tested by what they claim to do, not by their code: the
+envelope filter must get brighter when the same phrase is played harder (and
+darker with To below From), the boost must measure exactly the dB on its
+fader and fold over with full hair, the stacked drive must add even harmonics
+a single `tanh` cannot, the synth must sit on the played pitch with the sub a
+clean octave down and stay silent on silence, the chorus must actually bend
+pitch and leave a 60 Hz fundamental dry behind Keep lows, and the delay must
+warble under mod and stay bounded at 0.95 feedback with the compander engaged.
 
 Pass it a **file** to run the tracker and shifter over real playing — a DI take,
 or a separated bass stem. It reports how much of the take has notes sounding,
 how much of *that* tracked confidently, the detected range, and whether the
 shifted output really sits an octave above the input window by window. It also
 writes `<name>-octave.wav` next to the input — 100% wet — so you can listen to
-the shifter alone.
+the shifter alone, plus four showcase renders of the new chains over the same
+take: `-funk-filter`, `-synth-bass`, `-stacked-lead` and `-analog-wash`.
 
 Pass it a **folder** to load a real song through the actual stem player and see
 the per-stem levels.

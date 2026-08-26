@@ -15,21 +15,36 @@ enum ParamId
 
     pInGain,
 
-    pCompOn, pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup,
+    pCompOn, pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup, pCompBlend,
 
     pEqOn, pEqLoFreq, pEqLoGain, pEqMidFreq, pEqMidGain, pEqMidQ, pEqHiFreq, pEqHiGain,
 
-    pDriveOn, pDriveAmount, pDriveTone, pDriveLevel,
+    pFltOn, pFltSens, pFltAttack, pFltRelease, pFltFrom, pFltTo, pFltRes, pFltMix,
 
-    pOctOn, pOctInterval, pOctMix,
+    pBoostOn, pBoostGain, pBoostSheen, pBoostHair,
 
-    pPhaserOn, pPhaserRate, pPhaserDepth, pPhaserFeedback,
+    pDriveOn, pDriveVoice, pDriveAmount, pDriveTone, pDriveLevel, pDriveStack, pDriveBite,
+
+    pAmpOn, pAmpIn, pAmpOut,
+
+    pOctOn, pOctInterval, pOctMix, pOct2Interval, pOct2Level,
+
+    pSynOn, pSynShape, pSynSub, pSynCutoff, pSynEnv, pSynRes, pSynGlide, pSynMix,
+
+    pPhaserOn, pPhaserRate, pPhaserDepth, pPhaserFeedback, pPhaserStages,
+
+    pChoOn, pChoRate, pChoDepth, pChoVoices, pChoTone, pChoLows, pChoMix,
 
     pDelayOn, pDelayTime, pDelayFeedback, pDelayMix, pDelayHighcut,
+    pDelayModRate, pDelayModDepth, pDelaySat, pDelaySmear,
 
-    pRevOn, pRevSize, pRevDamp, pRevMix,
+    pTapeOn, pTapeDrive, pTapeSoften, pTapeBump, pTapeMix,
+
+    pRevOn, pRevSize, pRevDamp, pRevPre, pRevMod, pRevMix,
 
     pLiveOut,
+
+    pMasterGain,
 
     NumParams
 };

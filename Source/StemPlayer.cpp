@@ -51,6 +51,7 @@ void StemPlayer::unload()
     playing.store (false);
     playhead.store (0);
     command.store (0);
+    clearLoop();
 }
 
 juce::Result StemPlayer::loadSongFolder (const juce::File& f)
@@ -195,11 +196,29 @@ void StemPlayer::buildForRate (double rate)
     playing.store (false);
     playhead.store (0);
     command.store (0);
+    clearLoop();
 }
 
 void StemPlayer::reloadForCurrentRate()
 {
     buildForRate (preparedRate.load());
+}
+
+bool StemPlayer::setLoop (int startSample, int endSample) noexcept
+{
+    const double rate = builtRate > 0.0 ? builtRate : 48000.0;
+    const int minLength = (int) (0.15 * rate);
+
+    startSample = juce::jlimit (0, juce::jmax (0, lengthSamples - 1), startSample);
+    endSample = juce::jlimit (0, lengthSamples, endSample);
+
+    if (endSample - startSample < minLength)
+        return false;
+
+    loopRange.store (((uint64_t) (uint32_t) endSample << 32) | (uint32_t) startSample,
+                     std::memory_order_relaxed);
+    loopOn.store (true, std::memory_order_relaxed);
+    return true;
 }
 
 void StemPlayer::process (float* left, float* right, int numSamples) noexcept
@@ -210,11 +229,13 @@ void StemPlayer::process (float* left, float* right, int numSamples) noexcept
     {
         playhead.store (0, std::memory_order_relaxed);
         playing.store (true, std::memory_order_relaxed);
+        fading = false;
     }
     else if (cmd == 2)
     {
         playing.store (false, std::memory_order_relaxed);
         playhead.store (0, std::memory_order_relaxed);
+        fading = false;
     }
 
     for (int i = 0; i < numStems; ++i)
@@ -237,56 +258,106 @@ void StemPlayer::process (float* left, float* right, int numSamples) noexcept
     auto* data = song.get();
     int pos = playhead.load (std::memory_order_relaxed);
     const int total = data->numSamples;
-    const int count = juce::jmin (numSamples, total - pos);
 
-    if (count <= 0)
+    const uint64_t range = loopRange.load (std::memory_order_relaxed);
+    const bool looping = loopOn.load (std::memory_order_relaxed) && range != 0;
+    const int loopStart = (int) (uint32_t) range;
+    const int loopEnd = (int) (uint32_t) (range >> 32);
+
+    int outOffset = 0;
+    int remaining = numSamples;
+
+    // Segment by segment: each segment runs straight ahead, cut at the loop
+    // seam, where the read jumps back and the old material ghosts across.
+    while (remaining > 0)
     {
-        playing.store (false, std::memory_order_relaxed);
-        playhead.store (0, std::memory_order_relaxed);
-
-        for (auto& g : gains)
-            g.skip (numSamples);
-
-        return;
-    }
-
-    for (int i = 0; i < numStems; ++i)
-    {
-        auto& g = gains[i];
-
-        if (! data->present[i])
+        if (looping && pos == loopEnd)
         {
-            g.skip (count);
-            continue;
+            ghostPos = pos;
+            fadePos = 0;
+            fadeLen = juce::jmin (512, total - pos, loopEnd - loopStart);
+            fading = fadeLen > 16;
+            pos = loopStart;
         }
 
-        const int stemLen = data->stems[i].getNumSamples();
-        const float* sl = data->stems[i].getReadPointer (0);
-        const float* sr2 = data->stems[i].getReadPointer (1);
+        int count = juce::jmin (remaining, total - pos);
 
-        for (int n = 0; n < count; ++n)
+        if (looping && pos < loopEnd)
+            count = juce::jmin (count, loopEnd - pos);
+
+        if (count <= 0)
         {
-            const float gain = g.getNextValue();
-            const int idx = pos + n;
+            playing.store (false, std::memory_order_relaxed);
+            pos = 0;
+            fading = false;
+            break;
+        }
 
-            if (idx < stemLen)
+        for (int i = 0; i < numStems; ++i)
+        {
+            auto& g = gains[i];
+
+            if (! data->present[i])
             {
-                left[n]  += sl[idx] * gain;
-                right[n] += sr2[idx] * gain;
+                g.skip (count);
+                continue;
+            }
+
+            const int stemLen = data->stems[i].getNumSamples();
+            const float* sl = data->stems[i].getReadPointer (0);
+            const float* sr2 = data->stems[i].getReadPointer (1);
+
+            for (int n = 0; n < count; ++n)
+            {
+                const float gain = g.getNextValue();
+                const int idx = pos + n;
+                float vl = idx < stemLen ? sl[idx] : 0.0f;
+                float vr = idx < stemLen ? sr2[idx] : 0.0f;
+
+                if (fading)
+                {
+                    const int f = fadePos + n;
+
+                    if (f < fadeLen)
+                    {
+                        const int gi = ghostPos + f;
+                        const float glv = gi < stemLen ? sl[gi] : 0.0f;
+                        const float grv = gi < stemLen ? sr2[gi] : 0.0f;
+                        const float t = (float) (f + 1) / (float) fadeLen;
+                        vl = glv + (vl - glv) * t;
+                        vr = grv + (vr - grv) * t;
+                    }
+                }
+
+                left[outOffset + n]  += vl * gain;
+                right[outOffset + n] += vr * gain;
             }
         }
+
+        if (fading)
+        {
+            fadePos += count;
+
+            if (fadePos >= fadeLen)
+                fading = false;
+        }
+
+        pos += count;
+        outOffset += count;
+        remaining -= count;
+
+        if (! looping && pos >= total)
+        {
+            playing.store (false, std::memory_order_relaxed);
+            pos = 0;
+            fading = false;
+            break;
+        }
     }
 
-    for (auto& g : gains)
-        g.skip (numSamples - count);
-
-    pos += count;
-
-    if (pos >= total)
-    {
-        playing.store (false, std::memory_order_relaxed);
-        pos = 0;
-    }
+    if (remaining > 0)
+        for (auto& g : gains)
+            g.skip (remaining);
 
     playhead.store (pos, std::memory_order_relaxed);
 }

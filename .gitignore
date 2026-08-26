@@ -1,5 +1,6 @@
 build/
 JUCE/
+NeuralAmpModelerCore/
 .DS_Store
 *.wav
 *.mp3

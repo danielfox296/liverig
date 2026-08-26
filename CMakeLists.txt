@@ -48,10 +48,47 @@ else()
     FetchContent_MakeAvailable(JUCE)
 endif()
 
+# --- Neural Amp Modeler core (vendored, MIT) --------------------------------
+# The inference engine behind the Amp stage. Compiled quiet: it is upstream
+# code, and its warnings are not ours to fix. An OBJECT library on purpose —
+# the architectures register themselves through static initialisers, which a
+# static archive would dead-strip.
+add_library(nam_core OBJECT
+    NeuralAmpModelerCore/NAM/activations.cpp
+    NeuralAmpModelerCore/NAM/container.cpp
+    NeuralAmpModelerCore/NAM/conv1d.cpp
+    NeuralAmpModelerCore/NAM/convnet.cpp
+    NeuralAmpModelerCore/NAM/dsp.cpp
+    NeuralAmpModelerCore/NAM/get_dsp.cpp
+    NeuralAmpModelerCore/NAM/linear.cpp
+    NeuralAmpModelerCore/NAM/lstm.cpp
+    NeuralAmpModelerCore/NAM/nam_file.cpp
+    NeuralAmpModelerCore/NAM/ring_buffer.cpp
+    NeuralAmpModelerCore/NAM/sequential.cpp
+    NeuralAmpModelerCore/NAM/util.cpp
+    NeuralAmpModelerCore/NAM/wavenet/a2_fast.cpp
+    NeuralAmpModelerCore/NAM/wavenet/model.cpp
+    NeuralAmpModelerCore/NAM/wavenet/slimmable.cpp)
+
+target_include_directories(nam_core SYSTEM PUBLIC
+    NeuralAmpModelerCore
+    NeuralAmpModelerCore/Dependencies/eigen
+    NeuralAmpModelerCore/Dependencies/nlohmann)
+
+# Floats end to end: the chain is float, and the official plugin ships this way.
+target_compile_definitions(nam_core PUBLIC NAM_SAMPLE_FLOAT)
+target_compile_options(nam_core PRIVATE -w)
+
+if (RIG_LIBCXX_FLAGS)
+    target_compile_options(nam_core PRIVATE ${RIG_LIBCXX_FLAGS})
+endif()
+
 # --- shared DSP / engine sources -------------------------------------------
 set(RIG_DSP_SOURCES
     Source/dsp/PitchTracker.cpp
     Source/dsp/OctaveShifter.cpp
+    Source/dsp/PlateVerb.cpp
+    Source/dsp/AmpModel.cpp
     Source/FxChain.cpp
     Source/StemPlayer.cpp
     Source/Parameters.cpp)
@@ -92,6 +129,7 @@ if (RIG_LIBCXX_FLAGS)
 endif()
 
 target_link_libraries(LiveRig PRIVATE
+    nam_core
     juce::juce_audio_utils
     juce::juce_audio_devices
     juce::juce_audio_formats
@@ -138,6 +176,7 @@ if (RIG_LIBCXX_FLAGS)
 endif()
 
 target_link_libraries(rig_uishot PRIVATE
+    nam_core
     juce::juce_audio_utils
     juce::juce_audio_devices
     juce::juce_dsp
@@ -151,6 +190,7 @@ juce_add_console_app(rig_tests PRODUCT_NAME "rig_tests")
 
 target_sources(rig_tests PRIVATE
     Tests/TestMain.cpp
+    Source/PresetStore.cpp
     ${RIG_DSP_SOURCES})
 
 target_compile_definitions(rig_tests PRIVATE ${RIG_COMPILE_DEFS} JUCE_STANDALONE_APPLICATION=1)
@@ -162,6 +202,7 @@ endif()
 target_include_directories(rig_tests PRIVATE Source)
 
 target_link_libraries(rig_tests PRIVATE
+    nam_core
     juce::juce_audio_formats
     juce::juce_dsp
     juce::juce_core

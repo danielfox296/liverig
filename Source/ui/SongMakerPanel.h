@@ -3,6 +3,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "../SongMaker.h"
+#include "Type.h"
 
 namespace rig
 {
@@ -15,20 +16,20 @@ class SongMakerPanel : public juce::Component
 public:
     explicit SongMakerPanel (SongMaker& m) : maker (m)
     {
-        title.setFont (juce::Font (juce::FontOptions (17.0f, juce::Font::bold)));
+        title.setFont (rigFont (17.0f, true));
         addAndMakeVisible (title);
 
-        body.setFont (juce::Font (juce::FontOptions (13.0f)));
+        body.setFont (rigFont (13.0f));
         body.setJustificationType (juce::Justification::topLeft);
         body.setColour (juce::Label::textColourId, juce::Colour (0xff9a9da6));
         addAndMakeVisible (body);
 
-        nameLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
+        nameLabel.setFont (rigFont (12.0f));
         nameLabel.setText ("Song name", juce::dontSendNotification);
         nameLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9a9da6));
         addAndMakeVisible (nameLabel);
 
-        nameEditor.setFont (juce::Font (juce::FontOptions (15.0f)));
+        nameEditor.setFont (rigFont (15.0f));
         nameEditor.onReturnKey = [this] { primary.triggerClick(); };
         addAndMakeVisible (nameEditor);
 
@@ -216,11 +217,11 @@ class JobStrip : public juce::Component
 public:
     explicit JobStrip (SongMaker& m) : maker (m)
     {
-        label.setFont (juce::Font (juce::FontOptions (12.0f)));
+        label.setFont (rigFont (12.0f));
         label.setColour (juce::Label::textColourId, juce::Colour (0xffc8c9ce));
         addAndMakeVisible (label);
 
-        detail.setFont (juce::Font (juce::FontOptions (11.0f)));
+        detail.setFont (rigFont (11.0f));
         detail.setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
         detail.setJustificationType (juce::Justification::centredRight);
         addAndMakeVisible (detail);

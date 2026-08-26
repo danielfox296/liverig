@@ -8,11 +8,15 @@ namespace rig
 {
 
 // Named snapshots of the live chain — everything from input gain to live out,
-// but not the stem faders, which belong to the song rather than the sound.
+// plus the order the stages are wired in, but not the stem faders, which
+// belong to the song rather than the sound.
 class PresetStore
 {
 public:
     static juce::File getFile();
+
+    // Tests point the store at a scratch file; empty means the real one.
+    juce::File fileOverride;
 
     void load();
 
@@ -20,8 +24,19 @@ public:
     bool contains (const juce::String& name) const { return names.contains (name); }
 
     bool apply (const juce::String& name, ParamStore& params) const;
-    void store (const juce::String& name, const ParamStore& params);
+    void store (const juce::String& name, const ParamStore& params,
+                const juce::String& chainOrder,
+                const juce::var& ampCapture = juce::var());
     void remove (const juce::String& name);
+
+    // The stage order the preset was saved with — empty for presets from
+    // before order was captured, which leave the wiring alone.
+    juce::String getChainOrder (const juce::String& name) const;
+
+    // The NAM capture name the preset was saved with: a string (possibly
+    // empty, meaning "saved with no capture"), or void for presets from
+    // before captures existed — those leave the amp alone on recall.
+    juce::var getAmpCapture (const juce::String& name) const;
 
     // Per-effect presets. The effect key is a stable short string ("eq",
     // "octave"); the parameter list is what gets captured. Bypass is left out
@@ -29,10 +44,13 @@ public:
     juce::StringArray getEffectNames (const juce::String& effect) const;
     bool effectContains (const juce::String& effect, const juce::String& name) const;
 
+    // captureOut, when given, receives the preset's stored capture name with
+    // the same string-or-void semantics as getAmpCapture.
     bool applyEffect (const juce::String& effect, const juce::String& name,
-                      ParamStore& params) const;
+                      ParamStore& params, juce::var* captureOut = nullptr) const;
     void storeEffect (const juce::String& effect, const juce::String& name,
-                      const ParamStore& params, const std::vector<int>& paramIds);
+                      const ParamStore& params, const std::vector<int>& paramIds,
+                      const juce::var& capture = juce::var());
     void removeEffect (const juce::String& effect, const juce::String& name);
 
 private:
@@ -40,16 +58,22 @@ private:
     {
         juce::String effect, name;
         juce::var params;
+        juce::var capture;
     };
 
     int indexOfEffectPreset (const juce::String& effect, const juce::String& name) const;
 
+    juce::File storageFile() const { return fileOverride == juce::File() ? getFile() : fileOverride; }
+
     void save() const;
     void addFactoryPresets();
     void addFactoryEffectPresets();
+    void mergeFactoryContent();
 
     juce::StringArray names;
     juce::Array<juce::var> values;
+    juce::StringArray orders;         // index-aligned with names and values
+    juce::Array<juce::var> ampCaptures;   // ditto; void where a preset predates captures
     juce::Array<EffectPreset> effectPresets;
 };
 

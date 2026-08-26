@@ -3,7 +3,7 @@
 namespace rig
 {
 
-AudioEngine::AudioEngine (ParamStore& p) : stems (p), fx (p) {}
+AudioEngine::AudioEngine (ParamStore& p) : params (p), stems (p), fx (p) {}
 
 AudioEngine::~AudioEngine()
 {
@@ -12,15 +12,59 @@ AudioEngine::~AudioEngine()
 
 juce::String AudioEngine::initialise (std::unique_ptr<juce::XmlElement> savedState)
 {
+    const bool hadSavedState = savedState != nullptr;
     auto error = deviceManager.initialise (2, 2, savedState.get(), true);
 
     if (error.isEmpty())
     {
+        // A fresh install lands on the OS default buffer — typically 512
+        // samples, which is over 20 ms of round trip before the chain does
+        // anything. A live rig would rather start small. Only the untouched
+        // default is overridden: pick a size in the device dialog and that
+        // choice is saved and honoured from then on.
+        if (! hadSavedState)
+            preferLowLatencyBuffer();
+
         deviceManager.addAudioCallback (this);
         callbackAdded = true;
     }
 
     return error;
+}
+
+void AudioEngine::preferLowLatencyBuffer()
+{
+    auto* device = deviceManager.getCurrentAudioDevice();
+
+    if (device == nullptr)
+        return;
+
+    int best = 0;
+
+    for (int size : device->getAvailableBufferSizes())
+        if (size >= 64 && (best == 0 || size < best))
+            best = size;
+
+    if (best == 0 || best >= device->getCurrentBufferSizeSamples())
+        return;
+
+    auto setup = deviceManager.getAudioDeviceSetup();
+    setup.bufferSize = best;
+    deviceManager.setAudioDeviceSetup (setup, true);
+}
+
+float AudioEngine::getIoLatencyMs() noexcept
+{
+    if (auto* device = deviceManager.getCurrentAudioDevice())
+    {
+        const double rate = device->getCurrentSampleRate();
+
+        if (rate > 0.0)
+            return (float) ((device->getInputLatencyInSamples() + device->getOutputLatencyInSamples())
+                              / rate * 1000.0);
+    }
+
+    return 0.0f;
 }
 
 void AudioEngine::shutdown()
@@ -54,9 +98,15 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     fx.prepare (rate, maxBlock);
     stems.prepare (rate, maxBlock);
 
+    limiter.prepare (rate);
+    masterGain.reset (rate, 0.02);
+    masterGain.setCurrentAndTargetValue (
+        juce::Decibels::decibelsToGain (params.get (pMasterGain), -60.0f));
+
     inPeak.store (0.0f);
     outPeakL.store (0.0f);
     outPeakR.store (0.0f);
+    limiterGr.store (0.0f);
 }
 
 void AudioEngine::audioDeviceStopped()
@@ -117,12 +167,30 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
         stems.process (mixL, mixR, n);
 
-        // --- master sum ---
+        // --- master sum: gain, then the safety limiter ---
         juce::FloatVectorOperations::add (mixL, liveL, n);
         juce::FloatVectorOperations::add (mixR, liveR, n);
 
+        masterGain.setTargetValue (juce::Decibels::decibelsToGain (params.get (pMasterGain), -60.0f));
+
+        float worstGr = 0.0f;
+
+        for (int i = 0; i < n; ++i)
+        {
+            const float g = masterGain.getNextValue();
+            mixL[i] *= g;
+            mixR[i] *= g;
+
+            limiter.process (mixL[i], mixR[i]);
+            worstGr = juce::jmax (worstGr, limiter.getReductionDb());
+        }
+
+        // Meters read what actually reaches the device.
         updatePeak (outPeakL, mixL, n, decay);
         updatePeak (outPeakR, mixR, n, decay);
+
+        const float grDecayed = limiterGr.load (std::memory_order_relaxed) * decay;
+        limiterGr.store (juce::jmax (worstGr, grDecayed), std::memory_order_relaxed);
 
         for (int ch = 0; ch < numOutputChannels; ++ch)
         {

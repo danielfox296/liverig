@@ -4,6 +4,7 @@
 
 #include "../Parameters.h"
 #include "../PresetStore.h"
+#include "Type.h"
 
 namespace rig
 {
@@ -25,6 +26,34 @@ public:
         setColour (juce::Slider::thumbColourId,               juce::Colour (0xffe8e8ea));
         setColour (juce::Slider::textBoxOutlineColourId,      juce::Colours::transparentBlack);
         setColour (juce::Label::textColourId,                 juce::Colour (0xffc8c9ce));
+    }
+
+    // Buttons, combo boxes and slider readouts pick their faces up from the
+    // look-and-feel rather than explicit setFont calls — scale them here so
+    // kTypeScale really does cover everything.
+    juce::Font getTextButtonFont (juce::TextButton& button, int buttonHeight) override
+    {
+        const auto base = LookAndFeel_V4::getTextButtonFont (button, buttonHeight);
+        return base.withHeight (base.getHeight() * kTypeScale);
+    }
+
+    juce::Font getComboBoxFont (juce::ComboBox& box) override
+    {
+        const auto base = LookAndFeel_V4::getComboBoxFont (box);
+        return base.withHeight (base.getHeight() * kTypeScale);
+    }
+
+    juce::Font getPopupMenuFont() override
+    {
+        const auto base = LookAndFeel_V4::getPopupMenuFont();
+        return base.withHeight (base.getHeight() * kTypeScale);
+    }
+
+    juce::Label* createSliderTextBox (juce::Slider& slider) override
+    {
+        auto* label = LookAndFeel_V4::createSliderTextBox (slider);
+        label->setFont (label->getFont().withHeight (label->getFont().getHeight() * kTypeScale));
+        return label;
     }
 
     // A mixer fader rather than the default slab of colour.
@@ -111,11 +140,11 @@ public:
         const auto& s = spec (id);
 
         name.setText (s.label, juce::dontSendNotification);
-        name.setFont (juce::Font (juce::FontOptions (12.0f)));
+        name.setFont (rigFont (12.0f));
         name.setColour (juce::Label::textColourId, juce::Colour (0xff9a9da6));
         addAndMakeVisible (name);
 
-        value.setFont (juce::Font (juce::FontOptions (12.0f)));
+        value.setFont (rigFont (12.0f));
         value.setJustificationType (juce::Justification::centredRight);
         addAndMakeVisible (value);
 
@@ -149,8 +178,8 @@ public:
     void resized() override
     {
         auto b = getLocalBounds().reduced (0, 2);
-        name.setBounds (b.removeFromLeft (74));
-        value.setBounds (b.removeFromRight (72));
+        name.setBounds (b.removeFromLeft (82));
+        value.setBounds (b.removeFromRight (78));
         b.removeFromRight (6);
         slider.setBounds (b);
     }
@@ -223,19 +252,19 @@ public:
         : params (p), gainId (gainParam), muteId (muteParam)
     {
         name.setText (stemName, juce::dontSendNotification);
-        name.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        name.setFont (rigFont (13.0f, true));
         name.setJustificationType (juce::Justification::centred);
         addAndMakeVisible (name);
 
         status.setJustificationType (juce::Justification::centred);
-        status.setFont (juce::Font (juce::FontOptions (10.0f)));
+        status.setFont (rigFont (10.0f));
         status.setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
         addAndMakeVisible (status);
 
         const auto& s = spec (gainId);
         gain.setRange ((double) s.minValue, (double) s.maxValue, 0.1);
         gain.setSliderStyle (juce::Slider::LinearVertical);
-        gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 17);
+        gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 60, 19);
         gain.setDoubleClickReturnValue (true, (double) s.defaultValue);
         gain.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " dB"; };
         gain.setValue ((double) params.get (gainId), juce::dontSendNotification);
@@ -276,8 +305,8 @@ public:
     {
         auto b = getLocalBounds().reduced (5, 8);
 
-        name.setBounds (b.removeFromTop (16));
-        status.setBounds (b.removeFromTop (13));
+        name.setBounds (b.removeFromTop (18));
+        status.setBounds (b.removeFromTop (14));
         mute.setBounds (b.removeFromBottom (24));
         b.removeFromBottom (8);
         gain.setBounds (b.reduced (1, 4));
@@ -292,28 +321,24 @@ private:
 };
 
 //==============================================================================
-// One effect. Collapsed it is a single row — name, on/off, and nothing to
-// catch a sleeve on. Expanded it shows its faders.
+// One effect in the chain list. The row is the mid-song control surface: tap
+// it to bring its controls up in the editor beside the list, hit ON without
+// looking — and drag it by anywhere on the row to move the stage in the
+// signal chain. The gripper marks the rows that move; input, reverb and live
+// out hold their places. The parameters themselves live in FxEditor.
 class FxPanel : public juce::Component
 {
 public:
     static constexpr int headerHeight = 34;
 
-    FxPanel (ParamStore& p, PresetStore& ps, const juce::String& effectKey,
-             const juce::String& titleText, int bypassParam,
-             const std::vector<int>& paramIds, juce::Component* extra = nullptr)
-        : params (p), presets (ps), effect (effectKey), bypassId (bypassParam),
-          ids (paramIds), extraComponent (extra)
+    FxPanel (ParamStore& p, const juce::String& titleText, int bypassParam,
+             bool canDrag, juce::Component* extra = nullptr)
+        : params (p), bypassId (bypassParam), draggable (canDrag), extraComponent (extra)
     {
         title.setText (titleText, juce::dontSendNotification);
-        title.setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+        title.setFont (rigFont (13.0f, true));
         title.setInterceptsMouseClicks (false, false);
         addAndMakeVisible (title);
-
-        disclosure.setButtonText ("+");
-        disclosure.setWantsKeyboardFocus (false);
-        disclosure.onClick = [this] { setExpanded (! expanded); };
-        addAndMakeVisible (disclosure);
 
         if (bypassId >= 0)
         {
@@ -326,104 +351,101 @@ public:
             addAndMakeVisible (power);
         }
 
-        for (int id : paramIds)
-            addAndMakeVisible (rows.add (new ParamRow (params, id)));
-
-        // One knob is not worth a preset.
-        hasPresets = effect.isNotEmpty() && paramIds.size() > 1;
-
-        if (hasPresets)
-        {
-            presetBox.setEditableText (true);
-            presetBox.setTextWhenNothingSelected ("Preset");
-            presetBox.onChange = [this] { applyPreset(); };
-            addAndMakeVisible (presetBox);
-
-            presetSave.setButtonText ("Save");
-            presetSave.setWantsKeyboardFocus (false);
-            presetSave.onClick = [this] { savePreset(); };
-            addAndMakeVisible (presetSave);
-
-            presetDelete.setButtonText ("Del");
-            presetDelete.setWantsKeyboardFocus (false);
-            presetDelete.onClick = [this] { deletePreset(); };
-            addAndMakeVisible (presetDelete);
-
-            reloadPresetList();
-        }
-
         if (extraComponent != nullptr)
             addAndMakeVisible (extraComponent);
 
-        setExpanded (false);
+        if (draggable)
+            setMouseCursor (juce::MouseCursor::DraggingHandCursor);
     }
 
-    std::function<void()> onExpandChanged;
+    std::function<void()> onSelect;
+    std::function<void (const juce::MouseEvent&)> onDragMove;
+    std::function<void()> onDragEnd;
 
-    bool isExpanded() const noexcept { return expanded; }
+    bool isSelected() const noexcept { return selected; }
 
-    void setExpanded (bool shouldExpand)
+
+    void setSelected (bool shouldBeSelected)
     {
-        expanded = shouldExpand;
-        disclosure.setButtonText (expanded ? "-" : "+");
-
-        for (auto* r : rows)
-            r->setVisible (expanded);
-
-        if (hasPresets)
+        if (selected != shouldBeSelected)
         {
-            presetBox.setVisible (expanded);
-            presetSave.setVisible (expanded);
-            presetDelete.setVisible (expanded);
+            selected = shouldBeSelected;
+            repaint();
         }
-
-        if (onExpandChanged != nullptr)
-            onExpandChanged();
-
-        resized();
-        repaint();
     }
 
-    int getPreferredHeight() const
+    void setTitle (const juce::String& titleText)
     {
-        if (! expanded)
-            return headerHeight;
-
-        return headerHeight + (hasPresets ? presetRowHeight : 0)
-                 + rows.size() * ParamRow::preferredHeight + 6;
+        title.setText (titleText, juce::dontSendNotification);
     }
 
-    // Called when something outside changed the values, so the preset name on
-    // show is no longer necessarily what you are hearing.
     void refresh()
     {
-        refreshRows();
-
-        if (hasPresets)
-            presetBox.setSelectedId (0, juce::dontSendNotification);
+        if (bypassId >= 0)
+            power.setToggleState (params.getBool (bypassId), juce::dontSendNotification);
     }
 
-    void mouseDown (const juce::MouseEvent& e) override
+    // Selection happens on release, so starting a drag never also toggles the
+    // editor underneath the move.
+    void mouseDown (const juce::MouseEvent&) override   { dragging = false; }
+
+    void mouseDrag (const juce::MouseEvent& e) override
     {
-        if (e.y < headerHeight)
-            setExpanded (! expanded);
+        if (! draggable)
+            return;
+
+        if (! dragging && e.getDistanceFromDragStart() < 5)
+            return;
+
+        dragging = true;
+
+        if (onDragMove != nullptr)
+            onDragMove (e);
+    }
+
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        if (dragging)
+        {
+            dragging = false;
+
+            if (onDragEnd != nullptr)
+                onDragEnd();
+        }
+        else if (onSelect != nullptr)
+        {
+            onSelect();
+        }
     }
 
     void paint (juce::Graphics& g) override
     {
-        g.setColour (juce::Colour (0xff17181c));
+        g.setColour (juce::Colour (selected ? 0xff2a2d36 : 0xff1c1e24));
         g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
-        g.setColour (juce::Colour (expanded ? 0xff3c3f49 : 0xff26272d));
+        g.setColour (juce::Colour (selected ? 0xff6a6e7a : 0xff41444e));
         g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 4.0f, 1.0f);
+
+        if (selected)
+        {
+            g.setColour (juce::Colour (0xffd87b3a));
+            g.fillRoundedRectangle (1.5f, 5.0f, 3.0f, (float) getHeight() - 10.0f, 1.5f);
+        }
+
+        if (draggable)
+        {
+            // The gripper: the sign this row can be picked up and moved.
+            const float cy = (float) getHeight() * 0.5f;
+            g.setColour (juce::Colour (dragging ? 0xff9a9da6 : 0xff565963));
+
+            for (int line = -1; line <= 1; ++line)
+                g.fillRoundedRectangle (11.0f, cy - 0.75f + (float) line * 4.5f, 13.0f, 1.5f, 0.75f);
+        }
     }
 
     void resized() override
     {
-        auto b = getLocalBounds();
-        auto header = b.removeFromTop (headerHeight).reduced (8, 5);
-
-        disclosure.setBounds (header.removeFromLeft (24));
-        header.removeFromLeft (6);
+        auto header = getLocalBounds().reduced (12, 5);
+        header.removeFromLeft (22);   // gripper zone; kept on every row so titles align
 
         if (bypassId >= 0)
             power.setBounds (header.removeFromRight (58));
@@ -435,38 +457,174 @@ public:
         }
 
         title.setBounds (header);
+    }
 
-        if (expanded)
+private:
+    ParamStore& params;
+    int bypassId;
+    bool draggable = false;
+    bool selected = false;
+    bool dragging = false;
+    juce::Label title;
+    juce::TextButton power;
+    juce::Component* extraComponent = nullptr;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FxPanel)
+};
+
+//==============================================================================
+// The parameter surface beside the effect list. Shows whichever effect is
+// selected — its faders and its preset row — and just a name-plate when
+// nothing is.
+class FxEditor : public juce::Component
+{
+public:
+    FxEditor (ParamStore& p, PresetStore& ps) : params (p), presets (ps)
+    {
+        placeholder.setText ("Effect parameters", juce::dontSendNotification);
+        placeholder.setFont (rigFont (13.0f));
+        placeholder.setJustificationType (juce::Justification::centred);
+        placeholder.setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
+        addAndMakeVisible (placeholder);
+
+        title.setFont (rigFont (13.0f, true));
+        addChildComponent (title);
+
+        presetBox.setEditableText (true);
+        presetBox.setTextWhenNothingSelected ("Preset");
+        presetBox.onChange = [this] { applyPreset(); };
+        addChildComponent (presetBox);
+
+        presetSave.setButtonText ("Save");
+        presetSave.setWantsKeyboardFocus (false);
+        presetSave.onClick = [this] { savePreset(); };
+        addChildComponent (presetSave);
+
+        presetDelete.setButtonText ("Del");
+        presetDelete.setWantsKeyboardFocus (false);
+        presetDelete.onClick = [this] { deletePreset(); };
+        addChildComponent (presetDelete);
+    }
+
+    // Bring one effect's controls up. An effect can hang one extra component
+    // — the Amp stage's capture loader — above its faders.
+    void show (const juce::String& effectKey, const juce::String& titleText,
+               const std::vector<int>& paramIds, juce::Component* extra = nullptr)
+    {
+        effect = effectKey;
+        ids = paramIds;
+
+        title.setText (titleText, juce::dontSendNotification);
+
+        if (extraComponent != nullptr && extraComponent != extra)
+            removeChildComponent (extraComponent);
+
+        extraComponent = extra;
+
+        if (extraComponent != nullptr)
+            addAndMakeVisible (extraComponent);
+
+        rows.clear();
+
+        for (int id : ids)
+            addAndMakeVisible (rows.add (new ParamRow (params, id)));
+
+        // One knob is not worth a preset.
+        hasPresets = effect.isNotEmpty() && ids.size() > 1;
+
+        if (hasPresets)
+            reloadPresetList();
+
+        placeholder.setVisible (false);
+        title.setVisible (true);
+        presetBox.setVisible (hasPresets);
+        presetSave.setVisible (hasPresets);
+        presetDelete.setVisible (hasPresets);
+
+        resized();
+        repaint();
+    }
+
+    // The amp's capture rides its presets: the provider names what is loaded
+    // at save time, and the apply hook restores it (string-or-void semantics
+    // as PresetStore documents them).
+    std::function<juce::String()> ampCaptureProvider;
+    std::function<void (const juce::var&)> onAmpCapture;
+
+    // Back to the name-plate.
+    void clear()
+    {
+        effect.clear();
+        ids.clear();
+        rows.clear();
+        hasPresets = false;
+
+        if (extraComponent != nullptr)
         {
-            b = b.reduced (10, 0);
-            b.removeFromBottom (6);
-
-            if (hasPresets)
-            {
-                auto row = b.removeFromTop (presetRowHeight).reduced (0, 3);
-                presetDelete.setBounds (row.removeFromRight (44));
-                row.removeFromRight (4);
-                presetSave.setBounds (row.removeFromRight (52));
-                row.removeFromRight (6);
-                presetBox.setBounds (row);
-            }
-
-            for (auto* r : rows)
-                r->setBounds (b.removeFromTop (ParamRow::preferredHeight));
+            removeChildComponent (extraComponent);
+            extraComponent = nullptr;
         }
+
+        placeholder.setVisible (true);
+        title.setVisible (false);
+        presetBox.setVisible (false);
+        presetSave.setVisible (false);
+        presetDelete.setVisible (false);
+
+        repaint();
+    }
+
+    // Called when something outside changed the values, so the preset name on
+    // show is no longer necessarily what you are hearing.
+    void refresh()
+    {
+        for (auto* r : rows)
+            r->refresh();
+
+        if (hasPresets)
+            presetBox.setSelectedId (0, juce::dontSendNotification);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (juce::Colour (0xff17181c));
+        g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
+        g.setColour (juce::Colour (0xff26272d));
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 4.0f, 1.0f);
+    }
+
+    void resized() override
+    {
+        placeholder.setBounds (getLocalBounds());
+
+        auto b = getLocalBounds().reduced (12, 8);
+
+        title.setBounds (b.removeFromTop (26));
+        b.removeFromTop (4);
+
+        if (extraComponent != nullptr)
+        {
+            extraComponent->setBounds (b.removeFromTop (30).reduced (0, 2));
+            b.removeFromTop (4);
+        }
+
+        if (hasPresets)
+        {
+            auto row = b.removeFromTop (presetRowHeight).reduced (0, 3);
+            presetDelete.setBounds (row.removeFromRight (44));
+            row.removeFromRight (4);
+            presetSave.setBounds (row.removeFromRight (52));
+            row.removeFromRight (6);
+            presetBox.setBounds (row);
+            b.removeFromTop (2);
+        }
+
+        for (auto* r : rows)
+            r->setBounds (b.removeFromTop (ParamRow::preferredHeight));
     }
 
 private:
     static constexpr int presetRowHeight = 30;
-
-    void refreshRows()
-    {
-        if (bypassId >= 0)
-            power.setToggleState (params.getBool (bypassId), juce::dontSendNotification);
-
-        for (auto* r : rows)
-            r->refresh();
-    }
 
     void reloadPresetList (const juce::String& selectName = {})
     {
@@ -487,8 +645,16 @@ private:
 
     void applyPreset()
     {
-        if (presets.applyEffect (effect, presetBox.getText(), params))
-            refreshRows();
+        juce::var capture;
+
+        if (presets.applyEffect (effect, presetBox.getText(), params, &capture))
+        {
+            for (auto* r : rows)
+                r->refresh();
+
+            if (effect == "amp" && onAmpCapture != nullptr)
+                onAmpCapture (capture);
+        }
     }
 
     void savePreset()
@@ -498,7 +664,10 @@ private:
         if (name.isEmpty())
             return;
 
-        presets.storeEffect (effect, name, params, ids);
+        const auto capture = effect == "amp" && ampCaptureProvider != nullptr
+                               ? juce::var (ampCaptureProvider()) : juce::var();
+
+        presets.storeEffect (effect, name, params, ids, capture);
         reloadPresetList (name);
     }
 
@@ -516,16 +685,15 @@ private:
     ParamStore& params;
     PresetStore& presets;
     juce::String effect;
-    int bypassId;
     std::vector<int> ids;
-    bool expanded = false;
     bool hasPresets = false;
-    juce::Label title;
-    juce::TextButton disclosure, power;
+    juce::Label placeholder, title;
     juce::ComboBox presetBox;
     juce::TextButton presetSave, presetDelete;
     juce::OwnedArray<ParamRow> rows;
-    juce::Component* extraComponent = nullptr;
+    juce::Component* extraComponent = nullptr;   // not owned
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FxEditor)
 };
 
 } // namespace rig

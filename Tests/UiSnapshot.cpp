@@ -117,15 +117,25 @@ int main (int argc, char* argv[])
         writePng (working, outDir.getChildFile ("job-running.png"));
         problems += countBlankButtons (main, "the main window");
 
-        // Everything open, to check the effect list scrolls rather than clips.
-        main.expandAllForSnapshot();
+        // An effect selected, to check the editor panel lays its controls out.
+        main.selectFxForSnapshot();
 
         juce::Image expanded (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
         {
             juce::Graphics g (expanded);
             main.paintEntireComponent (g, true);
         }
-        writePng (expanded, outDir.getChildFile ("all-expanded.png"));
+        writePng (expanded, outDir.getChildFile ("fx-editor.png"));
+
+        // The tuner tab, mid-note.
+        main.showTunerForSnapshot();
+
+        juce::Image tuner (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
+        {
+            juce::Graphics g (tuner);
+            main.paintEntireComponent (g, true);
+        }
+        writePng (tuner, outDir.getChildFile ("tuner.png"));
     }
 
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);

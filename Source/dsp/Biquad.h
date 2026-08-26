@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace rig
 {
@@ -135,6 +137,88 @@ struct AllpassOne
     }
 
     void reset() noexcept { z = 0.0f; }
+};
+
+// Zavalishin TPT state-variable filter. Unconditionally stable, including
+// under the fast per-sample cutoff sweeps an envelope filter or a synth
+// filter-env throws at it — the reason it is used instead of a biquad there.
+// g = tan (pi * fc / sr), k = 1 / Q; both may change every sample.
+struct TptSvf
+{
+    float ic1 = 0.0f, ic2 = 0.0f;
+
+    inline float processLowpass (float x, float g, float k) noexcept
+    {
+        const float v1 = (ic1 + g * (x - ic2)) / (1.0f + g * (g + k));
+        const float v2 = ic2 + g * v1;
+        ic1 = 2.0f * v1 - ic1;
+        ic2 = 2.0f * v2 - ic2;
+        return v2;
+    }
+
+    void reset() noexcept { ic1 = ic2 = 0.0f; }
+
+    static inline float gForFreq (double sr, float freq) noexcept
+    {
+        const float norm = (float) (freq / sr);
+        const float clamped = norm < 0.0004f ? 0.0004f : (norm > 0.45f ? 0.45f : norm);
+        return std::tan (3.14159265f * clamped);
+    }
+};
+
+// Peak follower with separate attack and release — envelope filter sweeps and
+// the synth voice's keyed amplitude.
+struct EnvFollower
+{
+    float env = 0.0f, aAtk = 1.0f, aRel = 1.0f;
+
+    void setTimes (double sr, double attackMs, double releaseMs) noexcept
+    {
+        aAtk = (float) (1.0 - std::exp (-1000.0 / (sr * (attackMs < 0.05 ? 0.05 : attackMs))));
+        aRel = (float) (1.0 - std::exp (-1000.0 / (sr * (releaseMs < 1.0 ? 1.0 : releaseMs))));
+    }
+
+    inline float process (float x) noexcept
+    {
+        const float a = std::abs (x);
+        env += (a > env ? aAtk : aRel) * (a - env);
+        return env;
+    }
+
+    void reset() noexcept { env = 0.0f; }
+};
+
+// Schroeder allpass on its own masked buffer — diffusion inside a feedback
+// loop (the delay's Smear). Unity magnitude, so it thickens without changing
+// the loop's stability margin.
+struct BufferedAllpass
+{
+    std::vector<float> buf;
+    int mask = 0, write = 0;
+    float g = 0.5f;
+
+    void prepare (int capacity)
+    {
+        int p = 1;
+        while (p < capacity + 4) p <<= 1;
+        buf.assign ((size_t) p, 0.0f);
+        mask = p - 1;
+        write = p;
+    }
+
+    void reset() noexcept { std::fill (buf.begin(), buf.end(), 0.0f); }
+
+    inline float process (float x, int delay) noexcept
+    {
+        const float r = buf[(size_t) ((write - delay) & mask)];
+        const float w = x + g * r;
+        buf[(size_t) (write & mask)] = w;
+
+        if (++write >= (int) buf.size() * 2)
+            write -= (int) buf.size();
+
+        return r - g * w;
+    }
 };
 
 // Classic DC blocker: y[n] = x[n] - x[n-1] + R y[n-1].
