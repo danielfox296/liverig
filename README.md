@@ -106,18 +106,27 @@ drop stems in by hand if you have them from somewhere else.
 
 ### Signal chain
 
+The stages between the input tap and the reverb are reorderable — drag a row.
+Two carry a **(B)**: they were added for bass specifically, and they are the two
+places where the general-purpose version of the effect falls down on a low
+instrument.
+
+
 The default order. Everything between Input and Reverb can be dragged into
 any order in the app; Input, Reverb and Live out hold their places.
 
 | # | Effect | Controls |
 |---|--------|----------|
 | 1 | Input gain | trim, meter (a 5 Hz DC blocker sits here too) |
-| 2 | Compressor | threshold, ratio, attack, release, makeup |
+| 2 | Compressor | threshold, ratio, attack, release, makeup, blend, sidechain |
 | 3 | EQ | low shelf, parametric mid (freq/gain/Q), high shelf |
 | 4 | Filter | sens, attack, release, from, to, res, mix — envelope filter |
 | 5 | Boost | boost, sheen, hair — clean gain with a JFET-style knee |
-| 6 | Overdrive | drive, tone, level, stack, bite — two voices, 4x oversampled |
-| 7 | Octave | interval (±12 semitones), dry/wet |
+| 6 | Overdrive | voice, drive, tone, level, stack, bite, crossover, blend — 4x oversampled |
+| — | Amp | gain in/out — a Neural Amp Modeler capture |
+| — | Cab (B) | bump freq, bump, top, presence — the filter a speaker is |
+| 7 | Octave | interval (±12 semitones), dry/wet, second voice |
+| — | Sub (B) | level, tone, divide — an analogue-style octave divider |
 | 8 | Synth | shape, sub, cutoff, env, res, glide, mix — tracked synth voice |
 | 9 | Phaser | rate, depth, feedback — 4-stage |
 | 10 | Chorus | rate, depth, voices, tone, keep lows, mix |
@@ -187,6 +196,42 @@ after the octave and before the modulation, so phaser, chorus, delay and
 reverb all treat it as a first-class citizen.
 
 ---
+
+### What the (B) stages are for
+
+Three ideas separate bass processing from the general case, and they are worth
+knowing even if you never touch these controls.
+
+**Dirt belongs on top, not underneath.** Run a full-band bass signal into a
+clipper and the fundamental intermodulates with everything above it: the note
+stops being a note and becomes mud. Every convincing recorded bass distortion is
+parallel — the lows go round the clipper and the highs go through it. The
+Overdrive's **Crossover** sets where that split happens and **Blend** crossfades
+the driven band back against its own clean copy. At Crossover's minimum the
+stage behaves exactly as it did before, so nothing you already dialled has
+moved; wind it up to 150-250 Hz and the same drive setting suddenly stays tight.
+Blend at zero is a bit-exact wire.
+
+**A compressor should not hear the fundamental.** Without a high-passed
+detector, every low E ducks the whole instrument — the pumping people mistake
+for compression. The **Sidechain** control sets where the detector stops
+listening. At 20 Hz a low note pulls 12.5 dB of reduction; at 300 Hz the same
+note pulls 1.2 dB.
+
+**An octave divider is not a pitch shifter.** The Octave stage transposes
+faithfully, which is not what an OC-2 does and not why people still pay over the
+odds for one. **Sub (B)** is a flip-flop: it toggles on rising zero crossings,
+so the output is a square wave at half or a quarter of the input frequency with
+no relation to the shape of what you played. That squareness, and the way it
+stumbles on a chord, is the sound. It sits under the dry note rather than
+replacing it. The pitch tracker's period sets the crossing filter, which is what
+stops harmonics triggering false edges.
+
+**Cab (B)** is the fourth: a speaker is a filter, and most of what people call
+amp tone is the cabinet rather than the valves. The Amp stage supplies this when
+a capture is loaded, since a NAM capture is taken through a real cab. Cab (B) is
+what stands in when none is — a low-mid bump, nothing below 42 Hz, and a steep
+rolloff above the Top control. Measured: −27.7 dB at 9 kHz relative to 400 Hz.
 
 ## How it works
 

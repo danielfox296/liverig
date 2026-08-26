@@ -16,6 +16,7 @@ enum ParamId
     pInGain,
 
     pCompOn, pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup, pCompBlend,
+    pCompSidechain,
 
     pEqOn, pEqLoFreq, pEqLoGain, pEqMidFreq, pEqMidGain, pEqMidQ, pEqHiFreq, pEqHiGain,
 
@@ -23,11 +24,17 @@ enum ParamId
 
     pBoostOn, pBoostGain, pBoostSheen, pBoostHair,
 
-    pDriveOn, pDriveVoice, pDriveAmount, pDriveTone, pDriveLevel, pDriveStack, pDriveBite,
+    pDriveOn, pDriveVoice, pDriveAmount, pDriveTone, pDriveLevel, pDriveStack, pDriveBite, pDriveXover, pDriveBlend,
 
     pAmpOn, pAmpIn, pAmpOut,
 
+    // Cabinet: the filter a speaker is, for when no capture is loaded.
+    pCabOn, pCabBumpFreq, pCabBumpGain, pCabTop, pCabPresence,
+
     pOctOn, pOctInterval, pOctMix, pOct2Interval, pOct2Level,
+
+    // Divider sub: a flip-flop, not a transposition.
+    pSubOn, pSubLevel, pSubTone, pSubDivide,
 
     pSynOn, pSynShape, pSynSub, pSynCutoff, pSynEnv, pSynRes, pSynGlide, pSynMix,
 
@@ -61,6 +68,7 @@ struct ParamSpec
     const char* suffix;
     int decimals;
     bool isToggle;
+    const char* const* choices = nullptr;   // or one label per integer step
 };
 
 const ParamSpec& spec (int paramId) noexcept;

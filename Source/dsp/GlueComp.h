@@ -21,7 +21,7 @@ struct GlueComp
     void prepare (double sampleRate)
     {
         sr = sampleRate;
-        sidechain.setHighpass (sr, 80.0, 0.7071);
+        setSidechain (80.0f);
         avgCoef = coefFor (400.0);
         setAttack (attackMs);
         setRelease (releaseMs);
@@ -34,6 +34,11 @@ struct GlueComp
         grDb = 0.0f;
         avgGr = 0.0f;
     }
+
+    // The detector's high-pass. Above roughly 100 Hz a low E stops ducking
+    // the whole instrument, which is the difference between compression and
+    // pumping on a bass.
+    void setSidechain (float hz) noexcept { sidechain.setHighpass (sr, hz, 0.7071); }
 
     void setThreshold (float db) noexcept { threshDb = db; }
     void setRatio (float r) noexcept      { slope = 1.0f - 1.0f / (r < 1.0f ? 1.0f : r); }

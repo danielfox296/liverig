@@ -9,10 +9,12 @@
 #include "Parameters.h"
 #include "dsp/AmpModel.h"
 #include "dsp/Biquad.h"
+#include "dsp/CabSim.h"
 #include "dsp/GlueComp.h"
 #include "dsp/OctaveShifter.h"
 #include "dsp/PitchTracker.h"
 #include "dsp/PlateVerb.h"
+#include "dsp/SubOctave.h"
 
 namespace rig
 {
@@ -32,8 +34,8 @@ public:
     // is where mono becomes stereo.
     enum Stage
     {
-        stComp = 0, stEq, stFilter, stBoost, stDrive, stAmp,
-        stOctave, stSynth, stPhaser, stChorus, stDelay, stTape,
+        stComp = 0, stEq, stFilter, stBoost, stDrive, stAmp, stCab,
+        stOctave, stSub, stSynth, stPhaser, stChorus, stDelay, stTape,
         numMovableStages
     };
 
@@ -79,6 +81,7 @@ private:
     void processFilter (float* data, int numSamples) noexcept;
     void processBoost (float* data, int numSamples) noexcept;
     void processDrive (float* data, int numSamples) noexcept;
+    void processSub (float* data, int numSamples) noexcept;
     void processSynth (float* data, int numSamples) noexcept;
     void processPhaser (float* data, int numSamples) noexcept;
     void processChorus (float* data, int numSamples) noexcept;
@@ -126,6 +129,21 @@ private:
     float sagState = 0.0f;
     int driveVoice = 1;
     DCBlocker driveDC;
+
+    // Cabinet: what the Amp stage supplies only when a capture is loaded.
+    CabSim cab;
+
+    // Divider sub, added under the dry signal rather than replacing it.
+    SubOctave subOctave;
+    juce::SmoothedValue<float> subLevel;
+    std::vector<float> subBuf;
+    int subDivisor = 1;
+
+    // Drive is wrapped in a crossover: lows go round the clipper entirely,
+    // and Blend crossfades the driven band against the clean one.
+    OnePoleLP driveSplit;
+    juce::SmoothedValue<float> driveBlend;
+    std::vector<float> driveLow, driveClean;
 
     // Amp: a loaded NAM capture between its own gain trims.
     AmpModel amp;
@@ -188,7 +206,7 @@ private:
     juce::SmoothedValue<float> reverbMix;
 
     juce::SmoothedValue<float> bypComp, bypEq, bypFilter, bypBoost, bypDrive, bypAmp, bypOct,
-                               bypSynth, bypPhaser, bypChorus, bypDelay, bypTape, bypReverb;
+                               bypSynth, bypPhaser, bypChorus, bypDelay, bypTape, bypReverb, bypCab, bypSub;
 
     std::vector<float> dry;
 

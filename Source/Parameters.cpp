@@ -3,7 +3,10 @@
 namespace rig
 {
 
-// id, label, min, max, default, skewCentre, step, suffix, decimals, isToggle
+static const char* const voiceChoices[] { "Green", "Gold", "Plexi" };
+static const char* const divideChoices[] { "-1 oct", "-2 oct" };
+
+// id, label, min, max, default, skewCentre, step, suffix, decimals, isToggle, choices
 static const ParamSpec specs[] =
 {
     { "stem0Gain", "Gain",     -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
@@ -25,6 +28,7 @@ static const ParamSpec specs[] =
     { "compRel",   "Release",   10.0f,1000.0f, 120.0f,   150.0f, 0.0f, " ms",  0, false },
     { "compMkup",  "Makeup",     0.0f,  24.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
     { "compBlend", "Blend",      0.0f,   1.0f,   1.0f,     0.0f, 0.0f, "",     2, false },
+    { "compSc",    "Sidechain", 20.0f, 400.0f,  80.0f,   100.0f, 0.0f, " Hz",  0, false },
 
     { "eqOn",      "EQ",         0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
     { "eqLoF",     "Low F",     40.0f, 400.0f, 100.0f,   120.0f, 0.0f, " Hz",  0, false },
@@ -50,22 +54,35 @@ static const ParamSpec specs[] =
     { "bstHair",   "Hair",       0.0f,   1.0f,  0.15f,     0.0f, 0.0f, "",     2, false },
 
     { "odOn",      "Drive",      0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
-    { "odVoice",   "Voice",      1.0f,   3.0f,   1.0f,     0.0f, 1.0f, "",     0, false },
+    { "odVoice",   "Voice",      1.0f,   3.0f,   1.0f,     0.0f, 1.0f, "",     0, false, voiceChoices },
     { "odDrive",   "Drive",      1.0f,  50.0f,   6.0f,    10.0f, 0.0f, "",     1, false },
     { "odTone",    "Tone",     300.0f,12000.0f,4000.0f, 2500.0f, 0.0f, " Hz",  0, false },
     { "odLevel",   "Level",    -24.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
     { "odStack",   "Stack",      0.0f,   1.0f,   0.0f,     0.0f, 0.0f, "",     2, false },
     { "odBite",    "Bite",       0.0f,   1.0f,   0.4f,     0.0f, 0.0f, "",     2, false },
+    { "odXover",   "Crossover", 40.0f, 900.0f,  40.0f,   200.0f, 0.0f, " Hz",  0, false },
+    { "odBlend",   "Blend",      0.0f,   1.0f,   1.0f,     0.0f, 0.0f, "",     2, false },
 
     { "ampOn",     "Amp",        0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
     { "ampIn",     "Gain in",  -24.0f,  24.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
     { "ampOut",    "Gain out", -24.0f,  24.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
+
+    { "cabOn",     "Cab",        0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
+    { "cabBumpF",  "Bump F",    50.0f, 250.0f,  90.0f,   100.0f, 0.0f, " Hz",  0, false },
+    { "cabBumpG",  "Bump",       0.0f,  12.0f,   5.0f,     0.0f, 0.0f, " dB",  1, false },
+    { "cabTop",    "Top",     1500.0f,8000.0f,4500.0f,  3500.0f, 0.0f, " Hz",  0, false },
+    { "cabPres",   "Presence",  -8.0f,   8.0f,  -2.0f,     0.0f, 0.0f, " dB",  1, false },
 
     { "octOn",     "Octave",     0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
     { "octInt",    "Interval", -12.0f,  12.0f,  12.0f,     0.0f, 1.0f, " st",  0, false },
     { "octMix",    "Mix",        0.0f,   1.0f,   0.5f,     0.0f, 0.0f, "",     2, false },
     { "oct2Int",   "Voice 2",  -12.0f,  12.0f,   7.0f,     0.0f, 1.0f, " st",  0, false },
     { "oct2Lvl",   "V2 level",   0.0f,   1.0f,   0.0f,     0.0f, 0.0f, "",     2, false },
+
+    { "subOn",     "Sub",        0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
+    { "subLevel",  "Level",      0.0f,   1.0f,   0.6f,     0.0f, 0.0f, "",     2, false },
+    { "subTone",   "Tone",     100.0f,2000.0f, 500.0f,   450.0f, 0.0f, " Hz",  0, false },
+    { "subDiv",    "Divide",     0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, divideChoices },
 
     { "syOn",      "Synth",      0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
     { "syShape",   "Shape",      0.0f,   1.0f,  0.35f,     0.0f, 0.0f, "",     2, false },

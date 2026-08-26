@@ -188,6 +188,16 @@ private:
     void updateValueText()
     {
         const auto& s = spec (id);
+
+        // A stepped parameter with names shows the name. "Green" beats "1".
+        if (s.choices != nullptr)
+        {
+            const int index = juce::jlimit (0, (int) (s.maxValue - s.minValue),
+                                            (int) std::lround (slider.getValue() - s.minValue));
+            value.setText (s.choices[index], juce::dontSendNotification);
+            return;
+        }
+
         value.setText (juce::String (slider.getValue(), s.decimals) + s.suffix,
                        juce::dontSendNotification);
     }

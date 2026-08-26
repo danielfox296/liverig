@@ -118,7 +118,8 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
                                           &fltMix, &boostGain, &boostHair, &stackAmt,
                                           &synShape, &synSubLvl, &synMix,
                                           &choVoiceGain[0], &choVoiceGain[1], &choVoiceGain[2],
-                                          &choMix, &dlSatAmt, &dlSmearAmt, &tapeDrive, &tapeMix };
+                                          &choMix, &dlSatAmt, &dlSmearAmt, &tapeDrive, &tapeMix,
+                                          &subLevel, &driveBlend };
     for (auto* g : gains)
         g->reset (sr, 0.02);
 
@@ -126,7 +127,13 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
     choDepth.reset (sr, 0.05);
     dlModDepth.reset (sr, 0.05);
 
-    juce::SmoothedValue<float>* bypasses[] { &bypComp, &bypEq, &bypFilter, &bypBoost,
+    cab.prepare (sr);
+    subOctave.prepare (sr);
+    subBuf.assign ((size_t) maxBlock, 0.0f);
+    driveLow.assign ((size_t) maxBlock, 0.0f);
+    driveClean.assign ((size_t) maxBlock, 0.0f);
+
+    juce::SmoothedValue<float>* bypasses[] { &bypComp, &bypEq, &bypFilter, &bypBoost, &bypCab, &bypSub,
                                              &bypDrive, &bypAmp, &bypOct, &bypSynth, &bypPhaser,
                                              &bypChorus, &bypDelay, &bypTape, &bypReverb };
     for (auto* b : bypasses)
@@ -146,6 +153,9 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
 
 void FxChain::reset() noexcept
 {
+    cab.reset();
+    subOctave.reset();
+    driveSplit.reset();
     dcBlock.reset();
     comp.reset();
 
@@ -289,6 +299,30 @@ void FxChain::updateFromParams() noexcept
     if (changed (pBoostSheen))
         boostSheen.setHighShelf (sr, 2800.0, params.get (pBoostSheen));
 
+    if (changed (pCompSidechain))
+        comp.setSidechain (params.get (pCompSidechain));
+
+    if (changed (pDriveXover))
+        driveSplit.setCutoff (sr, params.get (pDriveXover));
+
+    driveBlend.setTargetValue (params.get (pDriveBlend));
+
+    bool cabDirty = false;
+    cabDirty |= changed (pCabBumpFreq);
+    cabDirty |= changed (pCabBumpGain);
+    cabDirty |= changed (pCabTop);
+    cabDirty |= changed (pCabPresence);
+
+    if (cabDirty)
+        cab.setParams (params.get (pCabBumpFreq), params.get (pCabBumpGain),
+                       params.get (pCabTop), params.get (pCabPresence));
+
+    subLevel.setTargetValue (params.get (pSubLevel));
+    subDivisor = params.get (pSubDivide) > 0.5f ? 2 : 1;
+
+    if (changed (pSubTone))
+        subOctave.setTone (params.get (pSubTone));
+
     driveVoice = std::clamp ((int) std::lround (params.get (pDriveVoice)), 1, 3);
     driveAmt.setTargetValue (std::max (1.0f, params.get (pDriveAmount)));
     driveLevel.setTargetValue (juce::Decibels::decibelsToGain (params.get (pDriveLevel), -60.0f));
@@ -414,6 +448,8 @@ void FxChain::updateFromParams() noexcept
     bypDelay.setTargetValue  (params.getBool (pDelayOn)  ? 1.0f : 0.0f);
     bypTape.setTargetValue   (params.getBool (pTapeOn)   ? 1.0f : 0.0f);
     bypReverb.setTargetValue (params.getBool (pRevOn)    ? 1.0f : 0.0f);
+    bypCab.setTargetValue    (params.getBool (pCabOn)    ? 1.0f : 0.0f);
+    bypSub.setTargetValue    (params.getBool (pSubOn)    ? 1.0f : 0.0f);
 
     float latency = 0.0f;
 
@@ -491,8 +527,29 @@ void FxChain::processBoost (float* data, int numSamples) noexcept
     }
 }
 
+void FxChain::processSub (float* data, int numSamples) noexcept
+{
+    subOctave.process (data, subBuf.data(), numSamples, subDivisor);
+
+    for (int i = 0; i < numSamples; ++i)
+        data[i] += subBuf[(size_t) i] * subLevel.getNextValue();
+}
+
 void FxChain::processDrive (float* data, int numSamples) noexcept
 {
+    // Lows go around the clipper rather than through it. Distorting the
+    // fundamental is what turns bass overdrive to mud: the note intermodulates
+    // with everything above it and stops being a note. Only the band above
+    // Crossover reaches the voicings below; Blend then crossfades that driven
+    // band back against its own clean copy.
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float low = driveSplit.process (data[i]);
+        driveLow[(size_t) i] = low;
+        data[i] -= low;
+        driveClean[(size_t) i] = data[i];
+    }
+
     // Track the playing level at base rate — the plexi voice's supply sag —
     // before the block is upsampled out from under it.
     const float sag0 = std::min (1.0f, sagState);
@@ -590,7 +647,15 @@ void FxChain::processDrive (float* data, int numSamples) noexcept
     // Two of the voices clip asymmetrically, which rectifies a little DC out
     // of the signal — block it before it reaches the time effects.
     for (int i = 0; i < numSamples; ++i)
-        data[i] = driveDC.process (tone.process (data[i])) * driveLevel.getNextValue();
+    {
+        const float driven = driveDC.process (tone.process (data[i]));
+        const float blend = driveBlend.getNextValue();
+
+        data[i] = (driveLow[(size_t) i]
+                    + driveClean[(size_t) i] * (1.0f - blend)
+                    + driven * blend)
+                  * driveLevel.getNextValue();
+    }
 }
 
 void FxChain::processSynth (float* data, int numSamples) noexcept
@@ -824,6 +889,7 @@ void FxChain::process (float* mono, float* left, float* right, int numSamples) n
     tracker.process (mono, numSamples);
     shifter.setPeriod (tracker.getPeriodSamples());
     shifter2.setPeriod (tracker.getPeriodSamples());
+    subOctave.setPeriod (tracker.getPeriodSamples());
     synTargetPeriod = tracker.getPeriodSamples();
     liveHz.store (tracker.getFrequency(), std::memory_order_relaxed);
     liveConf.store (tracker.getConfidence(), std::memory_order_relaxed);
@@ -873,6 +939,14 @@ void FxChain::process (float* mono, float* left, float* right, int numSamples) n
                     for (int i = 0; i < n; ++i)
                         d[i] *= ampOut.getNextValue();
                 });
+                break;
+
+            case stCab:
+                runStage (mono, numSamples, bypCab, nullptr, [this] (float* d, int n) { cab.process (d, n); });
+                break;
+
+            case stSub:
+                runStage (mono, numSamples, bypSub, nullptr, [this] (float* d, int n) { processSub (d, n); });
                 break;
 
             case stOctave:

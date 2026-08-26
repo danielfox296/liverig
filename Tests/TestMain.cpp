@@ -412,6 +412,7 @@ static std::vector<float> renderChain (ParamStore& params, const std::vector<flo
     for (int i = 0; i + block <= (int) in.size(); i += block)
     {
         std::copy (in.begin() + i, in.begin() + i + block, mono.begin());
+        juce::ScopedNoDenormals noDenormals;   // as the audio callback runs
         chain.process (mono.data(), left.data(), right.data(), block);
 
         for (int k = 0; k < block; ++k)
@@ -1988,6 +1989,7 @@ static void testChain (double sr, int block)
         std::copy (note.begin() + i, note.begin() + i + block, mono.begin());
 
         const auto t0 = std::chrono::steady_clock::now();
+        juce::ScopedNoDenormals noDenormals;   // as the audio callback runs
         chain.process (mono.data(), left.data(), right.data(), block);
         const auto t1 = std::chrono::steady_clock::now();
 
@@ -2061,6 +2063,7 @@ static void testBypassIsClickFree (double sr, int block)
         }
 
         std::copy (note.begin() + i, note.begin() + i + block, mono.begin());
+        juce::ScopedNoDenormals noDenormals;   // as the audio callback runs
         chain.process (mono.data(), left.data(), right.data(), block);
 
         for (int k = 0; k < block; ++k)
@@ -2615,6 +2618,193 @@ static void testRealSongFolder (const juce::File& folder, double deviceRate, int
                 + " (" + juce::String (20.0 * std::log10 (mutedEnergy / juce::jmax (1.0e-9, fullEnergy)), 2) + " dB)");
 }
 
+
+//==============================================================================
+// Bass-centric additions: the crossover around the drive, the divider sub,
+// the cabinet filter, and the compressor's sidechain.
+
+// Energy at one frequency, by Goertzel — enough to measure a harmonic.
+static double toneEnergy (const float* x, int n, double sr, double hz)
+{
+    const double w = 2.0 * 3.141592653589793 * hz / sr;
+    const double c = 2.0 * std::cos (w);
+    double s1 = 0.0, s2 = 0.0;
+
+    for (int i = 0; i < n; ++i)
+    {
+        const double s0 = x[i] + c * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+
+    return std::sqrt (std::max (0.0, s1 * s1 + s2 * s2 - c * s1 * s2)) / n;
+}
+
+static void testDriveCrossover (double sr, int block)
+{
+    std::printf ("\n Drive crossover (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    const double f0 = 50.0;
+    const int n = (int) (sr * 1.5);
+    std::vector<float> in ((size_t) n, 0.0f);
+
+    for (int i = 0; i < n; ++i)
+        in[(size_t) i] = 0.45f * (float) std::sin (6.283185307179586 * f0 * i / sr);
+
+    // Same hot drive twice: once with the fundamental going through the
+    // clipper, once with it routed around.
+    auto distortionAt = [&] (float crossover)
+    {
+        ParamStore params;
+        params.set (pDriveOn, 1.0f);
+        params.set (pDriveAmount, 40.0f);
+        params.set (pDriveXover, crossover);
+        params.set (pDriveBlend, 1.0f);
+
+        const auto out = renderChain (params, in, sr, block);
+        const int from = (int) (sr * 0.5), len = (int) (sr * 0.9);
+
+        const double fundamental = toneEnergy (out.data() + from, len, sr, f0);
+        double harmonics = 0.0;
+
+        for (int h = 2; h <= 9; ++h)
+            harmonics += toneEnergy (out.data() + from, len, sr, f0 * h);
+
+        return harmonics / std::max (1.0e-9, fundamental);
+    };
+
+    const double through = distortionAt (40.0f);     // crossover parked at the bottom
+    const double around  = distortionAt (700.0f);    // fundamental bypasses the clipper
+
+    report ("crossover keeps the fundamental clean", around < through * 0.35,
+            juce::String (through, 3) + " harmonic-to-fundamental through the clipper, "
+                + juce::String (around, 3) + " around it");
+
+    // Blend at zero must be a wire, whatever the drive is set to.
+    ParamStore blended;
+    blended.set (pDriveOn, 1.0f);
+    blended.set (pDriveAmount, 40.0f);
+    blended.set (pDriveXover, 300.0f);
+    blended.set (pDriveBlend, 0.0f);
+
+    ParamStore off;   // the same chain with the stage bypassed, so the input
+                      // conditioning either side of it is identical
+    const auto withStage = renderChain (blended, in, sr, block);
+    const auto without = renderChain (off, in, sr, block);
+    const int from = (int) (sr * 0.5), len = (int) (sr * 0.9);
+
+    double worst = 0.0;
+
+    for (int i = from; i < from + len; ++i)
+        worst = std::max (worst, (double) std::abs (withStage[(size_t) i] - without[(size_t) i]));
+
+    report ("blend at zero is a wire around the clipper", worst < 0.002,
+            "largest departure " + juce::String (worst, 6));
+}
+
+static void testSubOctave (double sr, int block)
+{
+    std::printf ("\n Divider sub (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    for (double f0 : { 55.0, 82.41, 110.0 })
+    {
+        for (int divide = 0; divide < 2; ++divide)
+        {
+            std::vector<float> note;
+            makeNote (note, sr, f0, 2.0, 0.4f);
+
+            ParamStore params;
+            params.set (pSubOn, 1.0f);
+            params.set (pSubLevel, 1.0f);
+            params.set (pSubDivide, (float) divide);
+            params.set (pSubTone, 2000.0f);
+
+            ParamStore off;
+            const auto out = renderChain (params, note, sr, block);
+            const auto dry = renderChain (off, note, sr, block);
+
+            const int from = (int) (sr * 0.6), len = (int) (sr * 0.8);
+            const double expected = f0 / (divide == 0 ? 2.0 : 4.0);
+
+            // The divider adds a voice under the note rather than replacing
+            // it, so measure the octave it puts there against the same
+            // rendering without it.
+            const double added = toneEnergy (out.data() + from, len, sr, expected);
+            const double already = toneEnergy (dry.data() + from, len, sr, expected);
+            const double lift = added / std::max (1.0e-9, already);
+
+            report ((juce::String (f0, 1) + " Hz, divide by "
+                        + juce::String (divide == 0 ? 2 : 4)).toRawUTF8(),
+                    lift > 8.0,
+                    juce::String (expected, 2) + " Hz lifted "
+                        + juce::String (20.0 * std::log10 (lift), 1) + " dB by the divider");
+        }
+    }
+}
+
+static void testCabFilter (double sr, int block)
+{
+    std::printf ("\n Cabinet filter (%.0f Hz)\n", sr);
+
+    auto levelAt = [&] (double hz, bool cabOn)
+    {
+        const int n = (int) (sr * 0.8);
+        std::vector<float> in ((size_t) n, 0.0f);
+
+        for (int i = 0; i < n; ++i)
+            in[(size_t) i] = 0.3f * (float) std::sin (6.283185307179586 * hz * i / sr);
+
+        ParamStore params;
+        params.set (pCabOn, cabOn ? 1.0f : 0.0f);
+
+        const auto out = renderChain (params, in, sr, block);
+        const int from = (int) (sr * 0.4);
+
+        return toneEnergy (out.data() + from, (int) (sr * 0.3), sr, hz);
+    };
+
+    const double ref = levelAt (400.0, true) / std::max (1.0e-9, levelAt (400.0, false));
+    const double top = levelAt (9000.0, true) / std::max (1.0e-9, levelAt (9000.0, false));
+    const double sub = levelAt (25.0, true) / std::max (1.0e-9, levelAt (25.0, false));
+
+    report ("rolls off above the cab's top", top < ref * 0.1,
+            juce::String (20.0 * std::log10 (top / ref), 1) + " dB at 9 kHz relative to 400 Hz");
+
+    report ("loses the subsonics a cab cannot move", sub < ref * 0.5,
+            juce::String (20.0 * std::log10 (sub / ref), 1) + " dB at 25 Hz relative to 400 Hz");
+}
+
+static void testCompSidechain (double sr, int block)
+{
+    std::printf ("\n Compressor sidechain (%.0f Hz)\n", sr);
+
+    std::vector<float> note;
+    makeNote (note, sr, 45.0, 2.0, 0.5f);
+
+    auto reductionWith = [&] (float sidechainHz)
+    {
+        ParamStore params;
+        params.set (pCompOn, 1.0f);
+        params.set (pCompThresh, -28.0f);
+        params.set (pCompRatio, 8.0f);
+        params.set (pCompMakeup, 0.0f);
+        params.set (pCompBlend, 1.0f);
+        params.set (pCompSidechain, sidechainHz);
+
+        const auto out = renderChain (params, note, sr, block);
+        const int from = (int) (sr * 0.3), len = (int) (sr * 1.0);
+
+        return rmsOf (out.data() + from, len) / std::max (1.0e-9, rmsOf (note.data() + from, len));
+    };
+
+    const double wideOpen = reductionWith (20.0f);    // detector hears the fundamental
+    const double filtered = reductionWith (300.0f);   // detector above it
+
+    report ("a high sidechain stops a low note ducking the signal", filtered > wideOpen * 1.15,
+            juce::String (20.0 * std::log10 (wideOpen), 2) + " dB of reduction at 20 Hz, "
+                + juce::String (20.0 * std::log10 (filtered), 2) + " dB at 300 Hz");
+}
+
 //==============================================================================
 int main (int argc, char* argv[])
 {
@@ -2645,6 +2835,10 @@ int main (int argc, char* argv[])
     testMasterLimiter (48000.0);
     testStageOrder (48000.0, 64);
     testChain (48000.0, 64);
+    testDriveCrossover (48000.0, 64);
+    testSubOctave (48000.0, 64);
+    testCabFilter (48000.0, 64);
+    testCompSidechain (48000.0, 64);
     testChain (48000.0, 32);
     testBypassIsClickFree (48000.0, 64);
     testStemPlayer (48000.0, 44100.0, 64);
