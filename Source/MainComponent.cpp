@@ -77,8 +77,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     fxDefs = {
         { "input",  -1,                false, "",       "Input",      -1,        { pInGain } },
-        { "midi",   -1,                false, "midi",   "MIDI",       pMidiOn,   { pMidiChannel, pMidiTranspose, pMidiGate, pMidiHold, pMidiRelease, pMidiBendRange, pMidiExpression } },
-        { "instrument", -1,            false, "instrument", "Instrument", pInstOn, { pInstLevel } },
+        { "midi",   -1,                false, "midi",   "MIDI",       pMidiOn,   { pMidiChannel, pMidiTranspose, pMidiGate, pMidiHold, pMidiRelease, pMidiBendRange, pMidiExpression, pInstOn, pInstLevel } },
         { "comp",   FxChain::stComp,   true,  "comp",   "Compressor", pCompOn,   { pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup, pCompBlend, pCompSidechain } },
         { "eq",     FxChain::stEq,     true,  "eq",     "EQ",         pEqOn,     { pEqLoFreq, pEqLoGain, pEqMidFreq, pEqMidGain, pEqMidQ, pEqHiFreq, pEqHiGain } },
         { "filter", FxChain::stFilter, true,  "filter", "Filter",     pFltOn,    { pFltSens, pFltAttack, pFltRelease, pFltFrom, pFltTo, pFltRes, pFltMix } },
@@ -346,7 +345,7 @@ void MainComponent::selectFxForSnapshot()
     // and the snapshot then documented whatever happened to be in that slot.
     for (int i = 0; i < (int) fxDefs.size(); ++i)
     {
-        if (fxDefs[(size_t) i].key == "instrument")
+        if (fxDefs[(size_t) i].key == "midi")
         {
             selectFx (i);
             return;
@@ -407,8 +406,8 @@ void MainComponent::selectFx (int index)
         const auto& def = fxDefs[(size_t) selectedFx];
         fxEditor.show (def.scope, def.name, def.ids,
                        def.key == "amp" ? (juce::Component*) &ampControls
-                                        : (def.key == "instrument" ? (juce::Component*) &instrumentControls
-                                                                   : nullptr));
+                                        : (def.key == "midi" ? (juce::Component*) &instrumentControls
+                                                             : nullptr));
     }
     else
     {

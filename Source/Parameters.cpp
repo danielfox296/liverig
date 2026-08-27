@@ -4,6 +4,7 @@ namespace rig
 {
 
 static const char* const voiceChoices[] { "Green", "Gold", "Plexi" };
+static const char* const offOnChoices[] { "Off", "On" };
 static const char* const expressionChoices[] { "Off", "CC1 mod", "CC11 expr" };
 static const char* const divideChoices[] { "-1 oct", "-2 oct" };
 
@@ -140,7 +141,7 @@ static const ParamSpec specs[] =
     { "midiBend",  "Bend range", 0.0f,  12.0f,   2.0f,     0.0f, 1.0f, " st",  0, false },
     { "midiExpr",  "Expression", 0.0f,   2.0f,   2.0f,     0.0f, 1.0f, "",     0, false, expressionChoices },
 
-    { "instOn",    "Instrument", 0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
+    { "instOn",    "Instrument", 0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, offOnChoices },
     { "instLevel", "Level",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
 
     { "liveOut",   "Live out", -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },

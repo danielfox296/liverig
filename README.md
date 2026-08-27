@@ -118,8 +118,7 @@ any order in the app; Input, Reverb and Live out hold their places.
 | # | Effect | Controls |
 |---|--------|----------|
 | 1 | Input gain | trim, meter (a 5 Hz DC blocker sits here too) |
-| — | MIDI | channel, transpose, gate, hold, release, bend range, expression |
-| — | Instrument | an AU instrument played by those notes, and its level |
+| — | MIDI | channel, transpose, gate, hold, release, bend range, expression, instrument, level |
 | 2 | Compressor | threshold, ratio, attack, release, makeup, blend, sidechain |
 | 3 | EQ | low shelf, parametric mid (freq/gain/Q), high shelf |
 | 4 | Filter | sens, attack, release, from, to, res, mix — envelope filter |
@@ -232,15 +231,22 @@ independent ways a note ends — confidence dropping, the level gate, and a
 maximum length — and a **PANIC** button that stays visible in the MIDI row's
 header whether or not the row is open.
 
-### Instrument
+### The instrument, inside the MIDI row
 
-The MIDI row can drive another application, but the Instrument row plays an
-Audio Unit **inside** the rig: one app, one buffer, one output, and no
-inter-application routing. The pad's latency is then just the detection
-latency, with nothing stacked on top of it.
+The notes can go two places, and both live on the MIDI row because neither
+exists without it: out of the virtual port to another application, and into an
+Audio Unit hosted **inside** the rig. The second is the interesting one — one
+app, one buffer, one output, no inter-application routing, so the pad's latency
+is just the detection latency with nothing stacked on top.
 
-Pick from the box, hit **Open...** for the plugin's own window, and set its
-level. What loads and the patch it is on are both saved with your settings.
+Pick from the box at the top of the row's editor, hit **Open...** for the
+plugin's own window, and set its level. What loads and the patch it is on are
+both saved with your settings.
+
+It sits inside MIDI rather than on a row of its own because it is an option for
+MIDI and nothing else: the segmenter only runs when MIDI is on, so an
+instrument on a separate row would have had a switch that did nothing whenever
+that row was off, with nothing on screen to say so.
 
 **Logic's instruments cannot appear here.** Alchemy, Sculpture, ES2 and the
 rest are registered for Apple's hosts only — they are not installed as Audio
