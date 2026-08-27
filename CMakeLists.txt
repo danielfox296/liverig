@@ -119,6 +119,7 @@ target_sources(LiveRig PRIVATE
     Source/AudioEngine.cpp
     Source/SettingsStore.cpp
     Source/SongMaker.cpp
+    Source/MidiSender.cpp
     Source/PresetStore.cpp
     ${RIG_DSP_SOURCES})
 
@@ -165,6 +166,7 @@ target_sources(rig_uishot PRIVATE
     Source/AudioEngine.cpp
     Source/SettingsStore.cpp
     Source/SongMaker.cpp
+    Source/MidiSender.cpp
     Source/PresetStore.cpp
     ${RIG_DSP_SOURCES})
 
@@ -203,6 +205,7 @@ target_include_directories(rig_tests PRIVATE Source)
 
 target_link_libraries(rig_tests PRIVATE
     nam_core
+    juce::juce_audio_devices
     juce::juce_audio_formats
     juce::juce_dsp
     juce::juce_core

@@ -118,6 +118,7 @@ any order in the app; Input, Reverb and Live out hold their places.
 | # | Effect | Controls |
 |---|--------|----------|
 | 1 | Input gain | trim, meter (a 5 Hz DC blocker sits here too) |
+| — | MIDI | channel, transpose, gate, hold, release, bend range, expression |
 | 2 | Compressor | threshold, ratio, attack, release, makeup, blend, sidechain |
 | 3 | EQ | low shelf, parametric mid (freq/gain/Q), high shelf |
 | 4 | Filter | sens, attack, release, from, to, res, mix — envelope filter |
@@ -196,6 +197,39 @@ after the octave and before the modulation, so phaser, chorus, delay and
 reverb all treat it as a first-class citizen.
 
 ---
+
+### MIDI out
+
+The pitch tracker already runs off the trimmed input for the octave and synth
+stages, so it costs almost nothing to also treat it as a note source. Turning
+MIDI on publishes a virtual port called **LiveRig** — Logic, MainStage and
+anything else with a MIDI input simply see it, with no cable and no interface.
+
+It is aimed at **swells and pads**, and that is what makes it work. The reason
+bass-to-MIDI is usually disappointing is latency: identifying a low note takes
+two or three of its periods, which at the bottom of the range is tens of
+milliseconds, and no amount of clever code beats that. Aim at a sound with no
+transient to hit and the constraint stops mattering — so the segmenter spends
+that time being certain instead. A candidate pitch has to hold for **Hold**
+before it may speak, and displacing a note that is already sounding costs twice
+that plus a clear move past the semitone boundary, which is what stops a deep
+vibrato retriggering a pad every cycle.
+
+**Expression is the control that matters, not velocity.** A swell's loudness
+comes from the swell, not the pluck, so the envelope drives CC11 (or CC1)
+continuously while the note sustains. That is volume-pedal swells without the
+volume pedal. Pitch bend follows the tracker for slides.
+
+Two things are worth knowing. It is monophonic — YIN cannot do double stops —
+and it never trusts the period on its own: the tracker deliberately holds its
+last good period through unvoiced passages so the octave shifter does not drop
+out mid-note, and for MIDI that would sustain a note that has already finished.
+Liveness comes from confidence and level only.
+
+A stuck pad note is the worst thing that can happen on stage, so there are three
+independent ways a note ends — confidence dropping, the level gate, and a
+maximum length — and a **PANIC** button that stays visible in the MIDI row's
+header whether or not the row is open.
 
 ### What the (B) stages are for
 

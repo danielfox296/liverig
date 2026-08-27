@@ -82,6 +82,7 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
     amp.prepare (sr, maxBlock);
 
     tracker.prepare (sr);
+    segmenter.prepare (sr);
     shifter.prepare (sr);
     shifter2.prepare (sr);
     octBuf.assign ((size_t) maxBlock, 0.0f);
@@ -448,6 +449,19 @@ void FxChain::updateFromParams() noexcept
     bypDelay.setTargetValue  (params.getBool (pDelayOn)  ? 1.0f : 0.0f);
     bypTape.setTargetValue   (params.getBool (pTapeOn)   ? 1.0f : 0.0f);
     bypReverb.setTargetValue (params.getBool (pRevOn)    ? 1.0f : 0.0f);
+    bool midiDirty = false;
+    midiDirty |= changed (pMidiGate);
+    midiDirty |= changed (pMidiHold);
+    midiDirty |= changed (pMidiRelease);
+    midiDirty |= changed (pMidiTranspose);
+    midiDirty |= changed (pMidiBendRange);
+
+    if (midiDirty)
+        segmenter.setParams (params.get (pMidiGate), params.get (pMidiHold),
+                             params.get (pMidiRelease),
+                             (int) std::lround (params.get (pMidiTranspose)),
+                             (int) std::lround (params.get (pMidiBendRange)));
+
     bypCab.setTargetValue    (params.getBool (pCabOn)    ? 1.0f : 0.0f);
     bypSub.setTargetValue    (params.getBool (pSubOn)    ? 1.0f : 0.0f);
 
@@ -889,7 +903,17 @@ void FxChain::process (float* mono, float* left, float* right, int numSamples) n
     tracker.process (mono, numSamples);
     shifter.setPeriod (tracker.getPeriodSamples());
     shifter2.setPeriod (tracker.getPeriodSamples());
-    subOctave.setPeriod (tracker.getPeriodSamples());
+subOctave.setPeriod (tracker.getPeriodSamples());
+
+    midiEventCount = 0;
+
+    if (params.getBool (pMidiOn))
+        midiEventCount = segmenter.process (mono, numSamples, tracker.getPeriodSamples(),
+                                            tracker.getConfidence(), midiEvents, 8);
+    else if (segmenter.getSoundingNote() >= 0)
+        midiEventCount = segmenter.flush (midiEvents, 8);
+
+    soundingNote.store (segmenter.getSoundingNote(), std::memory_order_relaxed);
     synTargetPeriod = tracker.getPeriodSamples();
     liveHz.store (tracker.getFrequency(), std::memory_order_relaxed);
     liveConf.store (tracker.getConfidence(), std::memory_order_relaxed);

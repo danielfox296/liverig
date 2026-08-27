@@ -5,6 +5,7 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 
 #include "FxChain.h"
+#include "MidiSender.h"
 #include "Parameters.h"
 #include "StemPlayer.h"
 #include "dsp/Limiter.h"
@@ -24,6 +25,8 @@ public:
     void shutdown();
 
     juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
+    MidiSender& getMidi() noexcept                        { return midi; }
+
     StemPlayer& getStemPlayer() noexcept                  { return stems; }
     FxChain& getFxChain() noexcept                        { return fx; }
 
@@ -60,6 +63,10 @@ private:
     ParamStore& params;
     StemPlayer stems;
     FxChain fx;
+
+    // The tracker as a note source. FxChain produces the events; carrying
+    // them to a port is the engine's job, not the chain's.
+    MidiSender midi;
 
     // Playback-lane dynamics: the song is limited into the headroom the
     // instrument leaves, so a song never ducks the playing.

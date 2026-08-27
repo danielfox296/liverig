@@ -11,6 +11,7 @@
 #include "dsp/Biquad.h"
 #include "dsp/CabSim.h"
 #include "dsp/GlueComp.h"
+#include "dsp/NoteSegmenter.h"
 #include "dsp/OctaveShifter.h"
 #include "dsp/PitchTracker.h"
 #include "dsp/PlateVerb.h"
@@ -64,6 +65,17 @@ public:
     // What the pitch tracker hears right now — the tuner reads these.
     float getTrackedHz() const noexcept         { return liveHz.load (std::memory_order_relaxed); }
     float getTrackedConfidence() const noexcept { return liveConf.load (std::memory_order_relaxed); }
+
+    // MIDI events the segmenter produced during the last process() call.
+    // FxChain deliberately knows nothing about ports or devices: the engine
+    // drains these and hands them to the sender.
+    const NoteEvent* getMidiEvents (int& count) const noexcept
+    {
+        count = midiEventCount;
+        return midiEvents;
+    }
+
+    int getSoundingNote() const noexcept { return soundingNote.load (std::memory_order_relaxed); }
 
     // The NAM capture player behind the Amp stage — the UI loads into it.
     AmpModel& getAmp() noexcept { return amp; }
@@ -148,6 +160,13 @@ private:
     // Amp: a loaded NAM capture between its own gain trims.
     AmpModel amp;
     juce::SmoothedValue<float> ampIn, ampOut;
+
+    // The tracker as a note source. Liveness comes from confidence, never
+    // from the held period.
+    NoteSegmenter segmenter;
+    NoteEvent midiEvents[8];
+    int midiEventCount = 0;
+    std::atomic<int> soundingNote { -1 };
 
     PitchTracker tracker;
     OctaveShifter shifter, shifter2;

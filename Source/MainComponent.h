@@ -7,6 +7,7 @@
 #include "PresetStore.h"
 #include "SettingsStore.h"
 #include "SongMaker.h"
+#include "ui/MidiStatusView.h"
 #include "ui/SongMakerPanel.h"
 #include "ui/TunerView.h"
 #include "ui/Widgets.h"
@@ -88,6 +89,7 @@ private:
 
     LevelMeter masterMeter { 2 };
     LevelMeter inputMeter { 1 };
+    MidiStatusView midiStatus;
 
     juce::ListBox songList { "songs", this };
     juce::StringArray songNames;

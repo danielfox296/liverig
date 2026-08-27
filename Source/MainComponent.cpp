@@ -77,6 +77,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     fxDefs = {
         { "input",  -1,                false, "",       "Input",      -1,        { pInGain } },
+        { "midi",   -1,                false, "midi",   "MIDI",       pMidiOn,   { pMidiChannel, pMidiTranspose, pMidiGate, pMidiHold, pMidiRelease, pMidiBendRange, pMidiExpression } },
         { "comp",   FxChain::stComp,   true,  "comp",   "Compressor", pCompOn,   { pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup, pCompBlend, pCompSidechain } },
         { "eq",     FxChain::stEq,     true,  "eq",     "EQ",         pEqOn,     { pEqLoFreq, pEqLoGain, pEqMidFreq, pEqMidGain, pEqMidQ, pEqHiFreq, pEqHiGain } },
         { "filter", FxChain::stFilter, true,  "filter", "Filter",     pFltOn,    { pFltSens, pFltAttack, pFltRelease, pFltFrom, pFltTo, pFltRes, pFltMix } },
@@ -101,7 +102,8 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     for (const auto& def : fxDefs)
     {
         auto* panel = panels.add (new FxPanel (params, def.name, def.onParam, def.movable,
-                                               def.key == "input" ? &inputMeter : nullptr));
+                                               def.key == "input" ? &inputMeter
+                                                    : (def.key == "drive" ? (juce::Component*) &midiStatus : nullptr)));
 
         // Tapping the selected row again puts its controls away. Either way,
         // the effect tab comes forward — tapping a row means "show me this".
@@ -138,6 +140,8 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     tunerView.setBassMode (settings.tuner != "guitar");
     tunerView.onModeChanged = [this] { saveSettings(); };
+
+    midiStatus.onPanic = [this] { engine.getMidi().panic(); };
 
     songPanel.onJobStarted = [this] { resized(); grabKeyboardFocus(); };
     addChildComponent (songPanel);
@@ -297,7 +301,7 @@ void MainComponent::selectFxForSnapshot()
     // and the snapshot then documented whatever happened to be in that slot.
     for (int i = 0; i < (int) fxDefs.size(); ++i)
     {
-        if (fxDefs[(size_t) i].key == "drive")
+        if (fxDefs[(size_t) i].key == "midi")
         {
             selectFx (i);
             return;
@@ -1058,6 +1062,10 @@ void MainComponent::timerCallback()
         case SongMaker::State::splitting:
             break;
     }
+
+    midiStatus.setNote (engine.getFxChain().getSoundingNote());
+    engine.getMidi().setChannel ((int) std::lround (params.get (pMidiChannel)));
+    engine.getMidi().setExpressionController ((int) std::lround (params.get (pMidiExpression)));
 
     inputMeter.setLevel (0, engine.getInputPeak());
     masterMeter.setLevel (0, engine.getOutputPeakL());

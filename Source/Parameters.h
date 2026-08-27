@@ -49,6 +49,10 @@ enum ParamId
 
     pRevOn, pRevSize, pRevDamp, pRevPre, pRevMod, pRevMix,
 
+    // MIDI out: the tracker as a note source, aimed at swells and pads.
+    pMidiOn, pMidiChannel, pMidiTranspose, pMidiGate, pMidiHold, pMidiRelease,
+    pMidiBendRange, pMidiExpression,
+
     pLiveOut,
 
     pMasterGain,

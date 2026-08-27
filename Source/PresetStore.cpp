@@ -6,7 +6,7 @@ namespace rig
 // Bumped when the factory content changes. On load, an older file gets its
 // factory presets refreshed by name and any new ones added — presets the
 // user saved under their own names are never touched.
-static constexpr int kFactoryVersion = 8;
+static constexpr int kFactoryVersion = 9;
 
 // The order the factory chain presets were voiced in. Recalling one rewires
 // the chain to match, the same as any preset saved in the app.
@@ -35,6 +35,19 @@ const std::vector<FactoryEffect>& factoryEffects()
 {
     static const std::vector<FactoryEffect> list
     {
+        { "midi", "Pad an octave up", { { pMidiTranspose, 12.0f }, { pMidiGate, -42.0f },
+                                    { pMidiHold, 45.0f }, { pMidiRelease, 180.0f },
+                                    { pMidiBendRange, 2.0f }, { pMidiExpression, 2.0f } } },
+        { "midi", "Pad two up",   { { pMidiTranspose, 24.0f }, { pMidiGate, -42.0f },
+                                    { pMidiHold, 45.0f }, { pMidiRelease, 180.0f },
+                                    { pMidiBendRange, 2.0f }, { pMidiExpression, 2.0f } } },
+        { "midi", "Unison",       { { pMidiTranspose, 0.0f }, { pMidiGate, -42.0f },
+                                    { pMidiHold, 45.0f }, { pMidiRelease, 180.0f },
+                                    { pMidiBendRange, 2.0f }, { pMidiExpression, 2.0f } } },
+        { "midi", "Slow swell",   { { pMidiTranspose, 12.0f }, { pMidiGate, -46.0f },
+                                    { pMidiHold, 90.0f }, { pMidiRelease, 500.0f },
+                                    { pMidiBendRange, 2.0f }, { pMidiExpression, 2.0f } } },
+
         { "comp", "Gentle glue",  { { pCompThresh, -16.0f }, { pCompRatio, 2.0f }, { pCompAttack, 20.0f },
                                     { pCompRelease, 220.0f }, { pCompMakeup, 2.0f }, { pCompBlend, 1.0f } } },
         { "comp", "Fast FET",     { { pCompThresh, -22.0f }, { pCompRatio, 4.0f }, { pCompAttack, 0.8f },

@@ -11,11 +11,13 @@
 #include <cstdio>
 #include <vector>
 
+#include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_dsp/juce_dsp.h>
 
 #include "FxChain.h"
 #include "PresetStore.h"
+#include "dsp/NoteSegmenter.h"
 #include "StemPlayer.h"
 #include "Parameters.h"
 #include "dsp/AmpModel.h"
@@ -3127,6 +3129,238 @@ static void testBassTightPreset (double sr, int block)
     presetFile.deleteFile();
 }
 
+
+//==============================================================================
+// MIDI note segmentation. Aimed at pads and swells, so the standard is not
+// "fast" — it is "never wrong, never stuck, never chattering".
+
+struct CapturedNote { int note = 0; double on = 0.0, off = -1.0; int velocity = 0; };
+
+static std::vector<CapturedNote> segmentNotes (const std::vector<float>& in, double sr, int block,
+                                               int* stuckOut = nullptr, int transpose = 0,
+                                               float gateDb = -42.0f)
+{
+    PitchTracker tracker;
+    NoteSegmenter seg;
+    tracker.prepare (sr);
+    seg.prepare (sr);
+    seg.setParams (gateDb, 45.0f, 180.0f, transpose, 2);
+
+    std::vector<CapturedNote> notes;
+    NoteEvent events[8];
+
+    for (int i = 0; i + block <= (int) in.size(); i += block)
+    {
+        tracker.process (in.data() + i, block);
+        const int count = seg.process (in.data() + i, block, tracker.getPeriodSamples(),
+                                       tracker.getConfidence(), events, 8);
+        const double t = (i + block) / sr;
+
+        for (int e = 0; e < count; ++e)
+        {
+            if (events[e].type == NoteEvent::noteOn)
+            {
+                notes.push_back ({ events[e].a, t, -1.0, events[e].b });
+            }
+            else if (events[e].type == NoteEvent::noteOff)
+            {
+                for (int k = (int) notes.size() - 1; k >= 0; --k)
+                {
+                    if (notes[(size_t) k].note == events[e].a && notes[(size_t) k].off < 0.0)
+                    {
+                        notes[(size_t) k].off = t;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    int stuck = 0;
+
+    for (const auto& n : notes)
+        if (n.off < 0.0)
+            ++stuck;
+
+    if (stuckOut != nullptr)
+        *stuckOut = stuck;
+
+    return notes;
+}
+
+static void testNoteSegmentation (double sr, int block)
+{
+    std::printf ("\n MIDI note segmentation (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    const double pitches[] { 41.20, 55.00, 73.42, 98.00 };
+    const int expected[] { 28, 33, 38, 43 };
+
+    std::vector<float> seq;
+
+    for (double f0 : pitches)
+    {
+        std::vector<float> note;
+        makeNote (note, sr, f0, 1.2, 0.45f);
+        seq.insert (seq.end(), note.begin(), note.end());
+        seq.insert (seq.end(), (size_t) (sr * 0.45), 0.0f);
+    }
+
+    int stuck = 0;
+    const auto notes = segmentNotes (seq, sr, block, &stuck);
+
+    report ("one note per phrase, nothing extra", notes.size() == 4,
+            juce::String ((int) notes.size()) + " notes from 4 phrases");
+
+    bool pitchesRight = notes.size() == 4;
+
+    for (size_t i = 0; i < notes.size() && i < 4; ++i)
+        pitchesRight = pitchesRight && notes[i].note == expected[i];
+
+    juce::String got;
+
+    for (const auto& n : notes)
+        got << n.note << " ";
+
+    report ("the right notes", pitchesRight, "got " + got.trim() + ", wanted 28 33 38 43");
+
+    report ("nothing left sounding", stuck == 0, juce::String (stuck) + " stuck");
+
+    double shortest = 1.0e9;
+
+    for (const auto& n : notes)
+        if (n.off > 0.0)
+            shortest = std::min (shortest, n.off - n.on);
+
+    report ("no note is a blip", notes.empty() || shortest > 0.5,
+            "shortest " + juce::String (shortest, 2) + " s");
+
+    // Transpose is what makes this useful: play the bass, sound the pad up top.
+    const auto up = segmentNotes (seq, sr, block, nullptr, 12);
+    bool shifted = up.size() == notes.size();
+
+    for (size_t i = 0; i < up.size() && i < notes.size(); ++i)
+        shifted = shifted && up[i].note == notes[i].note + 12;
+
+    report ("transpose moves every note", shifted,
+            juce::String ((int) up.size()) + " notes, an octave up");
+}
+
+static void testVibratoDoesNotChatter (double sr, int block)
+{
+    std::printf ("\n MIDI under vibrato and decay\n");
+
+    // A held note with vibrato deep enough to cross the semitone boundary
+    // either side. A pad that retriggers on every wobble is unusable.
+    const double f0 = 55.0, depth = 0.035, rate = 2.5;   // about +/- 60 cents, slow
+    const int n = (int) (sr * 3.0);
+    std::vector<float> in ((size_t) n, 0.0f);
+
+    double phase[6] {};
+
+    for (int i = 0; i < n; ++i)
+    {
+        const double t = i / sr;
+        const double f = f0 * (1.0 + depth * std::sin (6.283185307179586 * rate * t));
+        double s = 0.0;
+
+        for (int h = 0; h < 6; ++h)
+        {
+            s += std::sin (phase[h]) / std::pow ((double) (h + 1), 1.2);
+            phase[h] += 6.283185307179586 * f * (h + 1) / sr;
+        }
+
+        in[(size_t) i] = (float) (s * 0.35);
+    }
+
+    int stuck = 0;
+    const auto notes = segmentNotes (in, sr, block, &stuck);
+
+    report ("vibrato across a semitone does not retrigger", notes.size() == 1,
+            juce::String ((int) notes.size()) + " notes over 3 s of vibrato");
+
+    // Silence must end it, and within the release time.
+    std::vector<float> withTail = in;
+    withTail.insert (withTail.end(), (size_t) (sr * 1.0), 0.0f);
+
+    const auto tailed = segmentNotes (withTail, sr, block, &stuck);
+
+    report ("silence ends the note", stuck == 0 && ! tailed.empty(),
+            tailed.empty() ? "no note at all"
+                           : juce::String (tailed.back().off - 3.0, 3) + " s after the audio stopped");
+}
+
+static void testSegmenterOnRealBass (const juce::File& stem, double sr, int block)
+{
+    if (! stem.existsAsFile())
+        return;
+
+    std::printf ("\n MIDI segmentation on a real bass stem\n");
+
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (stem));
+
+    if (reader == nullptr)
+        return;
+
+    const int n = (int) juce::jmin ((juce::int64) (reader->sampleRate * 60.0), reader->lengthInSamples);
+    juce::AudioBuffer<float> buffer ((int) reader->numChannels, n);
+    reader->read (&buffer, 0, n, 0, true, true);
+
+    std::vector<float> in (buffer.getReadPointer (0), buffer.getReadPointer (0) + n);
+
+    // The excerpt is cut mid-song; give the last note the silence it would
+    // have had in the room, or it is stuck by construction rather than by bug.
+    in.insert (in.end(), (size_t) (reader->sampleRate * 1.0), 0.0f);
+
+    int stuck = 0;
+    const auto notes = segmentNotes (in, reader->sampleRate, block, &stuck);
+
+    double shortest = 1.0e9;
+    int blips = 0;
+
+    for (const auto& note : notes)
+    {
+        if (note.off > 0.0)
+        {
+            const double length = note.off - note.on;
+            shortest = std::min (shortest, length);
+
+            if (length < 0.08)
+                ++blips;
+        }
+    }
+
+    std::printf ("  %d notes over %.0f s, shortest %.2f s\n",
+                 (int) notes.size(), n / reader->sampleRate,
+                 notes.empty() ? 0.0 : shortest);
+
+    report ("nothing stuck on real playing", stuck == 0, juce::String (stuck) + " stuck");
+    report ("no chattered blips", blips == 0, juce::String (blips) + " notes under 80 ms");
+}
+
+
+// The whole feature rests on macOS letting us publish a virtual MIDI source.
+// Assuming that works is exactly the kind of platform assumption that bites, so
+// it is checked rather than believed.
+static void testVirtualMidiPort()
+{
+    std::printf ("\n Virtual MIDI port\n");
+
+    auto port = juce::MidiOutput::createNewDevice ("LiveRig test port");
+
+    report ("macOS publishes a virtual MIDI source", port != nullptr,
+            port != nullptr ? "created and visible to other apps"
+                            : "createNewDevice returned nothing");
+
+    if (port != nullptr)
+    {
+        port->sendMessageNow (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100));
+        port->sendMessageNow (juce::MidiMessage::noteOff (1, 60));
+        report ("it accepts messages without throwing", true, "note on and off sent");
+    }
+}
+
 //==============================================================================
 int main (int argc, char* argv[])
 {
@@ -3167,6 +3401,10 @@ int main (int argc, char* argv[])
     testChain (48000.0, 64);
     testDriveCrossover (48000.0, 64);
     testBassTightPreset (48000.0, 64);
+    testNoteSegmentation (48000.0, 64);
+    testVirtualMidiPort();
+    testVibratoDoesNotChatter (48000.0, 64);
+    testSegmenterOnRealBass (juce::File ("/Users/fox296/LiveRig/Songs/Plan B/bass.wav"), 48000.0, 64);
     testSubOctave (48000.0, 64);
     testCabFilter (48000.0, 64);
     testCompSidechain (48000.0, 64);

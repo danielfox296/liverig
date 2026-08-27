@@ -12,6 +12,7 @@ AudioEngine::~AudioEngine()
 
 juce::String AudioEngine::initialise (std::unique_ptr<juce::XmlElement> savedState)
 {
+    midi.open();   // a virtual port, so Logic and MainStage just see it
     const bool hadSavedState = savedState != nullptr;
     auto error = deviceManager.initialise (2, 2, savedState.get(), true);
 
@@ -69,6 +70,7 @@ float AudioEngine::getIoLatencyMs() noexcept
 
 void AudioEngine::shutdown()
 {
+    midi.close();
     if (callbackAdded)
     {
         deviceManager.removeAudioCallback (this);
@@ -161,6 +163,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         updatePeak (inPeak, monoIn, n, decay);
 
         fx.process (monoIn, liveL, liveR, n);
+
+        int midiCount = 0;
+        const auto* events = fx.getMidiEvents (midiCount);
+
+        for (int e = 0; e < midiCount; ++e)
+            midi.push (events[e]);
 
         // --- playback lane ---
         juce::FloatVectorOperations::clear (mixL, n);

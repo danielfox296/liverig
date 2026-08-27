@@ -4,6 +4,7 @@ namespace rig
 {
 
 static const char* const voiceChoices[] { "Green", "Gold", "Plexi" };
+static const char* const expressionChoices[] { "Off", "CC1 mod", "CC11 expr" };
 static const char* const divideChoices[] { "-1 oct", "-2 oct" };
 
 // id, label, min, max, default, skewCentre, step, suffix, decimals, isToggle, choices
@@ -129,6 +130,15 @@ static const ParamSpec specs[] =
     { "rvPre",     "Predelay",   0.0f, 120.0f,  12.0f,    30.0f, 0.0f, " ms",  0, false },
     { "rvMod",     "Mod",        0.0f,   1.0f,   0.5f,     0.0f, 0.0f, "",     2, false },
     { "rvMix",     "Mix",        0.0f,   1.0f,  0.25f,     0.0f, 0.0f, "",     2, false },
+
+    { "midiOn",    "MIDI",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
+    { "midiCh",    "Channel",    1.0f,  16.0f,   1.0f,     0.0f, 1.0f, "",     0, false },
+    { "midiTrans", "Transpose",-24.0f,  24.0f,  12.0f,     0.0f, 1.0f, " st",  0, false },
+    { "midiGate",  "Gate",     -60.0f, -20.0f, -42.0f,     0.0f, 0.0f, " dB",  1, false },
+    { "midiHold",  "Hold",      10.0f, 200.0f,  45.0f,    60.0f, 0.0f, " ms",  0, false },
+    { "midiRel",   "Release",   20.0f,1000.0f, 180.0f,   200.0f, 0.0f, " ms",  0, false },
+    { "midiBend",  "Bend range", 0.0f,  12.0f,   2.0f,     0.0f, 1.0f, " st",  0, false },
+    { "midiExpr",  "Expression", 0.0f,   2.0f,   2.0f,     0.0f, 1.0f, "",     0, false, expressionChoices },
 
     { "liveOut",   "Live out", -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
 
