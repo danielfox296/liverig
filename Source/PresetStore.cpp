@@ -6,7 +6,7 @@ namespace rig
 // Bumped when the factory content changes. On load, an older file gets its
 // factory presets refreshed by name and any new ones added — presets the
 // user saved under their own names are never touched.
-static constexpr int kFactoryVersion = 6;
+static constexpr int kFactoryVersion = 7;
 
 // The order the factory chain presets were voiced in. Recalling one rewires
 // the chain to match, the same as any preset saved in the app.
@@ -89,6 +89,17 @@ const std::vector<FactoryEffect>& factoryEffects()
         { "drive", "Wall",          { { pDriveVoice, 3.0f }, { pDriveAmount, 34.0f }, { pDriveTone, 2200.0f },
                                       { pDriveLevel, -8.0f }, { pDriveStack, 0.6f }, { pDriveBite, 0.4f } } },
 
+        { "cab", "Sealed 8x10",   { { pCabBumpFreq, 100.0f }, { pCabBumpGain, 5.5f },
+                                    { pCabTop, 3500.0f }, { pCabPresence, -2.5f } } },
+        { "cab", "Ported 4x10",   { { pCabBumpFreq, 75.0f }, { pCabBumpGain, 4.0f },
+                                    { pCabTop, 6000.0f }, { pCabPresence, 1.5f } } },
+        { "cab", "15 flip-top",   { { pCabBumpFreq, 68.0f }, { pCabBumpGain, 7.0f },
+                                    { pCabTop, 2600.0f }, { pCabPresence, -4.0f } } },
+        { "cab", "Grind cab",     { { pCabBumpFreq, 110.0f }, { pCabBumpGain, 3.0f },
+                                    { pCabTop, 5200.0f }, { pCabPresence, 4.0f } } },
+        { "cab", "Barely there",  { { pCabBumpFreq, 90.0f }, { pCabBumpGain, 1.5f },
+                                    { pCabTop, 7500.0f }, { pCabPresence, 0.0f } } },
+
         { "octave", "Classic +12",{ { pOctInterval, 12.0f }, { pOctMix, 0.5f }, { pOct2Level, 0.0f } } },
         { "octave", "Just a hint",{ { pOctInterval, 12.0f }, { pOctMix, 0.25f }, { pOct2Level, 0.0f } } },
         { "octave", "Full up",    { { pOctInterval, 12.0f }, { pOctMix, 1.0f }, { pOct2Level, 0.0f } } },
@@ -98,6 +109,11 @@ const std::vector<FactoryEffect>& factoryEffects()
                                     { pOct2Interval, 7.0f }, { pOct2Level, 0.6f } } },
         { "octave", "Organ",      { { pOctInterval, 12.0f }, { pOctMix, 0.65f },
                                     { pOct2Interval, -12.0f }, { pOct2Level, 0.7f } } },
+
+        { "sub", "Divider classic", { { pSubLevel, 0.6f }, { pSubTone, 450.0f }, { pSubDivide, 0.0f } } },
+        { "sub", "Just weight",     { { pSubLevel, 0.3f }, { pSubTone, 260.0f }, { pSubDivide, 0.0f } } },
+        { "sub", "Square buzz",     { { pSubLevel, 0.75f }, { pSubTone, 1400.0f }, { pSubDivide, 0.0f } } },
+        { "sub", "Two octaves down",{ { pSubLevel, 0.5f }, { pSubTone, 300.0f }, { pSubDivide, 1.0f } } },
 
         { "synth", "Square sub", { { pSynShape, 0.15f }, { pSynSub, 0.7f }, { pSynCutoff, 300.0f },
                                    { pSynEnv, 0.55f }, { pSynRes, 2.2f }, { pSynGlide, 12.0f },
@@ -569,7 +585,7 @@ void PresetStore::removeEffect (const juce::String& effect, const juce::String& 
 void PresetStore::addFactoryEffectPresets()
 {
     for (const auto& factory : factoryEffects())
-        effectPresets.add ({ factory.effect, factory.name, settingsToVar (factory.settings) });
+        effectPresets.add ({ factory.effect, factory.name, settingsToVar (factory.settings), juce::var() });
 }
 
 void PresetStore::addFactoryPresets()
