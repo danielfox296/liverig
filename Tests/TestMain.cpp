@@ -3070,6 +3070,63 @@ static void testCompSidechain (double sr, int block)
                 + juce::String (20.0 * std::log10 (filtered), 2) + " dB at 300 Hz");
 }
 
+
+// The one drive preset that leans on the crossover. If it is ever edited back
+// to a full-band drive its name stops being true, so the claim is asserted
+// against the shipped preset rather than a copy of its numbers.
+static void testBassTightPreset (double sr, int block)
+{
+    std::printf ("\n Bass tight preset (%.0f Hz)\n", sr);
+
+    const auto presetFile = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                .getChildFile ("liverig-bass-tight-test.json");
+    presetFile.deleteFile();
+
+    PresetStore presets;
+    presets.fileOverride = presetFile;
+    presets.load();
+
+    const double f0 = 50.0;
+    const int n = (int) (sr * 1.5);
+    std::vector<float> in ((size_t) n, 0.0f);
+
+    for (int i = 0; i < n; ++i)
+        in[(size_t) i] = 0.45f * (float) std::sin (6.283185307179586 * f0 * i / sr);
+
+    auto dirtOf = [&] (const juce::String& presetName, bool& found)
+    {
+        ParamStore params;
+        params.set (pDriveOn, 1.0f);
+        found = presets.applyEffect ("drive", presetName, params);
+
+        const auto out = renderChain (params, in, sr, block);
+        const int from = (int) (sr * 0.5), len = (int) (sr * 0.9);
+
+        const double fundamental = toneEnergy (out.data() + from, len, sr, f0);
+        double harmonics = 0.0;
+
+        for (int h = 2; h <= 9; ++h)
+            harmonics += toneEnergy (out.data() + from, len, sr, f0 * h);
+
+        return harmonics / std::max (1.0e-9, fundamental);
+    };
+
+    bool haveTight = false, haveGrit = false;
+    const double tight = dirtOf ("Bass tight", haveTight);
+    const double grit = dirtOf ("Grit", haveGrit);
+
+    report ("ships a Bass tight drive preset", haveTight, haveTight ? "found" : "missing");
+
+    report ("it keeps a low fundamental out of the clipper", haveTight && tight < 0.02,
+            juce::String (tight, 4) + " harmonic-to-fundamental at 50 Hz");
+
+    report ("tighter down there than the full-band preset beside it",
+            haveTight && haveGrit && tight < grit * 0.4,
+            "Bass tight " + juce::String (tight, 4) + " against Grit " + juce::String (grit, 4));
+
+    presetFile.deleteFile();
+}
+
 //==============================================================================
 int main (int argc, char* argv[])
 {
@@ -3109,6 +3166,7 @@ int main (int argc, char* argv[])
     testStageOrder (48000.0, 64);
     testChain (48000.0, 64);
     testDriveCrossover (48000.0, 64);
+    testBassTightPreset (48000.0, 64);
     testSubOctave (48000.0, 64);
     testCabFilter (48000.0, 64);
     testCompSidechain (48000.0, 64);

@@ -6,7 +6,7 @@ namespace rig
 // Bumped when the factory content changes. On load, an older file gets its
 // factory presets refreshed by name and any new ones added — presets the
 // user saved under their own names are never touched.
-static constexpr int kFactoryVersion = 7;
+static constexpr int kFactoryVersion = 8;
 
 // The order the factory chain presets were voiced in. Recalling one rewires
 // the chain to match, the same as any preset saved in the app.
@@ -78,6 +78,9 @@ const std::vector<FactoryEffect>& factoryEffects()
                                       { pDriveLevel, -1.0f }, { pDriveStack, 0.0f }, { pDriveBite, 0.4f } } },
         { "drive", "Grit",          { { pDriveVoice, 1.0f }, { pDriveAmount, 12.0f }, { pDriveTone, 3200.0f },
                                       { pDriveLevel, -4.0f }, { pDriveStack, 0.2f }, { pDriveBite, 0.4f } } },
+        { "drive", "Bass tight",    { { pDriveVoice, 1.0f }, { pDriveAmount, 18.0f }, { pDriveTone, 3000.0f },
+                                      { pDriveLevel, -5.0f }, { pDriveStack, 0.15f }, { pDriveBite, 0.55f },
+                                      { pDriveXover, 180.0f }, { pDriveBlend, 1.0f } } },
         { "drive", "Gold lift",     { { pDriveVoice, 2.0f }, { pDriveAmount, 4.0f }, { pDriveTone, 5500.0f },
                                       { pDriveLevel, 0.0f }, { pDriveStack, 0.0f }, { pDriveBite, 0.3f } } },
         { "drive", "Fusion rhythm", { { pDriveVoice, 2.0f }, { pDriveAmount, 7.0f }, { pDriveTone, 3800.0f },
