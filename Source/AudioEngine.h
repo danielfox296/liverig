@@ -61,6 +61,10 @@ private:
     StemPlayer stems;
     FxChain fx;
 
+    // Playback-lane dynamics: the song is limited into the headroom the
+    // instrument leaves, so a song never ducks the playing.
+    StemDucker ducker;
+
     // The master bus: one gain over the whole sum, then the safety limiter,
     // so the device is never handed a sample it would hard-clip.
     juce::SmoothedValue<float> masterGain;

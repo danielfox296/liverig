@@ -1863,6 +1863,271 @@ static void testMasterLimiter (double sr)
 }
 
 //==============================================================================
+// Amplitude of one tone inside a mix, via quadrature projection over a window.
+static double toneLevel (const std::vector<float>& x, int i0, int i1, double sr, double hz)
+{
+    double c = 0.0, s = 0.0;
+
+    for (int i = i0; i < i1; ++i)
+    {
+        const double ph = 6.283185307179586 * hz * i / sr;
+        c += x[(size_t) i] * std::cos (ph);
+        s += x[(size_t) i] * std::sin (ph);
+    }
+
+    const double half = (double) (i1 - i0) * 0.5;
+    return std::sqrt (c * c + s * s) / half;
+}
+
+// The bug this stage exists for: a slammed live lane (steady, just under the
+// ceiling) summed with a mastered song used to pin the master limiter 4-6 dB
+// into reduction, and the instrument went down with it. The ducker must hold
+// the instrument's level, keep the song audible underneath, let the song run
+// untouched when nobody plays, and never break the master ceiling.
+static void testStemDucker (double sr)
+{
+    std::printf ("\nStem ducker  (%.0f Hz)\n", sr);
+
+    const double instHz = 196.0, songHz = 110.0;
+    const float instAmp = 0.78f;
+
+    // instSeconds: how long the instrument plays from t=0; the song runs the
+    // whole render. Returns the left channel.
+    auto render = [&] (double seconds, bool withSong, double instSeconds, std::vector<float>& out)
+    {
+        StemDucker duck;
+        MasterLimiter lim;
+        duck.prepare (sr);
+        lim.prepare (sr);
+
+        const int n = (int) (sr * seconds);
+        out.assign ((size_t) n, 0.0f);
+
+        for (int i = 0; i < n; ++i)
+        {
+            const double t = i / sr;
+            const float inst = t < instSeconds
+                                 ? instAmp * (float) std::sin (6.283185307179586 * instHz * t)
+                                 : 0.0f;
+
+            float sl = 0.0f, sr2 = 0.0f;
+
+            if (withSong)
+            {
+                sl = 0.9f * (float) std::sin (6.283185307179586 * songHz * t)
+                   + 0.35f * (float) std::sin (6.283185307179586 * songHz * 3.01 * t);
+                sr2 = sl;
+            }
+
+            duck.process (sl, sr2, inst, inst);
+
+            float l = sl + inst;
+            float r = sr2 + inst;
+            lim.process (l, r);
+            out[(size_t) i] = l;
+        }
+    };
+
+    std::vector<float> instSolo, songSolo, mixed, quiet;
+    render (2.0, false, 2.0, instSolo);
+    render (2.0, true, 0.0, songSolo);
+    render (3.0, true, 1.8, mixed);
+
+    const double instA = toneLevel (instSolo, (int) sr, (int) (2.0 * sr), sr, instHz);
+    const double songB = toneLevel (songSolo, (int) sr, (int) (2.0 * sr), sr, songHz);
+    const double instC = toneLevel (mixed, (int) (0.8 * sr), (int) (1.8 * sr), sr, instHz);
+    const double songC = toneLevel (mixed, (int) (0.8 * sr), (int) (1.8 * sr), sr, songHz);
+    const double songAfter = toneLevel (mixed, (int) (2.6 * sr), (int) (3.0 * sr), sr, songHz);
+
+    report ("instrument keeps its level under a song", instC >= 0.85 * instA,
+            "solo " + juce::String (instA, 3) + " -> in mix " + juce::String (instC, 3)
+              + " (" + juce::String (100.0 * instC / instA, 0) + "%)");
+
+    report ("song ducks under the playing, stays audible",
+            songC >= 0.10 && songC <= 0.35,
+            "song " + juce::String (songB, 3) + " -> " + juce::String (songC, 3)
+              + " while playing");
+
+    report ("song alone is not ducked", songB >= 0.55,
+            "level " + juce::String (songB, 3) + " with nobody playing");
+
+    report ("song swells back after the phrase", songAfter >= 0.75 * songB,
+            juce::String (songAfter, 3) + " of " + juce::String (songB, 3)
+              + " within 0.8 s");
+
+    float peak = 0.0f;
+
+    for (float v : mixed)
+        peak = juce::jmax (peak, std::abs (v));
+
+    report ("master ceiling still holds", peak <= MasterLimiter::ceiling + 0.001f,
+            "mix peak " + juce::String (peak, 3));
+
+    // A quiet song with nobody playing passes through untouched.
+    StemDucker duck;
+    duck.prepare (sr);
+    double worstError = 0.0;
+
+    for (int i = 0; i < (int) (0.5 * sr); ++i)
+    {
+        const float x = 0.3f * (float) std::sin (6.283185307179586 * songHz * i / sr);
+        float sl = x, sr2 = x;
+        duck.process (sl, sr2, 0.0f, 0.0f);
+        worstError = juce::jmax (worstError, (double) std::abs (sl - x));
+    }
+
+    report ("under the bed it is a wire", worstError < 1.0e-6,
+            "worst deviation " + juce::String (worstError, 8));
+}
+
+//==============================================================================
+// End-to-end scenario: the user's actual settings.json and an actual song
+// folder through the exact AudioEngine bus (FxChain -> stems -> ducker ->
+// master gain -> limiter), measuring the instrument's heard level with the
+// transport stopped vs playing. Answers "does THIS rig, at THESE settings,
+// duck the instrument when a song runs" with the shipped code.
+static void runScenario (const juce::File& settingsFile, const juce::File& songFolder)
+{
+    const auto parsed = juce::JSON::parse (settingsFile.loadFileAsString());
+
+    std::printf ("\nScenario: %s\n          %s\n",
+                 settingsFile.getFullPathName().toRawUTF8(),
+                 songFolder.getFileName().toRawUTF8());
+
+    const double sr = 48000.0;
+    const int block = 480;
+    const double seconds = 30.0;
+    const int measureFrom = (int) (5.0 * sr);
+
+    {
+        ParamStore check;
+        check.fromVar (parsed["params"]);
+        std::printf ("  loaded: gains %+.1f %+.1f %+.1f %+.1f dB | mutes %d %d %d %d"
+                     " | mkup %+.1f | liveOut %+.1f\n",
+                     check.get (pStemGain0), check.get (pStemGain1),
+                     check.get (pStemGain2), check.get (pStemGain3),
+                     (int) check.getBool (pStemMute0), (int) check.getBool (pStemMute1),
+                     (int) check.getBool (pStemMute2), (int) check.getBool (pStemMute3),
+                     check.get (pCompMakeup), check.get (pLiveOut));
+    }
+
+    for (double inputPeakDb : { -18.0, -6.0 })
+    {
+        // A bass line: the plucked-note proxy, retriggered every half second.
+        std::vector<float> note;
+        makeNote (note, sr, 98.0, 0.5, 1.0f);
+        float notePeak = 0.0f;
+
+        for (float v : note)
+            notePeak = juce::jmax (notePeak, std::abs (v));
+
+        const float noteGain = (float) juce::Decibels::decibelsToGain (inputPeakDb) / notePeak;
+
+        struct Result { double heard = 0.0, duckMinGain = 1.0, limMaxGr = 0.0, stemPeak = 0.0; };
+
+        auto render = [&] (bool songOn, bool duckerOn)
+        {
+            ParamStore params;
+            params.fromVar (parsed["params"]);
+
+            FxChain fx (params);
+            StemPlayer stems (params);
+            StemDucker duck;
+            MasterLimiter lim;
+
+            fx.prepare (sr, block);
+            stems.prepare (sr, block);
+            duck.prepare (sr);
+            lim.prepare (sr);
+
+            juce::SmoothedValue<float> masterGain;
+            masterGain.reset (sr, 0.02);
+            masterGain.setCurrentAndTargetValue (
+                juce::Decibels::decibelsToGain (params.get (pMasterGain), -60.0f));
+
+            if (songOn)
+            {
+                const auto ok = stems.loadSongFolder (songFolder);
+
+                if (ok.failed())
+                {
+                    std::printf ("  cannot load song: %s\n", ok.getErrorMessage().toRawUTF8());
+                    return Result {};
+                }
+
+                stems.play();
+            }
+
+            std::vector<float> monoIn (block), liveL (block), liveR (block),
+                               mixL (block), mixR (block);
+            Result res;
+            long heardCount = 0;
+            const int total = (int) (sr * seconds);
+
+            for (int base = 0; base < total; base += block)
+            {
+                for (int i = 0; i < block; ++i)
+                    monoIn[(size_t) i] = note[(size_t) ((base + i) % (int) note.size())] * noteGain;
+
+                fx.process (monoIn.data(), liveL.data(), liveR.data(), block);
+
+                std::fill (mixL.begin(), mixL.end(), 0.0f);
+                std::fill (mixR.begin(), mixR.end(), 0.0f);
+                stems.process (mixL.data(), mixR.data(), block);
+
+                masterGain.setTargetValue (
+                    juce::Decibels::decibelsToGain (params.get (pMasterGain), -60.0f));
+
+                for (int i = 0; i < block; ++i)
+                {
+                    res.stemPeak = juce::jmax (res.stemPeak,
+                                               (double) juce::jmax (std::abs (mixL[(size_t) i]),
+                                                                    std::abs (mixR[(size_t) i])));
+
+                    if (duckerOn)
+                        duck.process (mixL[(size_t) i], mixR[(size_t) i],
+                                      liveL[(size_t) i], liveR[(size_t) i]);
+
+                    const float gm = masterGain.getNextValue();
+                    float l = (mixL[(size_t) i] + liveL[(size_t) i]) * gm;
+                    float r = (mixR[(size_t) i] + liveR[(size_t) i]) * gm;
+                    lim.process (l, r);
+
+                    if (base + i >= measureFrom)
+                    {
+                        res.heard += std::abs (liveL[(size_t) i]) * gm * lim.lastGain;
+                        ++heardCount;
+                        res.duckMinGain = juce::jmin (res.duckMinGain, (double) duck.gain);
+                        res.limMaxGr = juce::jmax (res.limMaxGr, (double) lim.getReductionDb());
+                    }
+                }
+            }
+
+            if (heardCount > 0)
+                res.heard /= (double) heardCount;
+
+            return res;
+        };
+
+        const auto solo = render (false, true);
+        const auto withSongNew = render (true, true);
+        const auto withSongOld = render (true, false);
+
+        std::printf ("  input peak %.0f dBFS | stems peak %.2f\n",
+                     inputPeakDb, withSongNew.stemPeak);
+        std::printf ("    instrument heard: solo %.4f | song playing %.4f (%.0f%%)"
+                     " | pre-fix chain %.4f (%.0f%%)\n",
+                     solo.heard, withSongNew.heard,
+                     solo.heard > 0 ? 100.0 * withSongNew.heard / solo.heard : 0.0,
+                     withSongOld.heard,
+                     solo.heard > 0 ? 100.0 * withSongOld.heard / solo.heard : 0.0);
+        std::printf ("    ducker deepest gain %.2f | master limiter worst %.1f dB"
+                     " (pre-fix worst %.1f dB)\n",
+                     withSongNew.duckMinGain, withSongNew.limMaxGr, withSongOld.limMaxGr);
+    }
+}
+
+//==============================================================================
 static void testStageOrder (double sr, int block)
 {
     std::printf ("\nStage reordering  (%.0f Hz, %d-sample blocks)\n", sr, block);
@@ -2808,6 +3073,13 @@ static void testCompSidechain (double sr, int block)
 //==============================================================================
 int main (int argc, char* argv[])
 {
+    if (argc == 4 && juce::String (argv[1]) == "--scenario")
+    {
+        runScenario (juce::File (juce::String (argv[2])),
+                     juce::File (juce::String (argv[3])));
+        return 0;
+    }
+
     std::printf ("LiveRig DSP validation\n======================\n");
 
     for (double sr : { 48000.0, 44100.0 })
@@ -2833,6 +3105,7 @@ int main (int argc, char* argv[])
     testReverb (48000.0, 64);
     testReverb (44100.0, 32);
     testMasterLimiter (48000.0);
+    testStemDucker (48000.0);
     testStageOrder (48000.0, 64);
     testChain (48000.0, 64);
     testDriveCrossover (48000.0, 64);

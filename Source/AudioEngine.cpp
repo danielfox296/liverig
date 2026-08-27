@@ -98,6 +98,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     fx.prepare (rate, maxBlock);
     stems.prepare (rate, maxBlock);
 
+    ducker.prepare (rate);
     limiter.prepare (rate);
     masterGain.reset (rate, 0.02);
     masterGain.setCurrentAndTargetValue (
@@ -166,6 +167,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         juce::FloatVectorOperations::clear (mixR, n);
 
         stems.process (mixL, mixR, n);
+
+        for (int i = 0; i < n; ++i)
+            ducker.process (mixL[i], mixR[i], liveL[i], liveR[i]);
 
         // --- master sum: gain, then the safety limiter ---
         juce::FloatVectorOperations::add (mixL, liveL, n);
