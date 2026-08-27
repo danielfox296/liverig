@@ -35,6 +35,9 @@ public:
     void showTunerForSnapshot();
     void showJobStripForSnapshot();
 
+    // What the instrument picker actually offers — an empty box was the bug.
+    int getInstrumentChoiceCount() const { return instrumentControls.instrumentBox.getNumItems(); }
+
 private:
     void timerCallback() override;
 
@@ -155,26 +158,31 @@ private:
         {
             open.setButtonText ("Open...");
             clear.setButtonText ("Clear");
+            rescan.setButtonText ("Rescan");
             open.setWantsKeyboardFocus (false);
             clear.setWantsKeyboardFocus (false);
+            rescan.setWantsKeyboardFocus (false);
             instrumentBox.setTextWhenNothingSelected ("No instrument");
             addAndMakeVisible (instrumentBox);
             addAndMakeVisible (open);
             addAndMakeVisible (clear);
+            addAndMakeVisible (rescan);
         }
 
         void resized() override
         {
             auto b = getLocalBounds();
-            open.setBounds (b.removeFromRight (72));
+            open.setBounds (b.removeFromRight (66));
             b.removeFromRight (4);
-            clear.setBounds (b.removeFromRight (52));
+            clear.setBounds (b.removeFromRight (50));
+            b.removeFromRight (4);
+            rescan.setBounds (b.removeFromRight (60));
             b.removeFromRight (6);
             instrumentBox.setBounds (b);
         }
 
         juce::ComboBox instrumentBox;
-        juce::TextButton open, clear;
+        juce::TextButton open, clear, rescan;
     };
 
     InstrumentControls instrumentControls;

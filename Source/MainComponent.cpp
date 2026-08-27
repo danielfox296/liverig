@@ -144,7 +144,12 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     midiStatus.onPanic = [this] { engine.getMidi().panic(); };
 
-    engine.getInstrument().beginScan();
+    // The cached list is on disk, so the picker fills the moment the window
+    // opens. Only scan when there is nothing cached — identifying an Audio
+    // Unit means instantiating it, and paying forty-five seconds on every
+    // launch to rediscover the same nine plugins is not a trade worth making.
+    if (engine.getInstrument().getAvailableNames().isEmpty())
+        engine.getInstrument().beginScan();
 
     instrumentControls.instrumentBox.onChange = [this]
     {
@@ -171,6 +176,14 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     };
 
     instrumentControls.open.onClick = [this] { openPluginWindow(); };
+
+    instrumentControls.rescan.onClick = [this]
+    {
+        engine.getInstrument().beginScan();
+        refreshInstrumentControls();
+    };
+
+    refreshInstrumentControls();
 
     if (settings.instrument.isNotEmpty())
         engine.getInstrument().restore (settings.instrument, settings.instrumentState);

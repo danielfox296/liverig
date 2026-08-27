@@ -117,6 +117,15 @@ int main (int argc, char* argv[])
         writePng (working, outDir.getChildFile ("job-running.png"));
         problems += countBlankButtons (main, "the main window");
 
+        const int instruments = main.getInstrumentChoiceCount();
+        std::printf ("  instrument picker offers %d\n", instruments);
+
+        if (instruments < 1)
+        {
+            std::printf ("  EMPTY INSTRUMENT PICKER — nothing selectable\n");
+            ++problems;
+        }
+
         // An effect selected, to check the editor panel lays its controls out.
         main.selectFxForSnapshot();
 
