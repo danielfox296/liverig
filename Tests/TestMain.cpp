@@ -16,6 +16,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include "FxChain.h"
+#include "InstrumentHost.h"
 #include "PresetStore.h"
 #include "dsp/NoteSegmenter.h"
 #include "StemPlayer.h"
@@ -3289,7 +3290,7 @@ static void testVibratoDoesNotChatter (double sr, int block)
                            : juce::String (tailed.back().off - 3.0, 3) + " s after the audio stopped");
 }
 
-static void testSegmenterOnRealBass (const juce::File& stem, double sr, int block)
+static void testSegmenterOnRealBass (const juce::File& stem, double, int block)
 {
     if (! stem.existsAsFile())
         return;
@@ -3361,6 +3362,87 @@ static void testVirtualMidiPort()
     }
 }
 
+
+// The whole point of hosting is that a real instrument makes a real sound from
+// the notes the tracker produced. Discovery is not the claim; audio is.
+static void testInstrumentHosting (const juce::String& wanted, double sr, int block,
+                                   bool mustSound = false)
+{
+    std::printf ("\n Hosting an AU instrument\n");
+
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    InstrumentHost host;
+    host.prepare (sr, block);
+
+    const auto names = host.getAvailableNames();
+
+    if (names.isEmpty())
+    {
+        std::printf ("  no cached instrument list — run the app once to scan\n");
+        return;
+    }
+
+    report ("finds instruments on this machine", names.size() > 0,
+            juce::String (names.size()) + ": " + names.joinIntoString (", "));
+
+    if (! names.contains (wanted))
+    {
+        report ((wanted + " is present").toRawUTF8(), false, "not in the list");
+        return;
+    }
+
+    juce::String error;
+    const bool loaded = host.load (wanted, error);
+
+    report ((wanted + " loads").toRawUTF8(), loaded, loaded ? "instantiated" : error);
+
+    if (! loaded)
+        return;
+
+    if (auto* plugin = host.getLiveInstrument())
+        std::printf ("  buses: %d in / %d out, latency %d, tail %.1f s\n",
+                     plugin->getTotalNumInputChannels(), plugin->getTotalNumOutputChannels(),
+                     plugin->getLatencySamples(), plugin->getTailLengthSeconds());
+
+    std::vector<float> left ((size_t) block, 0.0f), right ((size_t) block, 0.0f);
+
+    NoteEvent on { NoteEvent::noteOn, 60, 100 };
+    double peak = 0.0;
+
+    const int blocks = (int) (sr * 2.0) / block;
+
+    for (int i = 0; i < blocks; ++i)
+    {
+        std::fill (left.begin(), left.end(), 0.0f);
+        std::fill (right.begin(), right.end(), 0.0f);
+
+        // The note goes in on the first block and is held for the rest.
+        host.process (i == 0 ? &on : nullptr, i == 0 ? 1 : 0,
+                      left.data(), right.data(), block, 1.0f);
+
+        if (i > blocks / 8)   // let the attack start
+            for (int k = 0; k < block; ++k)
+                peak = std::max (peak, (double) std::abs (left[(size_t) k]));
+    }
+
+    if (mustSound)
+    {
+        report ((wanted + " makes a sound from a note").toRawUTF8(), peak > 0.0005,
+                "peak " + juce::String (peak, 5) + " from one held note");
+    }
+    else
+    {
+        // Whether a third-party instrument sounds straight out of the box is
+        // its business, not the host's — most sample libraries start with no
+        // patch loaded. The control above is what proves the plumbing.
+        std::printf ("  %s peak %.5f from one held note%s\n", wanted.toRawUTF8(), peak,
+                     peak > 0.0005 ? "" : "  (silent — likely needs a patch chosen in its own window)");
+    }
+
+    host.unload();
+}
+
 //==============================================================================
 int main (int argc, char* argv[])
 {
@@ -3403,6 +3485,9 @@ int main (int argc, char* argv[])
     testBassTightPreset (48000.0, 64);
     testNoteSegmentation (48000.0, 64);
     testVirtualMidiPort();
+    testInstrumentHosting ("SKY Keys", 48000.0, 64);
+    testInstrumentHosting ("DLSMusicDevice", 48000.0, 64, true);   // the control
+    testInstrumentHosting ("Vital", 48000.0, 64);
     testVibratoDoesNotChatter (48000.0, 64);
     testSegmenterOnRealBass (juce::File ("/Users/fox296/LiveRig/Songs/Plan B/bass.wav"), 48000.0, 64);
     testSubOctave (48000.0, 64);

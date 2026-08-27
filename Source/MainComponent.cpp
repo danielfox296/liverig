@@ -78,6 +78,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     fxDefs = {
         { "input",  -1,                false, "",       "Input",      -1,        { pInGain } },
         { "midi",   -1,                false, "midi",   "MIDI",       pMidiOn,   { pMidiChannel, pMidiTranspose, pMidiGate, pMidiHold, pMidiRelease, pMidiBendRange, pMidiExpression } },
+        { "instrument", -1,            false, "instrument", "Instrument", pInstOn, { pInstLevel } },
         { "comp",   FxChain::stComp,   true,  "comp",   "Compressor", pCompOn,   { pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup, pCompBlend, pCompSidechain } },
         { "eq",     FxChain::stEq,     true,  "eq",     "EQ",         pEqOn,     { pEqLoFreq, pEqLoGain, pEqMidFreq, pEqMidGain, pEqMidQ, pEqHiFreq, pEqHiGain } },
         { "filter", FxChain::stFilter, true,  "filter", "Filter",     pFltOn,    { pFltSens, pFltAttack, pFltRelease, pFltFrom, pFltTo, pFltRes, pFltMix } },
@@ -103,7 +104,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     {
         auto* panel = panels.add (new FxPanel (params, def.name, def.onParam, def.movable,
                                                def.key == "input" ? &inputMeter
-                                                    : (def.key == "drive" ? (juce::Component*) &midiStatus : nullptr)));
+                                                    : (def.key == "midi" ? (juce::Component*) &midiStatus : nullptr)));
 
         // Tapping the selected row again puts its controls away. Either way,
         // the effect tab comes forward — tapping a row means "show me this".
@@ -142,6 +143,37 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     tunerView.onModeChanged = [this] { saveSettings(); };
 
     midiStatus.onPanic = [this] { engine.getMidi().panic(); };
+
+    engine.getInstrument().beginScan();
+
+    instrumentControls.instrumentBox.onChange = [this]
+    {
+        const auto name = instrumentControls.instrumentBox.getText();
+
+        if (name.isEmpty() || name == engine.getInstrument().getLoadedName())
+            return;
+
+        juce::String error;
+
+        if (! engine.getInstrument().load (name, error))
+            songPanel.showFailure ("Could not load " + name + ".\n\n" + error);
+
+        refreshInstrumentControls();
+        saveSettings();
+    };
+
+    instrumentControls.clear.onClick = [this]
+    {
+        pluginWindow.reset();
+        engine.getInstrument().unload();
+        refreshInstrumentControls();
+        saveSettings();
+    };
+
+    instrumentControls.open.onClick = [this] { openPluginWindow(); };
+
+    if (settings.instrument.isNotEmpty())
+        engine.getInstrument().restore (settings.instrument, settings.instrumentState);
 
     songPanel.onJobStarted = [this] { resized(); grabKeyboardFocus(); };
     addChildComponent (songPanel);
@@ -301,7 +333,7 @@ void MainComponent::selectFxForSnapshot()
     // and the snapshot then documented whatever happened to be in that slot.
     for (int i = 0; i < (int) fxDefs.size(); ++i)
     {
-        if (fxDefs[(size_t) i].key == "midi")
+        if (fxDefs[(size_t) i].key == "instrument")
         {
             selectFx (i);
             return;
@@ -361,7 +393,9 @@ void MainComponent::selectFx (int index)
     {
         const auto& def = fxDefs[(size_t) selectedFx];
         fxEditor.show (def.scope, def.name, def.ids,
-                       def.key == "amp" ? &ampControls : nullptr);
+                       def.key == "amp" ? (juce::Component*) &ampControls
+                                        : (def.key == "instrument" ? (juce::Component*) &instrumentControls
+                                                                   : nullptr));
     }
     else
     {
@@ -934,6 +968,71 @@ void MainComponent::applyAmpCapture (const juce::var& captureName)
                                                 "\"" + name + "\" is not in the capture library.");
 }
 
+void MainComponent::refreshInstrumentControls()
+{
+    auto& host = engine.getInstrument();
+    auto& box = instrumentControls.instrumentBox;
+
+    box.clear (juce::dontSendNotification);
+
+    box.setTextWhenNothingSelected (host.isScanning() ? "Scanning..." : "No instrument");
+
+    int id = 1, selected = 0;
+
+    for (const auto& name : host.getAvailableNames())
+    {
+        box.addItem (name, id);
+
+        if (host.isLoaded() && name == host.getLoadedName())
+            selected = id;
+
+        ++id;
+    }
+
+    box.setSelectedId (selected, juce::dontSendNotification);
+    instrumentControls.clear.setEnabled (host.isLoaded());
+    instrumentControls.open.setEnabled (host.isLoaded());
+}
+
+void MainComponent::openPluginWindow()
+{
+    auto* plugin = engine.getInstrument().getLiveInstrument();
+
+    if (plugin == nullptr)
+        return;
+
+    if (pluginWindow != nullptr)
+    {
+        pluginWindow->toFront (true);
+        return;
+    }
+
+    auto* editor = plugin->createEditorIfNeeded();
+
+    if (editor == nullptr)
+        return;
+
+    struct PluginWindow : juce::DocumentWindow
+    {
+        PluginWindow (const juce::String& title, juce::AudioProcessorEditor* content,
+                      std::unique_ptr<juce::DocumentWindow>& slot)
+            : juce::DocumentWindow (title, juce::Colour (0xff17181c), closeButton), owner (slot)
+        {
+            setUsingNativeTitleBar (true);
+            setContentOwned (content, true);
+            centreWithSize (getWidth(), getHeight());
+            setVisible (true);
+        }
+
+        void closeButtonPressed() override { owner.reset(); }
+
+        std::unique_ptr<juce::DocumentWindow>& owner;
+    };
+
+    pluginWindow = std::make_unique<PluginWindow> (engine.getInstrument().getLoadedName(),
+                                                   editor, pluginWindow);
+}
+
 void MainComponent::refreshAmpControls()
 {
     auto& ampStage = engine.getFxChain().getAmp();
@@ -1001,6 +1100,8 @@ void MainComponent::saveSettings()
         settings.deviceState = state->toString();
 
     settings.expandedPanels = expandedStateString();
+    settings.instrument = engine.getInstrument().getLoadedName();
+    settings.instrumentState = engine.getInstrument().getStateBase64();
     settings.chainOrder = chainOrderString();
     settings.tuner = tunerView.isBassMode() ? "bass" : "guitar";
     settings.save (params);
@@ -1061,6 +1162,12 @@ void MainComponent::timerCallback()
         case SongMaker::State::installing:
         case SongMaker::State::splitting:
             break;
+    }
+
+    if (instrumentScanning != engine.getInstrument().isScanning())
+    {
+        instrumentScanning = engine.getInstrument().isScanning();
+        refreshInstrumentControls();
     }
 
     midiStatus.setNote (engine.getFxChain().getSoundingNote());

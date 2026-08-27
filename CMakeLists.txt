@@ -98,7 +98,7 @@ set(RIG_COMPILE_DEFS
     JUCE_USE_CURL=0
     JUCE_USE_CAMERA=0
     JUCE_PLUGINHOST_VST3=0
-    JUCE_PLUGINHOST_AU=0
+    JUCE_PLUGINHOST_AU=1
     JUCE_STRICT_REFCOUNTEDPOINTER=1
     JUCE_REPORT_APP_USAGE=0
     JUCE_VDSP_FRAMEWORK=1)
@@ -120,6 +120,7 @@ target_sources(LiveRig PRIVATE
     Source/SettingsStore.cpp
     Source/SongMaker.cpp
     Source/MidiSender.cpp
+    Source/InstrumentHost.cpp
     Source/PresetStore.cpp
     ${RIG_DSP_SOURCES})
 
@@ -167,6 +168,7 @@ target_sources(rig_uishot PRIVATE
     Source/SettingsStore.cpp
     Source/SongMaker.cpp
     Source/MidiSender.cpp
+    Source/InstrumentHost.cpp
     Source/PresetStore.cpp
     ${RIG_DSP_SOURCES})
 
@@ -192,6 +194,7 @@ juce_add_console_app(rig_tests PRODUCT_NAME "rig_tests")
 
 target_sources(rig_tests PRIVATE
     Tests/TestMain.cpp
+    Source/InstrumentHost.cpp
     Source/PresetStore.cpp
     ${RIG_DSP_SOURCES})
 
@@ -206,9 +209,13 @@ target_include_directories(rig_tests PRIVATE Source)
 target_link_libraries(rig_tests PRIVATE
     nam_core
     juce::juce_audio_devices
+    juce::juce_audio_processors
     juce::juce_audio_formats
     juce::juce_dsp
     juce::juce_core
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
+
+# Hosting Audio Units drags in AUGenericView, which lives here.
+target_link_libraries(rig_tests PRIVATE "-framework CoreAudioKit")

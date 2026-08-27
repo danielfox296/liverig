@@ -68,6 +68,8 @@ private:
 
     void chooseAmpCapture();
     void refreshAmpControls();
+    void refreshInstrumentControls();
+    void openPluginWindow();
     void loadAmpFile (const juce::File& file);
     void applyAmpCapture (const juce::var& captureName);
 
@@ -145,6 +147,39 @@ private:
 
     AmpControls ampControls;
 
+    // The Instrument row's picker, shown above its faders: every AU instrument
+    // on the machine, and a way into the plugin's own window.
+    struct InstrumentControls : juce::Component
+    {
+        InstrumentControls()
+        {
+            open.setButtonText ("Open...");
+            clear.setButtonText ("Clear");
+            open.setWantsKeyboardFocus (false);
+            clear.setWantsKeyboardFocus (false);
+            instrumentBox.setTextWhenNothingSelected ("No instrument");
+            addAndMakeVisible (instrumentBox);
+            addAndMakeVisible (open);
+            addAndMakeVisible (clear);
+        }
+
+        void resized() override
+        {
+            auto b = getLocalBounds();
+            open.setBounds (b.removeFromRight (72));
+            b.removeFromRight (4);
+            clear.setBounds (b.removeFromRight (52));
+            b.removeFromRight (6);
+            instrumentBox.setBounds (b);
+        }
+
+        juce::ComboBox instrumentBox;
+        juce::TextButton open, clear;
+    };
+
+    InstrumentControls instrumentControls;
+    std::unique_ptr<juce::DocumentWindow> pluginWindow;
+
     juce::OwnedArray<StemStrip> stemStrips;
     juce::Viewport fxViewport;
     juce::Component fxHolder;
@@ -164,6 +199,7 @@ private:
     SongMakerPanel songPanel { songMaker };
     JobStrip jobStrip { songMaker };
     bool jobStripShowing = false;
+    bool instrumentScanning = true;
 
     bool presentCache[StemPlayer::numStems] { true, true, true, true };
     float snapshot[(size_t) NumParams] {};

@@ -20,6 +20,7 @@ public:
     juce::String songFolder;
     juce::String deviceState;   // AudioDeviceManager state, as XML text
     juce::String expandedPanels;
+    juce::String instrument, instrumentState;
     juce::String chainOrder;    // movable stage keys, comma-separated, top to bottom
     juce::String tuner;         // "bass" or "guitar"
     juce::String ampModel;      // path of the loaded NAM capture, empty for none

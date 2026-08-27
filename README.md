@@ -119,6 +119,7 @@ any order in the app; Input, Reverb and Live out hold their places.
 |---|--------|----------|
 | 1 | Input gain | trim, meter (a 5 Hz DC blocker sits here too) |
 | — | MIDI | channel, transpose, gate, hold, release, bend range, expression |
+| — | Instrument | an AU instrument played by those notes, and its level |
 | 2 | Compressor | threshold, ratio, attack, release, makeup, blend, sidechain |
 | 3 | EQ | low shelf, parametric mid (freq/gain/Q), high shelf |
 | 4 | Filter | sens, attack, release, from, to, res, mix — envelope filter |
@@ -230,6 +231,31 @@ A stuck pad note is the worst thing that can happen on stage, so there are three
 independent ways a note ends — confidence dropping, the level gate, and a
 maximum length — and a **PANIC** button that stays visible in the MIDI row's
 header whether or not the row is open.
+
+### Instrument
+
+The MIDI row can drive another application, but the Instrument row plays an
+Audio Unit **inside** the rig: one app, one buffer, one output, and no
+inter-application routing. The pad's latency is then just the detection
+latency, with nothing stacked on top of it.
+
+Pick from the box, hit **Open...** for the plugin's own window, and set its
+level. What loads and the patch it is on are both saved with your settings.
+
+**Logic's instruments cannot appear here.** Alchemy, Sculpture, ES2 and the
+rest are registered for Apple's hosts only — they are not installed as Audio
+Units and no third-party host can see them. What is reachable is everything
+installed as a normal AU. On this machine that is nine: Vital, LABS, Kontakt 5,
+SKY Keys, MPowerSynth, Splice Bridge, and Apple's three built-ins.
+
+The first scan takes about forty-five seconds, because identifying an Audio
+Unit means instantiating it. It runs on a background thread with the app fully
+usable and the result is cached, so it happens once. Only components whose type
+says instrument are touched — this machine has 341 of them and one refuses to
+open at all, so scanning everything would be slow and fragile for no gain.
+
+A sample library that starts with no patch loaded will be silent until you
+choose one in its own window. That is the plugin's business, not the host's.
 
 ### What the (B) stages are for
 

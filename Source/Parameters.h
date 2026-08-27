@@ -53,6 +53,9 @@ enum ParamId
     pMidiOn, pMidiChannel, pMidiTranspose, pMidiGate, pMidiHold, pMidiRelease,
     pMidiBendRange, pMidiExpression,
 
+    // An AU instrument played by those notes, inside the rig.
+    pInstOn, pInstLevel,
+
     pLiveOut,
 
     pMasterGain,

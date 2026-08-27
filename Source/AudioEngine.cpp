@@ -98,6 +98,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     scratch.clear();
 
     fx.prepare (rate, maxBlock);
+    instrument.prepare (rate, maxBlock);
     stems.prepare (rate, maxBlock);
 
     ducker.prepare (rate);
@@ -169,6 +170,13 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
         for (int e = 0; e < midiCount; ++e)
             midi.push (events[e]);
+
+        if (params.getBool (pInstOn))
+        {
+            const float target = juce::Decibels::decibelsToGain (params.get (pInstLevel), -60.0f);
+            instrumentGain += 0.25f * (target - instrumentGain);
+            instrument.process (events, midiCount, liveL, liveR, n, instrumentGain);
+        }
 
         // --- playback lane ---
         juce::FloatVectorOperations::clear (mixL, n);

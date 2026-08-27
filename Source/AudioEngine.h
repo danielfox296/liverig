@@ -5,6 +5,7 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 
 #include "FxChain.h"
+#include "InstrumentHost.h"
 #include "MidiSender.h"
 #include "Parameters.h"
 #include "StemPlayer.h"
@@ -26,6 +27,7 @@ public:
 
     juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
     MidiSender& getMidi() noexcept                        { return midi; }
+    InstrumentHost& getInstrument() noexcept              { return instrument; }
 
     StemPlayer& getStemPlayer() noexcept                  { return stems; }
     FxChain& getFxChain() noexcept                        { return fx; }
@@ -67,6 +69,11 @@ private:
     // The tracker as a note source. FxChain produces the events; carrying
     // them to a port is the engine's job, not the chain's.
     MidiSender midi;
+
+    // An AU instrument played by the same notes, summed into the live lane
+    // so it counts as part of the performance rather than as backing.
+    InstrumentHost instrument;
+    float instrumentGain = 1.0f;
 
     // Playback-lane dynamics: the song is limited into the headroom the
     // instrument leaves, so a song never ducks the playing.
