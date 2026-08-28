@@ -19,6 +19,7 @@
 #include "InstrumentHost.h"
 #include "PresetStore.h"
 #include "dsp/NoteSegmenter.h"
+#include "dsp/TunerFilter.h"
 #include "StemPlayer.h"
 #include "Parameters.h"
 #include "dsp/AmpModel.h"
@@ -3649,6 +3650,122 @@ static void testMidiThruGatesTheLiveLane (double sr, int block)
     }
 }
 
+// The tuner display. The tracker is honest about every frame; the filter's
+// job is to show the underlying pitch — steady, slightly behind the truth,
+// and immune to the flicks that make a raw readout unusable.
+static void testTunerFilter()
+{
+    std::printf ("\n Tuner conditioning (30 Hz UI ticks)\n");
+
+    const auto hzOf = [] (double semis) { return (float) (440.0 * std::pow (2.0, (semis - 69.0) / 12.0)); };
+
+    // -- first frame after silence reads immediately --
+    {
+        TunerFilter f;
+        const auto r = f.push (55.3f, 1.0f, 0.2f);
+
+        report ("first confident frame goes live at once", r.live && r.locked == 33,
+                r.live ? "locked " + juce::String (r.locked) : juce::String ("still idle"));
+    }
+
+    // -- frame noise and octave flicks must not reach the needle --
+    {
+        TunerFilter f;
+        uint32_t seed = 0x2545f491u;
+        float worst = 0.0f;
+        bool lockedWrong = false;
+
+        for (int tick = 0; tick < 120; ++tick)
+        {
+            seed = seed * 1664525u + 1013904223u;
+            const float noise = (float) (int32_t) seed * 4.6566129e-10f * 0.08f;   // +-8 cents
+
+            // Two consecutive octave flicks every half second — the worst
+            // realistic tracker behaviour, and one frame short of a real move.
+            const bool flick = (tick % 15) < 2 && tick > 0;
+            const float m = (flick ? 45.0f : 33.0f) + noise;
+
+            const auto r = f.push (hzOf (m), 0.9f, 0.2f);
+
+            if (tick > 5)
+            {
+                worst = std::max (worst, std::abs (r.note - 33.0f) * 100.0f);
+                lockedWrong = lockedWrong || r.locked != 33;
+            }
+        }
+
+        report ("octave flicks never reach the display", ! lockedWrong && worst < 10.0f,
+                "worst " + juce::String (worst, 1) + " cents from A1");
+    }
+
+    // -- a real note change snaps rather than glides --
+    {
+        TunerFilter f;
+        int changedAt = -1;
+        bool glided = false;
+
+        for (int tick = 0; tick < 60; ++tick)
+        {
+            const float m = tick < 30 ? 33.0f : 38.0f;
+            const auto r = f.push (hzOf (m), 0.9f, 0.2f);
+
+            if (tick >= 30)
+            {
+                if (r.locked == 38 && changedAt < 0)
+                    changedAt = tick - 30;
+
+                if (r.locked != 33 && r.locked != 38)
+                    glided = true;
+            }
+        }
+
+        report ("a new note lands within 200 ms, no glide", ! glided && changedAt >= 0 && changedAt <= 6,
+                changedAt < 0 ? juce::String ("never moved")
+                              : juce::String (changedAt * 33) + " ms, straight to D2");
+    }
+
+    // -- vibrato reads as its centre, not as the wobble --
+    {
+        TunerFilter f;
+        float worst = 0.0f;
+
+        for (int tick = 0; tick < 90; ++tick)
+        {
+            const double t = tick / 30.0;
+            const float m = 33.0f + 0.30f * (float) std::sin (6.283185307179586 * 5.0 * t);
+            const auto r = f.push (hzOf (m), 0.9f, 0.2f);
+
+            if (tick > 15)
+                worst = std::max (worst, std::abs (r.note - 33.0f) * 100.0f);
+        }
+
+        report ("+-30 cent vibrato shows near its centre", worst < 10.0f,
+                "worst " + juce::String (worst, 1) + " cents shown");
+    }
+
+    // -- silence holds briefly, then admits it --
+    {
+        TunerFilter f;
+
+        for (int tick = 0; tick < 10; ++tick)
+            f.push (hzOf (33.0f), 0.9f, 0.2f);
+
+        bool heldAt10 = false, idleAt12 = false;
+
+        for (int tick = 1; tick <= 12; ++tick)
+        {
+            const auto r = f.push (0.0f, 0.0f, 0.0f);
+
+            if (tick == 10) heldAt10 = r.live && r.locked == 33;
+            if (tick == 12) idleAt12 = ! r.live && r.locked < 0;
+        }
+
+        report ("holds ~400 ms through silence, then idles", heldAt10 && idleAt12,
+                juce::String (heldAt10 ? "held" : "dropped early") + ", "
+                  + juce::String (idleAt12 ? "then idle" : "then stuck"));
+    }
+}
+
 static void testSegmenterOnRealBass (const juce::File& stem, double, int block)
 {
     if (! stem.existsAsFile())
@@ -3853,6 +3970,7 @@ int main (int argc, char* argv[])
     testHoldSurvivesRealTracking (48000.0, 64);
     testTrackerOnDominantSecondHarmonic (48000.0, 64);
     testMidiThruGatesTheLiveLane (48000.0, 64);
+    testTunerFilter();
     testSegmenterOnRealBass (juce::File ("/Users/fox296/LiveRig/Songs/Plan B/bass.wav"), 48000.0, 64);
     testSubOctave (48000.0, 64);
     testCabFilter (48000.0, 64);

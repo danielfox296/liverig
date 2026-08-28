@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "../dsp/TunerFilter.h"
 #include "Type.h"
 
 namespace rig
@@ -10,6 +11,9 @@ namespace rig
 // The tuner tab. It reads the same pitch tracker that drives the octave and
 // the synth — YIN plus full-rate refinement, accurate to well under a cent —
 // so there is no separate detector to disagree with the rig.
+//
+// The raw tracker is deliberately nervous; TunerFilter turns that stream
+// into the steady, slightly-behind-the-truth reading a player can act on.
 //
 // Chromatic at heart: it names whatever note is sounding and shows the cents
 // off. The instrument switch just chooses which string row is drawn, so a
@@ -49,21 +53,7 @@ public:
     // Fed from the UI timer while the tab is showing.
     void update (float trackedHz, float confidence, float inputPeak)
     {
-        const bool sounding = trackedHz > 20.0f && confidence > 0.5f && inputPeak > 0.004f;
-
-        if (sounding)
-        {
-            hz = trackedHz;
-            // The note readout holds briefly through tracker flickers so it
-            // reads steady rather than strobing.
-            holdCounter = 12;
-        }
-        else if (holdCounter > 0)
-        {
-            --holdCounter;
-        }
-
-        live = holdCounter > 0;
+        reading = filter.push (trackedHz, confidence, inputPeak);
         repaint();
     }
 
@@ -87,7 +77,7 @@ public:
         auto b = getLocalBounds().reduced (12, 10);
         b.removeFromTop (34);   // instrument switch row
 
-        if (! live)
+        if (! reading.live)
         {
             g.setColour (juce::Colour (0xff565963));
             g.setFont (rigFont (14.0f));
@@ -96,11 +86,11 @@ public:
             return;
         }
 
-        // Nearest chromatic note and the cents to it.
-        const double midi = 69.0 + 12.0 * std::log2 ((double) hz / 440.0);
-        const int note = (int) std::lround (midi);
-        const double target = 440.0 * std::pow (2.0, (note - 69) / 12.0);
-        const double cents = 1200.0 * std::log2 ((double) hz / target);
+        // The filtered pitch against its locked note name — needle, name and
+        // the Hz text all derive from the same smoothed value, so they agree.
+        const int note = reading.locked;
+        const double cents = 100.0 * ((double) reading.note - (double) note);
+        const double hz = 440.0 * std::pow (2.0, ((double) reading.note - 69.0) / 12.0);
         const bool inTune = std::abs (cents) < 3.0;
 
         static const char* names[12] { "C", "C#", "D", "D#", "E", "F",
@@ -196,9 +186,8 @@ private:
     }
 
     juce::TextButton bassButton, guitarButton;
-    float hz = 0.0f;
-    bool live = false;
-    int holdCounter = 0;
+    TunerFilter filter;
+    TunerFilter::Reading reading;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TunerView)
 };

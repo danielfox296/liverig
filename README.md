@@ -79,7 +79,11 @@ Everything happens in the window. There is nothing to run in a terminal.
 - **The panel beside the effect list has tabs.** EFFECT is the parameter
   editor; **TUNER** is a chromatic tuner running on the same pitch tracker as
   the octave and synth — accurate to well under a cent across the whole bass
-  register. Big note name, cents needle with a green in-tune zone, and a
+  register. The display is deliberately slower than the tracker: a median
+  over the last ~300 ms eats octave flicks, the needle glides to it, and the
+  note name is locked with hysteresis — steady and actionable, the way the
+  tuners people trust behave. A genuinely new note still snaps in under
+  100 ms. Big note name, cents needle with a green in-tune zone, and a
   string row for reference — the BASS/GUITAR switch picks which strings are
   drawn, and is remembered. Tap any effect row to come back to the editor.
 - **Master** is the last row: one gain over the whole mix — stems and live
