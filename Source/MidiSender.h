@@ -64,6 +64,12 @@ private:
     juce::AbstractFifo fifo { capacity };
     std::vector<NoteEvent> queue;
 
+    // Drain-thread state: a note is always finished on the channel it
+    // started on, and bends follow the sounding note, so moving the channel
+    // control mid-note cannot strand a pad note or bend the wrong voice.
+    int activeChannel = 1;
+    uint8_t noteChannel[128] {};
+
     std::atomic<bool> running { false };
     std::atomic<int> channel { 1 };
     std::atomic<int> expression { 2 };

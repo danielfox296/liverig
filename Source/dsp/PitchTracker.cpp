@@ -167,6 +167,27 @@ void PitchTracker::analyse() noexcept
                 best = tau;
     }
 
+    // The first dip keeps YIN off the sub-octave, but a dominant second
+    // harmonic sinks a dip at half the true period too — the classic way a
+    // bass tracker reads an octave up. The tell is asymmetric: a false
+    // half-period dip is always mediocre (the fundamental refuses to line
+    // up), while the true period below it is excellent. So a rescue is only
+    // considered when the winning dip is imperfect, and only a clearly
+    // better dip at double the lag takes it — on a clean tone both dips sit
+    // at the noise floor and nothing moves.
+    if (2 * best + 2 <= tMax && cmnd[(size_t) best] > 0.02f)
+    {
+        int doubled = 2 * best;
+
+        for (int tau = 2 * best - 2; tau <= 2 * best + 2; ++tau)
+            if (cmnd[(size_t) tau] < cmnd[(size_t) doubled])
+                doubled = tau;
+
+        if (cmnd[(size_t) doubled] < 0.5f * cmnd[(size_t) best]
+             && cmnd[(size_t) doubled] < 0.03f)
+            best = doubled;
+    }
+
     const float quality = cmnd[(size_t) best];
 
     if (quality > 0.4f)          // noisy, chordal or transient — hold the last period

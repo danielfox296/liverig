@@ -58,8 +58,10 @@ enum ParamId
     pRevOn, pRevSize, pRevDamp, pRevPre, pRevMod, pRevMix,
 
     // MIDI out: the tracker as a note source, aimed at swells and pads.
+    // Thru decides whether the live lane still sounds while MIDI is on —
+    // off means the rig is a controller and only the pad speaks.
     pMidiOn, pMidiChannel, pMidiTranspose, pMidiGate, pMidiHold, pMidiRelease,
-    pMidiBendRange, pMidiExpression,
+    pMidiBendRange, pMidiExpression, pMidiThru,
 
     // An AU instrument played by those notes, inside the rig.
     pInstOn, pInstLevel,

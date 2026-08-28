@@ -1,5 +1,7 @@
 #include "MidiSender.h"
 
+#include <algorithm>
+
 namespace rig
 {
 
@@ -28,6 +30,8 @@ bool MidiSender::open()
 
     failure = {};
     fifo.reset();
+    activeChannel = channel.load (std::memory_order_relaxed);
+    std::fill (noteChannel, noteChannel + 128, (uint8_t) 0);
     dropped.store (0, std::memory_order_relaxed);
     running.store (true, std::memory_order_relaxed);
     startThread (juce::Thread::Priority::high);
@@ -63,6 +67,10 @@ void MidiSender::panic()
     {
         output->sendMessageNow (juce::MidiMessage::allNotesOff (ch));
         output->sendMessageNow (juce::MidiMessage::allSoundOff (ch));
+
+        // A stuck note is only half the disaster — a stuck bend detunes
+        // every note that follows it.
+        output->sendMessageNow (juce::MidiMessage::pitchWheel (ch, 8192));
     }
 }
 
@@ -115,21 +123,31 @@ void MidiSender::drain()
             switch (event.type)
             {
                 case NoteEvent::noteOn:
+                    // A fresh channel may hold a wheel some earlier note bent;
+                    // the segmenter's recentre went to the previous channel.
+                    if (ch != activeChannel)
+                        output->sendMessageNow (juce::MidiMessage::pitchWheel (ch, 8192));
+
+                    noteChannel[event.a & 127] = (uint8_t) ch;
+                    activeChannel = ch;
                     output->sendMessageNow (juce::MidiMessage::noteOn (ch, event.a, (juce::uint8) event.b));
                     break;
 
                 case NoteEvent::noteOff:
-                    output->sendMessageNow (juce::MidiMessage::noteOff (ch, event.a));
+                {
+                    const uint8_t started = noteChannel[event.a & 127];
+                    output->sendMessageNow (juce::MidiMessage::noteOff (started != 0 ? started : ch, event.a));
                     break;
+                }
 
                 case NoteEvent::bend:
-                    output->sendMessageNow (juce::MidiMessage::pitchWheel (ch, event.a));
+                    output->sendMessageNow (juce::MidiMessage::pitchWheel (activeChannel, event.a));
                     break;
 
                 case NoteEvent::expression:
                     if (expr > 0)
                         output->sendMessageNow (juce::MidiMessage::controllerEvent (
-                                                    ch, expr == 1 ? 1 : 11, event.a));
+                                                    activeChannel, expr == 1 ? 1 : 11, event.a));
                     break;
             }
         }

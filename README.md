@@ -118,7 +118,7 @@ any order in the app; Input, Reverb and Live out hold their places.
 | # | Effect | Controls |
 |---|--------|----------|
 | 1 | Input gain | trim, meter (a 5 Hz DC blocker sits here too) |
-| — | MIDI | channel, transpose, gate, hold, release, bend range, expression, instrument, level |
+| — | MIDI | channel, transpose, gate, hold, release, bend range, expression, live thru, instrument, level |
 | 2 | Compressor | threshold, ratio, attack, release, makeup, blend, sidechain |
 | 3 | EQ | low shelf, parametric mid (freq/gain/Q), high shelf |
 | 4 | Filter | sens, attack, release, from, to, res, mix — envelope filter |
@@ -218,7 +218,15 @@ vibrato retriggering a pad every cycle.
 **Expression is the control that matters, not velocity.** A swell's loudness
 comes from the swell, not the pluck, so the envelope drives CC11 (or CC1)
 continuously while the note sustains. That is volume-pedal swells without the
-volume pedal. Pitch bend follows the tracker for slides.
+volume pedal. Pitch bend follows the tracker for slides — within the wheel's
+range only, and every note starts on an explicitly recentred wheel, because
+the receiver's wheel keeps whatever the previous note left on it and a note
+started on a stale bend plays detuned with nothing left to correct it.
+
+**With MIDI on, the bass itself usually should not sound.** Driving a pad
+means the rig is a controller, so **Live thru** decides whether the live lane
+still reaches the mix: off — the default — mutes the bass and leaves the pad;
+on keeps both for layering. The tracker hears the input either way.
 
 Two things are worth knowing. It is monophonic — YIN cannot do double stops —
 and it never trusts the period on its own: the tracker deliberately holds its

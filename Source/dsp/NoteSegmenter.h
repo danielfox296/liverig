@@ -52,6 +52,7 @@ public:
         candidate = -1;
         candidateSamples = 0;
         quietSamples = 0;
+        graceSamples = 0;
         noteSamples = 0;
         lastBend = 8192;
         lastExpression = -1;
@@ -104,8 +105,12 @@ public:
         if (live && nearest >= 0 && nearest <= 127)
         {
             quietSamples = 0;
+            graceSamples = 0;
 
-            if (nearest == candidate)
+            // Measured from the candidate's centre, not re-rounded every
+            // frame: a pitch sat on a semitone boundary must not flip the
+            // candidate back and forth and reset the hold each time.
+            if (candidate >= 0 && std::abs (exact - (double) candidate) <= 0.65)
                 candidateSamples += numSamples;
             else
             {
@@ -116,8 +121,16 @@ public:
         else
         {
             quietSamples += numSamples;
-            candidate = -1;
-            candidateSamples = 0;
+            graceSamples += numSamples;
+
+            // Confidence flickers frame to frame on real playing. One
+            // doubtful frame must not erase a hold that is nearly served, so
+            // a candidate survives a short grace — frozen, not accumulating.
+            if (graceSamples > holdSamples / 3)
+            {
+                candidate = -1;
+                candidateSamples = 0;
+            }
         }
 
         const bool settled = candidate >= 0 && candidateSamples >= holdSamples;
@@ -133,10 +146,15 @@ public:
                                            && candidateSamples >= holdSamples * 2
                                            && clearlyElsewhere;
 
+        // The receiver's wheel is wherever the previous note's bends left it,
+        // and nothing but an explicit recentre clears it — a note started on a
+        // stale wheel plays detuned until the next bend happens to move, which
+        // on a steady pitch is never.
         if (sounding < 0)
         {
-            if (settled && written < maxEvents)
+            if (settled && written + 1 < maxEvents)
             {
+                out[written++] = { NoteEvent::bend, (int16_t) 8192, 0 };
                 out[written++] = { NoteEvent::noteOn, (int16_t) candidate, (int16_t) velocity (levelDb) };
                 sounding = candidate;
                 noteSamples = 0;
@@ -152,13 +170,15 @@ public:
             {
                 // The new note goes out before the old one stops, so a pad
                 // moves rather than gapping.
-                if (written + 1 < maxEvents)
+                if (written + 2 < maxEvents)
                 {
+                    out[written++] = { NoteEvent::bend, (int16_t) 8192, 0 };
                     out[written++] = { NoteEvent::noteOn, (int16_t) candidate, (int16_t) velocity (levelDb) };
                     out[written++] = { NoteEvent::noteOff, (int16_t) sounding, 0 };
                     sounding = candidate;
                     noteSamples = 0;
                     lastBend = 8192;
+                    lastExpression = -1;
                 }
             }
             else if (quietSamples >= releaseSamples || noteSamples >= maxNoteSamples)
@@ -176,13 +196,20 @@ public:
             if (bendRange > 0 && written < maxEvents)
             {
                 const double offset = exact - (double) sounding;
-                const int value = std::clamp ((int) std::lround (8192.0 + 8191.0 * offset / bendRange),
-                                              0, 16383);
 
-                if (std::abs (value - lastBend) >= 32)
+                // Past the wheel's reach this is a transpose jump or a
+                // tracker glitch, not vibrato: leave the wheel where it is
+                // and let the retrigger logic deal in whole notes.
+                if (std::abs (offset) <= (double) bendRange)
                 {
-                    lastBend = value;
-                    out[written++] = { NoteEvent::bend, (int16_t) value, 0 };
+                    const int value = std::clamp ((int) std::lround (8192.0 + 8191.0 * offset / bendRange),
+                                                  0, 16383);
+
+                    if (std::abs (value - lastBend) >= 32)
+                    {
+                        lastBend = value;
+                        out[written++] = { NoteEvent::bend, (int16_t) value, 0 };
+                    }
                 }
             }
 
@@ -217,7 +244,7 @@ private:
     int transpose = 12, bendRange = 2;
 
     int64_t holdSamples = 2160, releaseSamples = 8640, maxNoteSamples = 1440000;
-    int64_t candidateSamples = 0, quietSamples = 0, noteSamples = 0;
+    int64_t candidateSamples = 0, quietSamples = 0, graceSamples = 0, noteSamples = 0;
 
     int sounding = -1, candidate = -1;
     int lastBend = 8192, lastExpression = -1;

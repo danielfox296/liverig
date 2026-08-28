@@ -240,7 +240,13 @@ bool FxChain::changed (int paramId) noexcept
 void FxChain::updateFromParams() noexcept
 {
     inGain.setTargetValue (juce::Decibels::decibelsToGain (params.get (pInGain), -60.0f));
-    liveOut.setTargetValue (juce::Decibels::decibelsToGain (params.get (pLiveOut), -60.0f));
+
+    // With MIDI on and Thru off, the rig is a controller: the live lane
+    // leaves the mix and only the pad speaks. The tracker keeps hearing the
+    // input either way — it taps the chain ahead of this gain.
+    const bool thruMuted = params.getBool (pMidiOn) && ! params.getBool (pMidiThru);
+    liveOut.setTargetValue (thruMuted ? 0.0f
+                                      : juce::Decibels::decibelsToGain (params.get (pLiveOut), -60.0f));
 
     if (changed (pCompThresh))  comp.setThreshold (params.get (pCompThresh));
     if (changed (pCompRatio))   comp.setRatio (params.get (pCompRatio));
@@ -911,7 +917,7 @@ void FxChain::process (float* mono, float* left, float* right, int numSamples) n
     tracker.process (mono, numSamples);
     shifter.setPeriod (tracker.getPeriodSamples());
     shifter2.setPeriod (tracker.getPeriodSamples());
-subOctave.setPeriod (tracker.getPeriodSamples());
+    subOctave.setPeriod (tracker.getPeriodSamples());
 
     midiEventCount = 0;
 

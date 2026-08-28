@@ -3398,6 +3398,257 @@ static void testVibratoDoesNotChatter (double sr, int block)
                            : juce::String (tailed.back().off - 3.0, 3) + " s after the audio stopped");
 }
 
+// Play a pad two octaves up, bring the transpose back, and the pitch must
+// return to true. The receiving synth's wheel is invisible from here, so the
+// only safe protocol is to recentre it with every note this side starts — and
+// never to chase a transpose jump with a bend the wheel cannot reach anyway.
+static void testTransposeComesBackTrue (double sr, int block)
+{
+    std::printf ("\n MIDI transpose returns to true pitch (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    PitchTracker tracker;
+    NoteSegmenter seg;
+    tracker.prepare (sr);
+    seg.prepare (sr);
+    seg.setParams (-42.0f, 45.0f, 180.0f, 24, 2);
+
+    // One long steady note; the transpose drops to 0 midway through it.
+    std::vector<float> in;
+    makeNote (in, sr, 55.0, 4.5, 0.45f);
+    in.insert (in.end(), (size_t) (sr * 0.6), 0.0f);
+
+    const int switchAt = (int) (sr * 2.2);
+
+    NoteEvent events[8];
+    std::vector<NoteEvent> wire;
+    bool switched = false;
+
+    for (int i = 0; i + block <= (int) in.size(); i += block)
+    {
+        if (! switched && i >= switchAt)
+        {
+            seg.setParams (-42.0f, 45.0f, 180.0f, 0, 2);
+            switched = true;
+        }
+
+        tracker.process (in.data() + i, block);
+        const int count = seg.process (in.data() + i, block, tracker.getPeriodSamples(),
+                                       tracker.getConfidence(), events, 8);
+
+        for (int e = 0; e < count; ++e)
+            wire.push_back (events[e]);
+    }
+
+    int noteOns = 0, uncentred = 0, railBends = 0;
+    int lastBendOnWire = 8192;
+    int firstNote = -1, lastNote = -1;
+
+    for (const auto& e : wire)
+    {
+        if (e.type == NoteEvent::bend)
+        {
+            lastBendOnWire = e.a;
+
+            if (e.a == 0 || e.a == 16383)
+                ++railBends;
+        }
+        else if (e.type == NoteEvent::noteOn)
+        {
+            ++noteOns;
+
+            if (lastBendOnWire != 8192)
+                ++uncentred;
+
+            if (firstNote < 0)
+                firstNote = e.a;
+
+            lastNote = e.a;
+        }
+    }
+
+    report ("the transposed and true notes both speak", noteOns == 2 && firstNote == 57 && lastNote == 33,
+            juce::String (noteOns) + " notes: first " + juce::String (firstNote)
+              + ", last " + juce::String (lastNote) + " (wanted 57 then 33)");
+
+    // The previous note's bend is still latched in the receiver at the moment
+    // a new note starts; nothing but an explicit recentre clears it.
+    report ("every note starts on a centred wheel", noteOns > 0 && uncentred == 0,
+            juce::String (uncentred) + " of " + juce::String (noteOns) + " notes started detuned");
+
+    report ("the transpose jump is not chased to the rails", railBends == 0,
+            juce::String (railBends) + " full-scale bends on the wire");
+}
+
+// The tracker's confidence flickers on real playing. One doubtful frame must
+// not send the hold back to zero, and a pitch that straddles a semitone
+// boundary must not flip the candidate forever — both read as "tracking is
+// broken" on stage even though the tracker itself is fine.
+static void testHoldSurvivesRealTracking (double sr, int block)
+{
+    std::printf ("\n MIDI hold under real-world confidence (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    std::vector<float> tone ((size_t) block, 0.3f);   // the env only reads level
+    NoteEvent events[8];
+
+    // -- a periodic one-frame confidence dropout --
+    {
+        NoteSegmenter seg;
+        seg.prepare (sr);
+        seg.setParams (-42.0f, 45.0f, 180.0f, 0, 2);
+
+        const float period = (float) (sr / 110.0);
+        const int flickerEvery = juce::jmax (1, (int) (sr * 0.030) / block);   // every 30 ms
+
+        double onAt = -1.0;
+        int blocks = 0;
+
+        for (int i = 0; i * block < (int) (sr * 0.5); ++i, ++blocks)
+        {
+            const bool flicker = (i > 0 && (i % flickerEvery) == 0);
+            const int count = seg.process (tone.data(), block, period,
+                                           flicker ? 0.1f : 0.9f, events, 8);
+
+            for (int e = 0; e < count; ++e)
+                if (events[e].type == NoteEvent::noteOn && onAt < 0.0)
+                    onAt = (i + 1) * block / sr;
+        }
+
+        report ("a one-frame flicker does not restart the hold", onAt >= 0.0 && onAt < 0.15,
+                onAt < 0.0 ? "no note within 500 ms"
+                           : "note on after " + juce::String (onAt * 1000.0, 0) + " ms");
+    }
+
+    // -- a pitch sat between two note names --
+    {
+        NoteSegmenter seg;
+        seg.prepare (sr);
+        seg.setParams (-42.0f, 45.0f, 180.0f, 0, 2);
+
+        // Alternate between 45 cents either side of the A/A# boundary, the way
+        // a slightly sharp string reads from frame to frame.
+        const float hzLow  = 440.0f * std::pow (2.0f, (45.45f - 69.0f) / 12.0f);
+        const float hzHigh = 440.0f * std::pow (2.0f, (45.55f - 69.0f) / 12.0f);
+
+        int noteOns = 0;
+        double onAt = -1.0;
+
+        for (int i = 0; i * block < (int) (sr * 1.0); ++i)
+        {
+            const float hz = (i & 1) != 0 ? hzHigh : hzLow;
+            const int count = seg.process (tone.data(), block, (float) sr / hz, 0.9f, events, 8);
+
+            for (int e = 0; e < count; ++e)
+            {
+                if (events[e].type == NoteEvent::noteOn)
+                {
+                    ++noteOns;
+
+                    if (onAt < 0.0)
+                        onAt = (i + 1) * block / sr;
+                }
+            }
+        }
+
+        report ("a boundary pitch settles instead of flip-flopping", noteOns == 1 && onAt < 0.15,
+                noteOns == 0 ? "never spoke"
+                             : juce::String (noteOns) + " notes, first after "
+                                 + juce::String (onAt * 1000.0, 0) + " ms");
+    }
+}
+
+// Plucked bass through a pickup often hands the tracker more second harmonic
+// than fundamental — the classic way a bass tracker reads an octave up. YIN's
+// first-dip rule alone takes the bait; the true period leaves a much deeper
+// dip at double the lag, and that is checkable.
+static void testTrackerOnDominantSecondHarmonic (double sr, int block)
+{
+    std::printf ("\n Tracker with a dominant second harmonic (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    for (double f0 : { 55.0, 41.2 })
+    {
+        const int n = (int) (sr * 2.0);
+        std::vector<float> in ((size_t) n, 0.0f);
+        double p1 = 0.3, p2 = 1.1, p3 = 0.7;
+
+        for (int i = 0; i < n; ++i)
+        {
+            const double s = 0.2 * std::sin (p1) + 1.0 * std::sin (p2) + 0.15 * std::sin (p3);
+            p1 += 6.283185307179586 * f0 / sr;
+            p2 += 6.283185307179586 * 2.0 * f0 / sr;
+            p3 += 6.283185307179586 * 3.0 * f0 / sr;
+            in[(size_t) i] = (float) (s * 0.35);
+        }
+
+        PitchTracker tracker;
+        tracker.prepare (sr);
+
+        for (int i = 0; i + block <= n; i += block)
+            tracker.process (in.data() + i, block);
+
+        const double got = tracker.getFrequency();
+        const double off = cents (got, f0);
+
+        report ((juce::String (f0, 1) + " Hz with 2nd harmonic 5x the fundamental").toRawUTF8(),
+                std::abs (off) < 60.0,
+                juce::String (got, 2) + " Hz, " + juce::String (off, 0) + " cents off");
+    }
+}
+
+// With MIDI on the rig is usually a controller: the pad speaks and the bass
+// does not, unless Thru is deliberately on. Either way the tracker must keep
+// hearing the input — it taps the chain ahead of the output gain.
+static void testMidiThruGatesTheLiveLane (double sr, int block)
+{
+    std::printf ("\n MIDI thru gating the live lane (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    struct Case { const char* label; bool midiOn; bool thru; bool audible; };
+
+    const Case cases[] =
+    {
+        { "MIDI off: the live lane sounds",        false, false, true  },
+        { "MIDI on, thru off: the bass is out",    true,  false, false },
+        { "MIDI on, thru on: the layer stays",     true,  true,  true  },
+    };
+
+    for (const auto& c : cases)
+    {
+        ParamStore params;
+        params.set (pMidiOn, c.midiOn ? 1.0f : 0.0f);
+        params.set (pMidiThru, c.thru ? 1.0f : 0.0f);
+
+        FxChain chain (params);
+        chain.prepare (sr, block);
+
+        std::vector<float> mono ((size_t) block), l ((size_t) block), r ((size_t) block);
+        double phase = 0.0;
+        float peak = 0.0f;
+        const int total = (int) (sr * 0.6);
+
+        for (int i = 0; i + block <= total; i += block)
+        {
+            for (int k = 0; k < block; ++k)
+            {
+                mono[(size_t) k] = 0.3f * (float) std::sin (phase);
+                phase += 6.283185307179586 * 110.0 / sr;
+            }
+
+            chain.process (mono.data(), l.data(), r.data(), block);
+
+            if (i > (int) (sr * 0.3))   // past every smoother
+                for (int k = 0; k < block; ++k)
+                    peak = std::max (peak, std::abs (l[(size_t) k]));
+        }
+
+        const bool audible = peak > 0.05f;
+        report (c.label, audible == c.audible && (c.audible || peak < 1.0e-4f),
+                "peak " + juce::String (peak, 6));
+
+        if (c.midiOn)
+            report ("  ...and the tracker still hears", std::abs (chain.getTrackedHz() - 110.0f) < 3.0f,
+                    juce::String (chain.getTrackedHz(), 1) + " Hz tracked");
+    }
+}
+
 static void testSegmenterOnRealBass (const juce::File& stem, double, int block)
 {
     if (! stem.existsAsFile())
@@ -3598,6 +3849,10 @@ int main (int argc, char* argv[])
     testInstrumentHosting ("DLSMusicDevice", 48000.0, 64, true);   // the control
     testInstrumentHosting ("Vital", 48000.0, 64);
     testVibratoDoesNotChatter (48000.0, 64);
+    testTransposeComesBackTrue (48000.0, 64);
+    testHoldSurvivesRealTracking (48000.0, 64);
+    testTrackerOnDominantSecondHarmonic (48000.0, 64);
+    testMidiThruGatesTheLiveLane (48000.0, 64);
     testSegmenterOnRealBass (juce::File ("/Users/fox296/LiveRig/Songs/Plan B/bass.wav"), 48000.0, 64);
     testSubOctave (48000.0, 64);
     testCabFilter (48000.0, 64);

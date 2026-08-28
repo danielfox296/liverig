@@ -148,6 +148,7 @@ static const ParamSpec specs[] =
     { "midiRel",   "Release",   20.0f,1000.0f, 180.0f,   200.0f, 0.0f, " ms",  0, false },
     { "midiBend",  "Bend range", 0.0f,  12.0f,   2.0f,     0.0f, 1.0f, " st",  0, false },
     { "midiExpr",  "Expression", 0.0f,   2.0f,   2.0f,     0.0f, 1.0f, "",     0, false, expressionChoices },
+    { "midiThru",  "Live thru",  0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, offOnChoices },
 
     { "instOn",    "Instrument", 0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, offOnChoices },
     { "instLevel", "Level",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
