@@ -79,7 +79,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
         { "input",  -1,                false, "",       "Input",      -1,        { pInGain } },
         { "midi",   -1,                false, "midi",   "MIDI",       pMidiOn,   { pMidiChannel, pMidiTranspose, pMidiGate, pMidiHold, pMidiRelease, pMidiBendRange, pMidiExpression, pInstOn, pInstLevel } },
         { "comp",   FxChain::stComp,   true,  "comp",   "Compressor", pCompOn,   { pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup, pCompBlend, pCompSidechain } },
-        { "eq",     FxChain::stEq,     true,  "eq",     "EQ",         pEqOn,     { pEqLoFreq, pEqLoGain, pEqMidFreq, pEqMidGain, pEqMidQ, pEqHiFreq, pEqHiGain } },
+        { "eq",     FxChain::stEq,     true,  "eq",     "EQ",         pEqOn,     { pEq1Freq, pEq1Gain, pEq1Q, pEq2Freq, pEq2Gain, pEq2Q, pEq3Freq, pEq3Gain, pEq3Q, pEq4Freq, pEq4Gain, pEq4Q, pEq5Freq, pEq5Gain, pEq5Q } },
         { "filter", FxChain::stFilter, true,  "filter", "Filter",     pFltOn,    { pFltSens, pFltAttack, pFltRelease, pFltFrom, pFltTo, pFltRes, pFltMix } },
         { "boost",  FxChain::stBoost,  true,  "boost",  "Boost",      pBoostOn,  { pBoostGain, pBoostSheen, pBoostHair } },
         { "drive",  FxChain::stDrive,  true,  "drive",  "Overdrive",  pDriveOn,  { pDriveVoice, pDriveAmount, pDriveTone, pDriveLevel, pDriveStack, pDriveBite, pDriveXover, pDriveBlend } },
@@ -355,6 +355,18 @@ void MainComponent::selectFxForSnapshot()
     selectFx (1);
 }
 
+void MainComponent::selectEqForSnapshot()
+{
+    for (int i = 0; i < (int) fxDefs.size(); ++i)
+    {
+        if (fxDefs[(size_t) i].key == "eq")
+        {
+            selectFx (i);
+            return;
+        }
+    }
+}
+
 void MainComponent::showTunerForSnapshot()
 {
     editorTabs.setCurrentTabIndex (1);
@@ -404,10 +416,28 @@ void MainComponent::selectFx (int index)
     if (selectedFx >= 0)
     {
         const auto& def = fxDefs[(size_t) selectedFx];
-        fxEditor.show (def.scope, def.name, def.ids,
-                       def.key == "amp" ? (juce::Component*) &ampControls
-                                        : (def.key == "midi" ? (juce::Component*) &instrumentControls
-                                                             : nullptr));
+
+        juce::Component* extra = nullptr;
+        int extraHeight = 30;
+        bool faderRows = true;
+
+        if (def.key == "amp")
+        {
+            extra = &ampControls;
+        }
+        else if (def.key == "midi")
+        {
+            extra = &instrumentControls;
+        }
+        else if (def.key == "eq")
+        {
+            // The curve view carries all fifteen band parameters itself.
+            extra = &eqControls;
+            extraHeight = EqView::preferredHeight;
+            faderRows = false;
+        }
+
+        fxEditor.show (def.scope, def.name, def.ids, extra, extraHeight, faderRows);
     }
     else
     {

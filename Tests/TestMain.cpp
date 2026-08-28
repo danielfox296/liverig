@@ -2131,6 +2131,114 @@ static void runScenario (const juce::File& settingsFile, const juce::File& songF
 }
 
 //==============================================================================
+// The five-band parametric through the real chain: each band type must do
+// what its name says at its own frequency and leave the rest of the spectrum
+// alone. Flat settings must be a wire.
+static void testParametricEq (double sr, int block)
+{
+    std::printf ("\nParametric EQ  (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    // Renders a sine through FxChain with only the EQ enabled and returns the
+    // output level relative to the input, in dB, measured after settling.
+    auto responseDb = [&] (std::function<void (ParamStore&)> setup, double hz)
+    {
+        ParamStore params;
+        params.set (pEqOn, 1.0f);
+        setup (params);
+
+        FxChain fx (params);
+        fx.prepare (sr, block);
+
+        const double seconds = 1.5;
+        const int total = (int) (sr * seconds);
+        const float amp = 0.1f;
+
+        std::vector<float> mono ((size_t) block), l ((size_t) block), r ((size_t) block);
+        std::vector<float> out;
+        out.reserve ((size_t) total);
+
+        for (int base = 0; base < total; base += block)
+        {
+            for (int i = 0; i < block; ++i)
+                mono[(size_t) i] = amp * (float) std::sin (6.283185307179586 * hz * (base + i) / sr);
+
+            fx.process (mono.data(), l.data(), r.data(), block);
+
+            for (int i = 0; i < block; ++i)
+                out.push_back (l[(size_t) i]);
+        }
+
+        const double level = toneLevel (out, (int) (sr * 0.5), total, sr, hz);
+        return 20.0 * std::log10 (level / amp);
+    };
+
+    auto flat = [] (ParamStore&) {};
+
+    report ("flat is a wire (100 Hz)", std::abs (responseDb (flat, 100.0)) < 0.1,
+            juce::String (responseDb (flat, 100.0), 3) + " dB");
+    report ("flat is a wire (5 kHz)", std::abs (responseDb (flat, 5000.0)) < 0.1,
+            juce::String (responseDb (flat, 5000.0), 3) + " dB");
+
+    auto bellBoost = [] (ParamStore& p)
+    {
+        p.set (pEq3Freq, 900.0f);
+        p.set (pEq3Gain, 9.0f);
+        p.set (pEq3Q, 1.0f);
+    };
+
+    const double atCentre = responseDb (bellBoost, 900.0);
+    const double offCentre = responseDb (bellBoost, 100.0);
+
+    report ("bell boosts its centre", std::abs (atCentre - 9.0) < 0.5,
+            juce::String (atCentre, 2) + " dB at 900 Hz for +9 set");
+    report ("bell leaves the far field", std::abs (offCentre) < 0.4,
+            juce::String (offCentre, 2) + " dB at 100 Hz");
+
+    auto lowCut = [] (ParamStore& p)
+    {
+        p.set (pEq1Freq, 80.0f);
+        p.set (pEq1Gain, -9.0f);
+    };
+
+    const double belowShelf = responseDb (lowCut, 35.0);
+    const double aboveShelf = responseDb (lowCut, 2000.0);
+
+    report ("low shelf cuts below the corner", std::abs (belowShelf + 9.0) < 0.8,
+            juce::String (belowShelf, 2) + " dB at 35 Hz for -9 set");
+    report ("low shelf spares the mids", std::abs (aboveShelf) < 0.3,
+            juce::String (aboveShelf, 2) + " dB at 2 kHz");
+
+    auto highBoost = [] (ParamStore& p)
+    {
+        p.set (pEq5Freq, 8000.0f);
+        p.set (pEq5Gain, 6.0f);
+    };
+
+    const double aboveHigh = responseDb (highBoost, 16000.0);
+    const double belowHigh = responseDb (highBoost, 300.0);
+
+    report ("high shelf lifts the top", std::abs (aboveHigh - 6.0) < 0.8,
+            juce::String (aboveHigh, 2) + " dB at 16 kHz for +6 set");
+    report ("high shelf spares the lows", std::abs (belowHigh) < 0.3,
+            juce::String (belowHigh, 2) + " dB at 300 Hz");
+
+    // A resonant bell must be narrower than a wide one — Q reaching the sound.
+    auto narrow = [] (ParamStore& p)
+    {
+        p.set (pEq3Freq, 900.0f);
+        p.set (pEq3Gain, 9.0f);
+        p.set (pEq3Q, 6.0f);
+    };
+
+    const double wideSkirt = responseDb (bellBoost, 450.0);
+    const double narrowSkirt = responseDb (narrow, 450.0);
+
+    report ("Q narrows the bell", narrowSkirt < wideSkirt - 1.5,
+            "octave-down skirt " + juce::String (wideSkirt, 2) + " dB at Q1 vs "
+              + juce::String (narrowSkirt, 2) + " dB at Q6");
+}
+
+//==============================================================================
 static void testStageOrder (double sr, int block)
 {
     std::printf ("\nStage reordering  (%.0f Hz, %d-sample blocks)\n", sr, block);
@@ -2214,9 +2322,9 @@ static void testChain (double sr, int block)
     ParamStore params;
     params.set (pCompOn, 1.0f);
     params.set (pEqOn, 1.0f);
-    params.set (pEqLoGain, 4.0f);
-    params.set (pEqMidGain, -3.0f);
-    params.set (pEqHiGain, 2.0f);
+    params.set (pEq1Gain, 4.0f);
+    params.set (pEq3Gain, -3.0f);
+    params.set (pEq5Gain, 2.0f);
     params.set (pFltOn, 1.0f);
     params.set (pBoostOn, 1.0f);
     params.set (pBoostGain, 4.0f);
@@ -3479,6 +3587,7 @@ int main (int argc, char* argv[])
     testReverb (44100.0, 32);
     testMasterLimiter (48000.0);
     testStemDucker (48000.0);
+    testParametricEq (48000.0, 64);
     testStageOrder (48000.0, 64);
     testChain (48000.0, 64);
     testDriveCrossover (48000.0, 64);

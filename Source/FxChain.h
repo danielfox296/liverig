@@ -114,7 +114,8 @@ private:
     GlueComp comp;
     juce::SmoothedValue<float> compBlend;
 
-    Biquad eqLo, eqMid, eqHi;
+    // Parametric EQ: low shelf, three bells, high shelf, run in series.
+    Biquad eqBand[5];
 
     // Envelope filter: follower drives a swept SVF between From and To.
     EnvFollower fltEnv;

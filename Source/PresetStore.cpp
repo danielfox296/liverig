@@ -6,7 +6,7 @@ namespace rig
 // Bumped when the factory content changes. On load, an older file gets its
 // factory presets refreshed by name and any new ones added — presets the
 // user saved under their own names are never touched.
-static constexpr int kFactoryVersion = 9;
+static constexpr int kFactoryVersion = 11;
 
 // The order the factory chain presets were voiced in. Recalling one rewires
 // the chain to match, the same as any preset saved in the app.
@@ -57,18 +57,37 @@ const std::vector<FactoryEffect>& factoryEffects()
         { "comp", "Parallel iron",{ { pCompThresh, -32.0f }, { pCompRatio, 10.0f }, { pCompAttack, 0.5f },
                                     { pCompRelease, 160.0f }, { pCompMakeup, 10.0f }, { pCompBlend, 0.45f } } },
 
-        { "eq", "Flat",           { { pEqLoFreq, 100.0f }, { pEqLoGain, 0.0f }, { pEqMidFreq, 700.0f },
-                                    { pEqMidGain, 0.0f }, { pEqMidQ, 0.9f }, { pEqHiFreq, 3000.0f },
-                                    { pEqHiGain, 0.0f } } },
-        { "eq", "Fat lows",       { { pEqLoFreq, 80.0f }, { pEqLoGain, 4.5f }, { pEqMidFreq, 600.0f },
-                                    { pEqMidGain, -2.0f }, { pEqMidQ, 0.8f }, { pEqHiFreq, 3000.0f },
-                                    { pEqHiGain, 1.0f } } },
-        { "eq", "Cut mud",        { { pEqLoFreq, 90.0f }, { pEqLoGain, 1.0f }, { pEqMidFreq, 320.0f },
-                                    { pEqMidGain, -5.0f }, { pEqMidQ, 1.4f }, { pEqHiFreq, 2500.0f },
-                                    { pEqHiGain, 2.0f } } },
-        { "eq", "Scooped",        { { pEqLoFreq, 90.0f }, { pEqLoGain, 5.0f }, { pEqMidFreq, 800.0f },
-                                    { pEqMidGain, -7.0f }, { pEqMidQ, 0.7f }, { pEqHiFreq, 3500.0f },
-                                    { pEqHiGain, 4.0f } } },
+        // Levelling-amp behaviour for an upright: lean on the note early and
+        // gently, so the pluck rounds off and the tail rides up — sustain
+        // without squash. The sidechain sits above the A string so a low
+        // fundamental leans on the gain no harder than the note itself.
+        { "comp", "Upright sustain", { { pCompThresh, -26.0f }, { pCompRatio, 2.5f }, { pCompAttack, 4.5f },
+                                       { pCompRelease, 260.0f }, { pCompMakeup, 6.0f }, { pCompBlend, 1.0f },
+                                       { pCompSidechain, 110.0f } } },
+
+        { "eq", "Flat",           { { pEq1Freq, 80.0f }, { pEq1Gain, 0.0f }, { pEq2Gain, 0.0f },
+                                    { pEq3Freq, 900.0f }, { pEq3Gain, 0.0f }, { pEq4Gain, 0.0f },
+                                    { pEq5Freq, 8000.0f }, { pEq5Gain, 0.0f } } },
+        { "eq", "Fat lows",       { { pEq1Freq, 80.0f }, { pEq1Gain, 4.5f }, { pEq2Gain, 0.0f },
+                                    { pEq3Freq, 600.0f }, { pEq3Gain, -2.0f }, { pEq3Q, 0.8f },
+                                    { pEq4Gain, 0.0f }, { pEq5Freq, 3000.0f }, { pEq5Gain, 1.0f } } },
+        { "eq", "Cut mud",        { { pEq1Freq, 90.0f }, { pEq1Gain, 1.0f }, { pEq2Freq, 320.0f },
+                                    { pEq2Gain, -5.0f }, { pEq2Q, 1.4f }, { pEq3Gain, 0.0f },
+                                    { pEq4Gain, 0.0f }, { pEq5Freq, 2500.0f }, { pEq5Gain, 2.0f } } },
+        { "eq", "Scooped",        { { pEq1Freq, 90.0f }, { pEq1Gain, 5.0f }, { pEq2Gain, 0.0f },
+                                    { pEq3Freq, 800.0f }, { pEq3Gain, -7.0f }, { pEq3Q, 0.7f },
+                                    { pEq4Gain, 0.0f }, { pEq5Freq, 3500.0f }, { pEq5Gain, 4.0f } } },
+
+        // An upright's piezo, wing-mounted on the E side: the foot hears the
+        // low strings bloom and the bridge talk, not the instrument. Trim the
+        // rumble and boom the placement adds, pull the bridge honk and the
+        // 3 kHz clack, soften the brittle top — what is left sounds like wood.
+        { "eq", "Upright piezo (E side)",
+                                  { { pEq1Freq, 50.0f },   { pEq1Gain, -3.0f }, { pEq1Q, 0.71f },
+                                    { pEq2Freq, 130.0f },  { pEq2Gain, -2.5f }, { pEq2Q, 1.1f },
+                                    { pEq3Freq, 550.0f },  { pEq3Gain, -2.0f }, { pEq3Q, 1.3f },
+                                    { pEq4Freq, 2800.0f }, { pEq4Gain, -4.0f }, { pEq4Q, 1.6f },
+                                    { pEq5Freq, 8000.0f }, { pEq5Gain, -3.0f }, { pEq5Q, 0.71f } } },
 
         { "filter", "Quack",        { { pFltSens, 0.55f }, { pFltAttack, 3.0f }, { pFltRelease, 160.0f },
                                       { pFltFrom, 120.0f }, { pFltTo, 2200.0f }, { pFltRes, 5.0f },
@@ -207,13 +226,13 @@ const std::vector<FactoryChain>& factoryChains()
 
         { "Fingerstyle comp", { { pCompOn, 1.0f }, { pCompThresh, -20.0f }, { pCompRatio, 3.0f },
                                 { pCompAttack, 8.0f }, { pCompRelease, 140.0f }, { pCompMakeup, 4.0f },
-                                { pEqOn, 1.0f }, { pEqLoGain, 2.0f }, { pEqMidFreq, 500.0f },
-                                { pEqMidGain, -2.0f }, { pEqHiGain, 1.5f } } },
+                                { pEqOn, 1.0f }, { pEq1Gain, 2.0f }, { pEq3Freq, 500.0f },
+                                { pEq3Gain, -2.0f }, { pEq5Gain, 1.5f } } },
 
         { "Octave lead", { { pCompOn, 1.0f }, { pCompThresh, -22.0f }, { pCompRatio, 4.0f },
                            { pCompAttack, 1.0f }, { pCompMakeup, 5.0f },
                            { pOctOn, 1.0f }, { pOctInterval, 12.0f }, { pOctMix, 0.55f },
-                           { pEqOn, 1.0f }, { pEqHiGain, 2.5f } } },
+                           { pEqOn, 1.0f }, { pEq5Gain, 2.5f } } },
 
         { "Dirty octave", { { pCompOn, 1.0f }, { pCompThresh, -20.0f }, { pCompRatio, 4.0f },
                             { pCompAttack, 2.0f }, { pCompMakeup, 3.0f },

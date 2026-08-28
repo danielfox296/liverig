@@ -136,6 +136,23 @@ int main (int argc, char* argv[])
         }
         writePng (expanded, outDir.getChildFile ("fx-editor.png"));
 
+        // The EQ's curve editor, with a shaped curve so every element shows.
+        params.set (rig::pEqOn, 1.0f);
+        params.set (rig::pEq1Freq, 70.0f);   params.set (rig::pEq1Gain, 3.0f);
+        params.set (rig::pEq2Freq, 180.0f);  params.set (rig::pEq2Gain, -2.5f);  params.set (rig::pEq2Q, 1.4f);
+        params.set (rig::pEq3Freq, 700.0f);  params.set (rig::pEq3Gain, 2.0f);
+        params.set (rig::pEq4Freq, 2600.0f); params.set (rig::pEq4Gain, 4.5f);   params.set (rig::pEq4Q, 2.2f);
+        params.set (rig::pEq5Freq, 9000.0f); params.set (rig::pEq5Gain, -3.0f);
+        main.selectEqForSnapshot();
+
+        juce::Image eqShot (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
+        {
+            juce::Graphics g (eqShot);
+            main.paintEntireComponent (g, true);
+        }
+        writePng (eqShot, outDir.getChildFile ("eq-editor.png"));
+        problems += countBlankButtons (main, "the EQ editor");
+
         // The tuner tab, mid-note.
         main.showTunerForSnapshot();
 

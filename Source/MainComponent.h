@@ -7,6 +7,7 @@
 #include "PresetStore.h"
 #include "SettingsStore.h"
 #include "SongMaker.h"
+#include "ui/EqView.h"
 #include "ui/MidiStatusView.h"
 #include "ui/SongMakerPanel.h"
 #include "ui/TunerView.h"
@@ -32,6 +33,7 @@ public:
 
     // Used by the offscreen snapshot tool.
     void selectFxForSnapshot();
+    void selectEqForSnapshot();
     void showTunerForSnapshot();
     void showJobStripForSnapshot();
 
@@ -186,6 +188,10 @@ private:
     };
 
     InstrumentControls instrumentControls;
+
+    // The EQ's whole control surface — the curve is the interface, so the
+    // editor shows it in place of fader rows.
+    EqView eqControls { params };
     std::unique_ptr<juce::DocumentWindow> pluginWindow;
 
     juce::OwnedArray<StemStrip> stemStrips;

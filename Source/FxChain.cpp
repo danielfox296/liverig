@@ -160,9 +160,9 @@ void FxChain::reset() noexcept
     dcBlock.reset();
     comp.reset();
 
-    eqLo.reset();
-    eqMid.reset();
-    eqHi.reset();
+    for (auto& band : eqBand)
+        band.reset();
+
     tone.reset();
 
     fltEnv.reset();
@@ -249,20 +249,28 @@ void FxChain::updateFromParams() noexcept
     makeup.setTargetValue (juce::Decibels::decibelsToGain (params.get (pCompMakeup), -60.0f));
     compBlend.setTargetValue (std::clamp (params.get (pCompBlend), 0.0f, 1.0f));
 
-    bool eqDirty = false;
-    eqDirty |= changed (pEqLoFreq);
-    eqDirty |= changed (pEqLoGain);
-    eqDirty |= changed (pEqMidFreq);
-    eqDirty |= changed (pEqMidGain);
-    eqDirty |= changed (pEqMidQ);
-    eqDirty |= changed (pEqHiFreq);
-    eqDirty |= changed (pEqHiGain);
-
-    if (eqDirty)
+    for (int band = 0; band < 5; ++band)
     {
-        eqLo.setLowShelf  (sr, params.get (pEqLoFreq), params.get (pEqLoGain));
-        eqMid.setPeak     (sr, params.get (pEqMidFreq), params.get (pEqMidQ), params.get (pEqMidGain));
-        eqHi.setHighShelf (sr, params.get (pEqHiFreq), params.get (pEqHiGain));
+        const int base = pEq1Freq + band * 3;
+
+        bool bandDirty = false;
+        bandDirty |= changed (base);
+        bandDirty |= changed (base + 1);
+        bandDirty |= changed (base + 2);
+
+        if (bandDirty)
+        {
+            const float f = params.get (base);
+            const float gainDb = params.get (base + 1);
+            const float q = params.get (base + 2);
+
+            if (band == 0)
+                eqBand[0].setLowShelfQ (sr, f, q, gainDb);
+            else if (band == 4)
+                eqBand[4].setHighShelfQ (sr, f, q, gainDb);
+            else
+                eqBand[band].setPeak (sr, f, q, gainDb);
+        }
     }
 
     if (changed (pFltSens))
@@ -936,7 +944,14 @@ subOctave.setPeriod (tracker.getPeriodSamples());
                 runStage (mono, numSamples, bypEq, nullptr, [this] (float* d, int n)
                 {
                     for (int i = 0; i < n; ++i)
-                        d[i] = eqHi.process (eqMid.process (eqLo.process (d[i])));
+                    {
+                        float v = d[i];
+
+                        for (auto& band : eqBand)
+                            v = band.process (v);
+
+                        d[i] = v;
+                    }
                 });
                 break;
 

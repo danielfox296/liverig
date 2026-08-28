@@ -18,7 +18,15 @@ enum ParamId
     pCompOn, pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup, pCompBlend,
     pCompSidechain,
 
-    pEqOn, pEqLoFreq, pEqLoGain, pEqMidFreq, pEqMidGain, pEqMidQ, pEqHiFreq, pEqHiGain,
+    // Five-band parametric: band 1 is a low shelf, 2-4 are bells, 5 is a high
+    // shelf. Each band is three consecutive ids (freq, gain, Q) — the chain
+    // and the EQ view both index bands as pEq1Freq + band * 3.
+    pEqOn,
+    pEq1Freq, pEq1Gain, pEq1Q,
+    pEq2Freq, pEq2Gain, pEq2Q,
+    pEq3Freq, pEq3Gain, pEq3Q,
+    pEq4Freq, pEq4Gain, pEq4Q,
+    pEq5Freq, pEq5Gain, pEq5Q,
 
     pFltOn, pFltSens, pFltAttack, pFltRelease, pFltFrom, pFltTo, pFltRes, pFltMix,
 

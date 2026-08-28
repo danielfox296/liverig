@@ -79,6 +79,56 @@ struct Biquad
                          (A + 1.0) + (A - 1.0) * cs - ts);
     }
 
+    // Shelves parameterised by Q rather than slope — the form the parametric
+    // EQ exposes. 0.71 is the flattest knee; pushed past 1 the corner
+    // overshoots the way a resonant analogue shelf does.
+    void setLowShelfQ (double sr, double freq, double q, double gainDb) noexcept
+    {
+        const double A  = std::pow (10.0, gainDb / 40.0);
+        const double w0 = 6.283185307179586 * clampFreq (sr, freq);
+        const double cs = std::cos (w0), sn = std::sin (w0);
+        const double al = sn / (2.0 * (q < 0.05 ? 0.05 : q));
+        const double ts = 2.0 * std::sqrt (A) * al;
+        setCoefficients (A * ((A + 1.0) - (A - 1.0) * cs + ts),
+                         2.0 * A * ((A - 1.0) - (A + 1.0) * cs),
+                         A * ((A + 1.0) - (A - 1.0) * cs - ts),
+                         (A + 1.0) + (A - 1.0) * cs + ts,
+                         -2.0 * ((A - 1.0) + (A + 1.0) * cs),
+                         (A + 1.0) + (A - 1.0) * cs - ts);
+    }
+
+    void setHighShelfQ (double sr, double freq, double q, double gainDb) noexcept
+    {
+        const double A  = std::pow (10.0, gainDb / 40.0);
+        const double w0 = 6.283185307179586 * clampFreq (sr, freq);
+        const double cs = std::cos (w0), sn = std::sin (w0);
+        const double al = sn / (2.0 * (q < 0.05 ? 0.05 : q));
+        const double ts = 2.0 * std::sqrt (A) * al;
+        setCoefficients (A * ((A + 1.0) + (A - 1.0) * cs + ts),
+                         -2.0 * A * ((A - 1.0) + (A + 1.0) * cs),
+                         A * ((A + 1.0) + (A - 1.0) * cs - ts),
+                         (A + 1.0) - (A - 1.0) * cs + ts,
+                         2.0 * ((A - 1.0) - (A + 1.0) * cs),
+                         (A + 1.0) - (A - 1.0) * cs - ts);
+    }
+
+    // |H| at hz for the current coefficients — response displays, not audio.
+    float magnitudeDb (double sr, double hz) const noexcept
+    {
+        const double w = 6.283185307179586 * hz / sr;
+        const double c1 = std::cos (w),       s1 = std::sin (w);
+        const double c2 = std::cos (2.0 * w), s2 = std::sin (2.0 * w);
+
+        const double nr = (double) b0 + (double) b1 * c1 + (double) b2 * c2;
+        const double ni = (double) b1 * s1 + (double) b2 * s2;
+        const double dr = 1.0 + (double) a1 * c1 + (double) a2 * c2;
+        const double di = (double) a1 * s1 + (double) a2 * s2;
+
+        const double den = std::max (1.0e-24, dr * dr + di * di);
+        const double m2 = std::max (1.0e-12, (nr * nr + ni * ni) / den);
+        return (float) (10.0 * std::log10 (m2));
+    }
+
     void setHighShelf (double sr, double freq, double gainDb, double slope = 0.9) noexcept
     {
         const double A  = std::pow (10.0, gainDb / 40.0);

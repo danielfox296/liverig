@@ -517,12 +517,16 @@ public:
     }
 
     // Bring one effect's controls up. An effect can hang one extra component
-    // — the Amp stage's capture loader — above its faders.
+    // above its faders — the Amp stage's capture loader at its default strip
+    // height, or a full control surface like the EQ's curve, which names its
+    // own height and stands in for the fader rows entirely.
     void show (const juce::String& effectKey, const juce::String& titleText,
-               const std::vector<int>& paramIds, juce::Component* extra = nullptr)
+               const std::vector<int>& paramIds, juce::Component* extra = nullptr,
+               int extraHeightPx = 30, bool faderRows = true)
     {
         effect = effectKey;
         ids = paramIds;
+        extraHeight = extraHeightPx;
 
         title.setText (titleText, juce::dontSendNotification);
 
@@ -536,8 +540,9 @@ public:
 
         rows.clear();
 
-        for (int id : ids)
-            addAndMakeVisible (rows.add (new ParamRow (params, id)));
+        if (faderRows)
+            for (int id : ids)
+                addAndMakeVisible (rows.add (new ParamRow (params, id)));
 
         // One knob is not worth a preset.
         hasPresets = effect.isNotEmpty() && ids.size() > 1;
@@ -568,6 +573,7 @@ public:
         ids.clear();
         rows.clear();
         hasPresets = false;
+        extraHeight = 30;
 
         if (extraComponent != nullptr)
         {
@@ -614,7 +620,7 @@ public:
 
         if (extraComponent != nullptr)
         {
-            extraComponent->setBounds (b.removeFromTop (30).reduced (0, 2));
+            extraComponent->setBounds (b.removeFromTop (extraHeight).reduced (0, 2));
             b.removeFromTop (4);
         }
 
@@ -697,6 +703,7 @@ private:
     juce::String effect;
     std::vector<int> ids;
     bool hasPresets = false;
+    int extraHeight = 30;
     juce::Label placeholder, title;
     juce::ComboBox presetBox;
     juce::TextButton presetSave, presetDelete;
