@@ -15,9 +15,11 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_dsp/juce_dsp.h>
 
+#include "EffectSlot.h"
 #include "FxChain.h"
 #include "InstrumentHost.h"
 #include "PresetStore.h"
+#include "VocalChannel.h"
 #include "dsp/NoteSegmenter.h"
 #include "dsp/TunerFilter.h"
 #include "StemPlayer.h"
@@ -3839,6 +3841,602 @@ static void testVirtualMidiPort()
 }
 
 
+static juce::String pickEffect (const juce::StringArray& names,
+                                std::initializer_list<const char*> preferred)
+{
+    for (auto* want : preferred)
+        for (const auto& name : names)
+            if (name.containsIgnoreCase (want))
+                return name;
+
+    return {};
+}
+
+// The registry behind every picker: one scan records instruments and effects
+// both. First run on a machine pays for the scan; every run after reads the
+// cache. The duration is printed because it is the number that decides
+// whether "Rescan" needs a progress bar.
+static void testPluginRegistry (double sr, int block)
+{
+    std::printf ("\n Plugin registry (AU + VST3)\n");
+
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    InstrumentHost host;
+    host.prepare (sr, block);
+
+    if (host.getEffectNames().isEmpty())
+    {
+        std::printf ("  no cached plugin list — scanning this machine (one-time)...\n");
+        std::fflush (stdout);
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+
+        host.beginScan();
+
+        // The wait must pump the message loop: out-of-process Audio Units
+        // block on main-thread XPC during instantiation, and a sleeping main
+        // thread deadlocks the scan. The app never sees this because its
+        // event loop is always running.
+        while (host.isScanning())
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+
+        std::printf ("  scan took %.1f s\n", (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
+        std::fflush (stdout);
+    }
+
+    const auto effects = host.getEffectNames();
+    const auto instruments = host.getAvailableNames();
+
+    report ("finds effect plugins", effects.size() > 0,
+            juce::String (effects.size()) + " effects, " + juce::String (instruments.size()) + " instruments");
+
+    report ("Apple's stock effects are in the list",
+            pickEffect (effects, { "AUDelay", "AUDistortion", "AUGraphicEQ" }).isNotEmpty(),
+            "e.g. " + pickEffect (effects, { "AUDelay", "AUDistortion", "AUGraphicEQ" }));
+
+    // A plugin shipped as AU and VST3 must appear once, not twice.
+    juce::StringArray sorted (effects);
+    sorted.sort (true);
+    bool duplicated = false;
+
+    for (int i = 1; i < sorted.size(); ++i)
+        duplicated = duplicated || sorted[i].equalsIgnoreCase (sorted[i - 1]);
+
+    report ("no duplicate names across formats", ! duplicated, duplicated ? "duplicates present" : "deduped");
+}
+
+// One hosted effect, end to end: load, audio through it, state round trip,
+// unload back to a wire. This is the layer everything else stands on.
+static void testEffectSlot (double sr, int block)
+{
+    std::printf ("\n Hosting an effect in a slot\n");
+
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    InstrumentHost host;
+    host.prepare (sr, block);
+
+    const auto name = pickEffect (host.getEffectNames(),
+                                  { "AUDistortion", "AUDelay", "AUGraphicEQ", "AULowpass" });
+
+    if (name.isEmpty())
+    {
+        std::printf ("  no cached plugin list — run the registry test first\n");
+        return;
+    }
+
+    EffectSlot slot ("test");
+    slot.prepare (sr, block);
+
+    juce::String error;
+    const bool loaded = slot.load (host, name, error);
+
+    report ((name + " loads into the slot").toRawUTF8(), loaded, loaded ? "instantiated" : error);
+
+    if (! loaded)
+        return;
+
+    std::printf ("  latency %.1f ms, sidechain channels %d\n",
+                 slot.getLatencyMs(), slot.getSidechainChannels());
+
+    // --- audio through the mono insert path ---
+    std::vector<float> mono ((size_t) block);
+    double phase = 0.0;
+    float peak = 0.0f;
+    bool finite = true;
+
+    const int blocks = (int) (sr * 1.0) / block;
+
+    for (int i = 0; i < blocks; ++i)
+    {
+        for (int k = 0; k < block; ++k)
+        {
+            mono[(size_t) k] = 0.25f * (float) std::sin (phase);
+            phase += 6.283185307179586 * 220.0 / sr;
+        }
+
+        slot.processMono (mono.data(), block);
+
+        for (int k = 0; k < block; ++k)
+        {
+            finite = finite && std::isfinite (mono[(size_t) k]);
+            if (i > blocks / 4)
+                peak = std::max (peak, std::abs (mono[(size_t) k]));
+        }
+    }
+
+    report ("audio passes through, finite and alive", finite && peak > 0.01f,
+            "peak " + juce::String (peak, 3));
+
+    // --- the stereo path the vocal lane uses ---
+    std::vector<float> in ((size_t) block), outL ((size_t) block), outR ((size_t) block);
+    phase = 0.0;
+    float stereoPeak = 0.0f;
+
+    for (int i = 0; i < blocks; ++i)
+    {
+        for (int k = 0; k < block; ++k)
+        {
+            in[(size_t) k] = 0.25f * (float) std::sin (phase);
+            phase += 6.283185307179586 * 220.0 / sr;
+        }
+
+        slot.process (in.data(), nullptr, outL.data(), outR.data(), block);
+
+        if (i > blocks / 4)
+            for (int k = 0; k < block; ++k)
+                stereoPeak = std::max (stereoPeak, std::abs (outL[(size_t) k]));
+    }
+
+    report ("the stereo path sounds too", stereoPeak > 0.01f, "peak " + juce::String (stereoPeak, 3));
+
+    // --- state survives a reload ---
+    const auto state = slot.getStateBase64();
+    slot.restore (host, name, state);
+
+    report ("state round-trips through a reload", slot.isLoaded() && ! slot.hasFailed(),
+            state.isEmpty() ? "stateless plugin, reloaded clean" : juce::String (state.length()) + " bytes recalled");
+
+    // --- an emptied slot is a wire ---
+    slot.unload();
+
+    std::vector<float> dry ((size_t) block);
+
+    for (int k = 0; k < block; ++k)
+        dry[(size_t) k] = mono[(size_t) k] = 0.1f * (float) k / (float) block;
+
+    slot.processMono (mono.data(), block);
+
+    bool untouched = true;
+
+    for (int k = 0; k < block; ++k)
+        untouched = untouched && juce::exactlyEqual (mono[(size_t) k], dry[(size_t) k]);
+
+    report ("an empty slot passes dry untouched", untouched, "identity after unload");
+}
+
+// The one nontrivial wiring: a vocoder with the mic on its main input and the
+// bass tap on its sidechain. Runs against whatever vocoder this machine has —
+// the roles are pickers, so TAL slots in the same way when installed.
+static void testVocoderSidechain (double sr, int block)
+{
+    std::printf ("\n Vocoder sidechain routing\n");
+
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    InstrumentHost host;
+    host.prepare (sr, block);
+
+    const auto name = pickEffect (host.getEffectNames(),
+                                  { "TAL-Vocoder", "TAL Vocoder", "MVocoder", "OrangeVocoder" });
+
+    if (name.isEmpty())
+    {
+        std::printf ("  no vocoder installed — install TAL-Vocoder 3 and rerun\n");
+        return;
+    }
+
+    EffectSlot vocoder ("vocoder", true);
+    vocoder.prepare (sr, block);
+
+    juce::String error;
+    const bool loaded = vocoder.load (host, name, error);
+
+    report ((name + " loads").toRawUTF8(), loaded, loaded ? "instantiated" : error);
+
+    if (! loaded)
+        return;
+
+    const int sc = vocoder.getSidechainChannels();
+    report ("a carrier route was negotiated", true,
+            sc > 0 ? "sidechain bus, " + juce::String (sc) + " channel(s)"
+                   : "no sidechain bus — carrier on the right main channel");
+
+    // Modulator: speech-shaped bursts of noise. Carrier: a bright saw.
+    std::vector<float> mod ((size_t) block), car ((size_t) block),
+                       outL ((size_t) block), outR ((size_t) block);
+
+    uint32_t noise = 22222u;
+    double sawPhase = 0.0;
+    float peak = 0.0f;
+    bool finite = true;
+
+    const int blocks = (int) (sr * 2.0) / block;
+
+    for (int i = 0; i < blocks; ++i)
+    {
+        const double t0 = i * (double) block / sr;
+        const bool talking = std::fmod (t0, 0.5) < 0.3;
+
+        for (int k = 0; k < block; ++k)
+        {
+            noise = noise * 1664525u + 1013904223u;
+            mod[(size_t) k] = talking ? 0.3f * (float) (int32_t) noise * 4.6566129e-10f : 0.0f;
+
+            sawPhase += 110.0 / sr;
+            if (sawPhase >= 1.0) sawPhase -= 1.0;
+            car[(size_t) k] = 0.3f * (float) (2.0 * sawPhase - 1.0);
+        }
+
+        vocoder.process (mod.data(), car.data(), outL.data(), outR.data(), block);
+
+        for (int k = 0; k < block; ++k)
+        {
+            finite = finite && std::isfinite (outL[(size_t) k]);
+
+            if (i > blocks / 4)
+                peak = std::max (peak, std::abs (outL[(size_t) k]));
+        }
+    }
+
+    report ("voice over carrier produces output", finite && peak > 0.001f,
+            "peak " + juce::String (peak, 4) + " — intelligibility is judged by ear, plumbing by meter");
+}
+
+// The autotune lane: one function with stage manners. Off is silence, on
+// with no plugin is silence too (and the row says why), the gate kills the
+// breaths, and the switch is a crossfade a footswitch cannot click.
+static void testVocalChannel (double sr, int block)
+{
+    std::printf ("\n Autotune lane (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    InstrumentHost host;
+    host.prepare (sr, block);
+
+    ParamStore params;
+    EffectSlot tune ("tune");
+    VocalChannel vocal (params, tune);
+
+    tune.prepare (sr, block);
+    vocal.prepare (sr, block);
+
+    double phase = 0.0;
+
+    const auto run = [&] (float amplitude, double seconds, float* largestStep) -> float
+    {
+        std::vector<float> mic ((size_t) block), l ((size_t) block), r ((size_t) block);
+        float peak = 0.0f, previous = 0.0f;
+
+        const int blocks = (int) (sr * seconds) / block;
+
+        for (int i = 0; i < blocks; ++i)
+        {
+            for (int k = 0; k < block; ++k)
+            {
+                mic[(size_t) k] = amplitude * (float) std::sin (phase);
+                phase += 6.283185307179586 * 220.0 / sr;
+            }
+
+            std::fill (l.begin(), l.end(), 0.0f);
+            std::fill (r.begin(), r.end(), 0.0f);
+            vocal.process (mic.data(), l.data(), r.data(), block);
+
+            for (int k = 0; k < block; ++k)
+            {
+                if (i > blocks / 2)
+                    peak = std::max (peak, std::abs (l[(size_t) k]));
+
+                if (largestStep != nullptr)
+                    *largestStep = std::max (*largestStep, std::abs (l[(size_t) k] - previous));
+
+                previous = l[(size_t) k];
+            }
+        }
+
+        return peak;
+    };
+
+    // Off, and on with nothing bound: both silent, neither a crash.
+    params.set (pVocalOn, 0.0f);
+    const float offPeak = run (0.2f, 0.4, nullptr);
+    report ("off is silent", offPeak < 1.0e-6f, "peak " + juce::String (offPeak, 7));
+
+    params.set (pVocalOn, 1.0f);
+    const float unboundPeak = run (0.2f, 0.4, nullptr);
+    report ("on with no plugin is silence, not a crash", unboundPeak < 1.0e-6f,
+            "peak " + juce::String (unboundPeak, 7));
+
+    // The rest needs audio through the slot; any clean-passing effect will do.
+    const auto name = pickEffect (host.getEffectNames(),
+                                  { "AUGraphicEQ", "AUNBandEQ", "AUDelay", "AUDistortion" });
+
+    if (name.isEmpty())
+    {
+        std::printf ("  no cached plugin list — run the registry test first\n");
+        return;
+    }
+
+    juce::String error;
+
+    if (! tune.load (host, name, error))
+    {
+        report ((name + " loads").toRawUTF8(), false, error);
+        return;
+    }
+
+    const float onPeak = run (0.2f, 0.6, nullptr);
+    report (("on, through " + name + ", the mic sounds").toRawUTF8(), onPeak > 0.02f,
+            "peak " + juce::String (onPeak, 3));
+
+    // The gate: a signal well under the threshold must die there, and the
+    // real one must bring the lane back.
+    const float quiet = run (0.001f, 0.8, nullptr);   // ~-60 dB against the -50 gate
+    report ("the gate closes on the quiet", quiet < 0.0005f, "peak " + juce::String (quiet, 5));
+
+    const float loudAgain = run (0.2f, 0.6, nullptr);
+    report ("and reopens for the signal", loudAgain > 0.02f, "peak " + juce::String (loudAgain, 3));
+
+    // The night-one bug: Gain pulled well down must make the lane quieter,
+    // never starve the gate detector shut. The detector listens pre-fader.
+    params.set (pVocalGain, -24.0f);
+    const float trimmed = run (0.2f, 0.6, nullptr);
+    params.set (pVocalGain, 0.0f);
+
+    report ("gain trims the lane but cannot choke the gate",
+            trimmed > 0.008f && trimmed < 0.05f, "peak " + juce::String (trimmed, 4) + " at -24 dB gain");
+
+    // Toggle off and on over one continuous note: the largest sample step
+    // must stay in sine territory. A hard mute would step by the amplitude.
+    float step = 0.0f;
+    run (0.2f, 0.3, &step);
+    params.set (pVocalOn, 0.0f);
+    run (0.2f, 0.3, &step);
+    params.set (pVocalOn, 1.0f);
+    run (0.2f, 0.3, &step);
+
+    report ("the switch is a crossfade, not an edit", step < 0.04f,
+            "largest step " + juce::String (step, 4));
+}
+
+// The acceptance question, answered in cents rather than vibes: the rig
+// picks the machine's pitch corrector by itself, a flat tone goes in, and
+// the output pitch is measured against true.
+static void testAutotunePicksAndCorrects (double sr, int block)
+{
+    std::printf ("\n Autotune end to end\n");
+
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    InstrumentHost host;
+    host.prepare (sr, block);
+
+    if (host.getEffectNames().isEmpty())
+    {
+        std::printf ("  no cached plugin list — run the registry test first\n");
+        return;
+    }
+
+    const auto pick = host.preferredPitchPlugin();
+
+    report ("a pitch corrector is picked automatically", pick.isNotEmpty(),
+            pick.isEmpty() ? "none installed — Graillon 3 is the intended tenant" : pick);
+
+    if (pick.isEmpty())
+        return;
+
+    EffectSlot slot ("tune");
+    slot.prepare (sr, block);
+
+    juce::String error;
+
+    if (! slot.load (host, pick, error))
+    {
+        report ((pick + " loads").toRawUTF8(), false, error);
+        return;
+    }
+
+    // 30 cents flat of A3. The corrector should pull it toward true.
+    const double inHz = 220.0 * std::pow (2.0, -30.0 / 1200.0);
+
+    const int total = (int) (sr * 3.0);
+    std::vector<float> in ((size_t) block), outL ((size_t) block), outR ((size_t) block);
+    std::vector<float> tail;
+    double phase = 0.0;
+
+    for (int i = 0; i + block <= total; i += block)
+    {
+        for (int k = 0; k < block; ++k)
+        {
+            in[(size_t) k] = 0.3f * (float) std::sin (phase);
+            phase += 6.283185307179586 * inHz / sr;
+        }
+
+        slot.process (in.data(), nullptr, outL.data(), outR.data(), block);
+
+        if (i > total / 2)
+            for (int k = 0; k < block; ++k)
+                tail.push_back (outL[(size_t) k]);
+    }
+
+    const double got = estimateF0 (tail.data(), (int) tail.size(), sr, 100.0, 500.0);
+    const double outCents = cents (got, 220.0);
+
+    report ((pick + " pulls a flat tone toward true").toRawUTF8(),
+            std::abs (outCents) < 15.0 && std::abs (outCents) < 30.0 * 0.66,
+            "in -30.0 cents, out " + juce::String (outCents, 1) + " cents ("
+              + juce::String (got, 2) + " Hz)");
+}
+
+// The carrier tap: the bass after every movable stage, alive even when MIDI
+// thru has muted the lane — the exact configuration where the bass sings.
+static void testCarrierTap (double sr, int block)
+{
+    std::printf ("\n Vocoder carrier tap (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    ParamStore params;
+    FxChain chain (params);
+    chain.prepare (sr, block);
+
+    std::vector<float> mono ((size_t) block), l ((size_t) block), r ((size_t) block);
+    double phase = 0.0;
+    float carrierPeak = 0.0f, outPeak = 0.0f, diff = 0.0f;
+
+    const int blocks = (int) (sr * 0.5) / block;
+
+    for (int i = 0; i < blocks; ++i)
+    {
+        for (int k = 0; k < block; ++k)
+        {
+            mono[(size_t) k] = 0.3f * (float) std::sin (phase);
+            phase += 6.283185307179586 * 110.0 / sr;
+        }
+
+        chain.process (mono.data(), l.data(), r.data(), block);
+
+        if (i > blocks / 2)
+        {
+            const float* carrier = chain.getCarrier();
+
+            for (int k = 0; k < block; ++k)
+            {
+                carrierPeak = std::max (carrierPeak, std::abs (carrier[k]));
+                diff = std::max (diff, std::abs (carrier[k] - l[(size_t) k]));
+            }
+        }
+    }
+
+    report ("with everything bypassed the tap is the lane", diff < 1.0e-4f,
+            "largest carrier/output difference " + juce::String (diff, 6));
+
+    // MIDI on, thru off: the lane leaves the mix, the carrier must not.
+    params.set (pMidiOn, 1.0f);
+    carrierPeak = 0.0f;
+
+    for (int i = 0; i < blocks; ++i)
+    {
+        for (int k = 0; k < block; ++k)
+        {
+            mono[(size_t) k] = 0.3f * (float) std::sin (phase);
+            phase += 6.283185307179586 * 110.0 / sr;
+        }
+
+        chain.process (mono.data(), l.data(), r.data(), block);
+
+        if (i > blocks / 2)
+        {
+            const float* carrier = chain.getCarrier();
+
+            for (int k = 0; k < block; ++k)
+            {
+                carrierPeak = std::max (carrierPeak, std::abs (carrier[k]));
+                outPeak = std::max (outPeak, std::abs (l[(size_t) k]));
+            }
+        }
+    }
+
+    report ("the carrier survives a muted live lane", carrierPeak > 0.2f && outPeak < 1.0e-4f,
+            "carrier " + juce::String (carrierPeak, 3) + ", lane " + juce::String (outPeak, 6));
+}
+
+// The pedal stage: a hosted plugin inside the bass chain. Empty slot = wire;
+// loaded slot = audibly in the signal; both finite at all times.
+static void testPedalStage (double sr, int block)
+{
+    std::printf ("\n Pedal stage in the chain\n");
+
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    InstrumentHost host;
+    host.prepare (sr, block);
+
+    ParamStore params;
+    params.set (pPedalOn, 1.0f);
+
+    EffectSlot pedal ("pedal");
+    pedal.prepare (sr, block);
+
+    FxChain chain (params);
+    chain.setPedalSlot (&pedal);
+    chain.prepare (sr, block);
+
+    const auto render = [&] (float* peak) -> std::vector<float>
+    {
+        std::vector<float> tail;
+        std::vector<float> mono ((size_t) block), l ((size_t) block), r ((size_t) block);
+        double phase = 0.0;
+
+        const int blocks = (int) (sr * 0.5) / block;
+
+        for (int i = 0; i < blocks; ++i)
+        {
+            for (int k = 0; k < block; ++k)
+            {
+                mono[(size_t) k] = 0.25f * (float) std::sin (phase);
+                phase += 6.283185307179586 * 110.0 / sr;
+            }
+
+            chain.process (mono.data(), l.data(), r.data(), block);
+
+            if (i > blocks / 2)
+                for (int k = 0; k < block; ++k)
+                {
+                    tail.push_back (l[(size_t) k]);
+                    if (peak != nullptr)
+                        *peak = std::max (*peak, std::abs (l[(size_t) k]));
+                }
+        }
+
+        return tail;
+    };
+
+    float emptyPeak = 0.0f;
+    const auto emptyTail = render (&emptyPeak);
+    report ("stage on with an empty slot is a wire", emptyPeak > 0.2f,
+            "peak " + juce::String (emptyPeak, 3));
+
+    const auto name = pickEffect (host.getEffectNames(),
+                                  { "AUDistortion", "AUDelay", "AUGraphicEQ" });
+
+    if (name.isEmpty())
+    {
+        std::printf ("  no cached plugin list — run the registry test first\n");
+        return;
+    }
+
+    juce::String error;
+
+    if (! pedal.load (host, name, error))
+    {
+        report ((name + " loads into the pedal").toRawUTF8(), false, error);
+        return;
+    }
+
+    chain.reset();
+
+    float loadedPeak = 0.0f;
+    const auto loadedTail = render (&loadedPeak);
+
+    bool finite = true;
+
+    for (const float v : loadedTail)
+        finite = finite && std::isfinite (v);
+
+    report ((name + " runs inside the chain").toRawUTF8(), finite && loadedPeak > 0.005f,
+            "peak " + juce::String (loadedPeak, 3) + ", finite");
+}
+
 // The whole point of hosting is that a real instrument makes a real sound from
 // the notes the tracker produced. Discovery is not the claim; audio is.
 static void testInstrumentHosting (const juce::String& wanted, double sr, int block,
@@ -3962,6 +4560,13 @@ int main (int argc, char* argv[])
     testBassTightPreset (48000.0, 64);
     testNoteSegmentation (48000.0, 64);
     testVirtualMidiPort();
+    testPluginRegistry (48000.0, 64);
+    testEffectSlot (48000.0, 64);
+    testVocoderSidechain (48000.0, 64);
+    testVocalChannel (48000.0, 64);
+    testAutotunePicksAndCorrects (48000.0, 64);
+    testCarrierTap (48000.0, 64);
+    testPedalStage (48000.0, 64);
     testInstrumentHosting ("SKY Keys", 48000.0, 64);
     testInstrumentHosting ("DLSMusicDevice", 48000.0, 64, true);   // the control
     testInstrumentHosting ("Vital", 48000.0, 64);

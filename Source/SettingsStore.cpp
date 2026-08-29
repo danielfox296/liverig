@@ -31,6 +31,10 @@ void SettingsStore::load (ParamStore& params)
         chainOrder = obj->getProperty ("chainOrder").toString();
         tuner = obj->getProperty ("tuner").toString();
         ampModel = obj->getProperty ("ampModel").toString();
+        tunePlugin = obj->getProperty ("tunePlugin").toString();
+        tunePluginState = obj->getProperty ("tunePluginState").toString();
+        pedalPlugin = obj->getProperty ("pedalPlugin").toString();
+        pedalPluginState = obj->getProperty ("pedalPluginState").toString();
     }
 }
 
@@ -46,6 +50,10 @@ void SettingsStore::save (const ParamStore& params) const
     root->setProperty ("chainOrder", chainOrder);
     root->setProperty ("tuner", tuner);
     root->setProperty ("ampModel", ampModel);
+    root->setProperty ("tunePlugin", tunePlugin);
+    root->setProperty ("tunePluginState", tunePluginState);
+    root->setProperty ("pedalPlugin", pedalPlugin);
+    root->setProperty ("pedalPluginState", pedalPluginState);
 
     const auto file = getFile();
     file.getParentDirectory().createDirectory();

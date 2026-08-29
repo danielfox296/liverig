@@ -97,7 +97,7 @@ set(RIG_COMPILE_DEFS
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_USE_CAMERA=0
-    JUCE_PLUGINHOST_VST3=0
+    JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_AU=1
     JUCE_STRICT_REFCOUNTEDPOINTER=1
     JUCE_REPORT_APP_USAGE=0
@@ -121,6 +121,8 @@ target_sources(LiveRig PRIVATE
     Source/SongMaker.cpp
     Source/MidiSender.cpp
     Source/InstrumentHost.cpp
+    Source/EffectSlot.cpp
+    Source/VocalChannel.cpp
     Source/PresetStore.cpp
     ${RIG_DSP_SOURCES})
 
@@ -169,6 +171,8 @@ target_sources(rig_uishot PRIVATE
     Source/SongMaker.cpp
     Source/MidiSender.cpp
     Source/InstrumentHost.cpp
+    Source/EffectSlot.cpp
+    Source/VocalChannel.cpp
     Source/PresetStore.cpp
     ${RIG_DSP_SOURCES})
 
@@ -195,10 +199,12 @@ juce_add_console_app(rig_tests PRODUCT_NAME "rig_tests")
 target_sources(rig_tests PRIVATE
     Tests/TestMain.cpp
     Source/InstrumentHost.cpp
+    Source/EffectSlot.cpp
+    Source/VocalChannel.cpp
     Source/PresetStore.cpp
     ${RIG_DSP_SOURCES})
 
-target_compile_definitions(rig_tests PRIVATE ${RIG_COMPILE_DEFS} JUCE_STANDALONE_APPLICATION=1)
+target_compile_definitions(rig_tests PRIVATE ${RIG_COMPILE_DEFS} JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_STANDALONE_APPLICATION=1)
 
 if (RIG_LIBCXX_FLAGS)
     target_compile_options(rig_tests PRIVATE ${RIG_LIBCXX_FLAGS})

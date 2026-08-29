@@ -137,9 +137,14 @@ any order in the app; Input, Reverb and Live out hold their places.
 | 10 | Chorus | rate, depth, voices, tone, keep lows, mix |
 | 11 | Delay | time, feedback, mix, high cut, mod rate, mod depth, sat |
 | 12 | Tape | drive, soften, bump, mix — tape-machine warmth |
-| 13 | Reverb | size, damping, mix — Freeverb, mono in / stereo out |
-| 14 | Live out | lane gain |
-| 15 | Master | gain over the whole mix — stems and live — into the safety limiter |
+| 13 | Pedal | a hosted AU/VST3 effect as a chain insert — pick it, drag it anywhere |
+| 14 | Reverb | size, damping, mix — Freeverb, mono in / stereo out |
+| 15 | Live out | lane gain |
+| 16 | Master | gain over the whole mix — stems and live — into the safety limiter |
+
+The **Autotune** row above the chain is its own lane, not a stage: the
+second interface input (the mic), pitch-corrected, with gain, gate and level
+— see *The autotune channel* below.
 
 Attack and release are exposed on the compressor because "fast attack
 available" is the whole point of a FET-style feel on bass.
@@ -266,14 +271,59 @@ Units and no third-party host can see them. What is reachable is everything
 installed as a normal AU. On this machine that is nine: Vital, LABS, Kontakt 5,
 SKY Keys, MPowerSynth, Splice Bridge, and Apple's three built-ins.
 
-The first scan takes about forty-five seconds, because identifying an Audio
-Unit means instantiating it. It runs on a background thread with the app fully
-usable and the result is cached, so it happens once. Only components whose type
-says instrument are touched — this machine has 341 of them and one refuses to
-open at all, so scanning everything would be slow and fragile for no gain.
+The first scan takes a while, because identifying an Audio Unit means
+instantiating it. It runs on a background thread with the app fully usable and
+the result is cached, so it happens once. The same scan records **effect
+plugins** for the vocal channel and the Pedal stage — AU types instrument,
+effect and music effect are touched; the converters, panners and codecs among
+this machine's 341 components are not. A plugin installed as both AU and VST3
+appears once, as its AU.
 
 A sample library that starts with no patch loaded will be silent until you
 choose one in its own window. That is the plugin's business, not the host's.
+
+### The autotune channel
+
+The second interface input — the mic beside the bass — does exactly one
+thing: **autotune**. The row is an ON switch like every other row, crossfaded
+so a footswitch press never clicks, with gain, a gate (open at **Gate**, shut
+6 dB under it, so breaths die between phrases without eating consonants) and
+its own level into the mix. The lane counts as performance: it ducks the
+backing stems and rides the master limiter like everything the player does.
+
+**There is nothing to pick.** The rig chooses the pitch corrector itself from
+a short list of real autotunes installed on the machine — Graillon 3 first
+when present, MAutoPitch as the stopgap, the usual suspects after that — and
+the row's status line names what it found. Install Graillon 3 (free,
+auburnsounds.com), hit Rescan on the MIDI row or relaunch, and it takes over
+automatically. **Key & style...** opens the plugin's own window, where key,
+scale and how hard the correction grabs live; those settings persist with the
+rig's. With no pitch plugin installed the row is honest silence and the
+status line says what to install.
+
+The switch is MIDI-mapped out of the box: **Program Change 0/1** from any
+connected controller is off/on — foot-controller shaped, nothing to
+configure, controllers plugged in mid-session picked up within seconds.
+
+### Hosted plugins
+
+Third-party AU and VST3 effects load into two fixed roles — the **Autotune**
+lane's corrector (chosen automatically, above) and the **Pedal** stage in the
+bass chain, which does have a picker, because "any effect, anywhere in the
+chain" is its whole point. Effects are configuration, not builds.
+
+What the host guarantees, because this is stage software:
+
+- A plugin that fails to load leaves its slot empty and audio running.
+- A plugin that blows up mid-song is ejected on the spot and cleaned up off
+  the audio thread; the slot's status line says so.
+- An empty Pedal slot is a wire; an empty autotune is silence, not a crash.
+- Added latency is *surfaced* in the row's status line, never silently
+  compensated. Real pitch correction inherently costs ~20-25 ms — detecting
+  a low voice's pitch takes a couple of its periods, and no plugin escapes
+  that. Graillon 3 reports 24.4 ms and the row says so, to the decimal.
+- Plugin settings persist as state blobs and recall on launch, exactly like
+  the AU instrument's.
 
 ### What the (B) stages are for
 

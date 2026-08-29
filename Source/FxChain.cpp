@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "EffectSlot.h"
+
 namespace rig
 {
 
@@ -112,6 +114,7 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
     reverb.prepare (sr, maxBlock);
 
     dry.assign ((size_t) maxBlock, 0.0f);
+    carrierBuf.assign ((size_t) maxBlock, 0.0f);
 
     juce::SmoothedValue<float>* gains[] { &inGain, &makeup, &compBlend, &driveAmt, &driveLevel, &liveOut,
                                           &ampIn, &ampOut, &octMix, &oct2Lvl,
@@ -136,7 +139,7 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
 
     juce::SmoothedValue<float>* bypasses[] { &bypComp, &bypEq, &bypFilter, &bypBoost, &bypCab, &bypSub,
                                              &bypDrive, &bypAmp, &bypOct, &bypSynth, &bypPhaser,
-                                             &bypChorus, &bypDelay, &bypTape, &bypReverb };
+                                             &bypChorus, &bypDelay, &bypTape, &bypReverb, &bypPedal };
     for (auto* b : bypasses)
         b->reset (sr, 0.015);
 
@@ -478,6 +481,7 @@ void FxChain::updateFromParams() noexcept
 
     bypCab.setTargetValue    (params.getBool (pCabOn)    ? 1.0f : 0.0f);
     bypSub.setTargetValue    (params.getBool (pSubOn)    ? 1.0f : 0.0f);
+    bypPedal.setTargetValue  (params.getBool (pPedalOn)  ? 1.0f : 0.0f);
 
     float latency = 0.0f;
 
@@ -486,6 +490,10 @@ void FxChain::updateFromParams() noexcept
 
     if (params.getBool (pOctOn))
         latency += shifter.getLagSamples();
+
+    // A hosted pedal's lookahead is surfaced, never silently compensated.
+    if (params.getBool (pPedalOn) && pedal != nullptr)
+        latency += (float) pedal->getLatencySamples();
 
     reportedLatency.store (latency, std::memory_order_relaxed);
 
@@ -1028,10 +1036,24 @@ void FxChain::process (float* mono, float* left, float* right, int numSamples) n
                 runStage (mono, numSamples, bypTape, &tapeMix, [this] (float* d, int n) { processTape (d, n); });
                 break;
 
+            case stPedal:
+                runStage (mono, numSamples, bypPedal, nullptr, [this] (float* d, int n)
+                {
+                    // An empty or ejected slot passes dry — the crossfade
+                    // then blends dry with dry and the stage is a wire.
+                    if (pedal != nullptr)
+                        pedal->processMono (d, n);
+                });
+                break;
+
             default:
                 break;
         }
     }
+
+    // The carrier tap: the bass with every movable stage applied, before the
+    // lane turns stereo and before Live out has its say.
+    juce::FloatVectorOperations::copy (carrierBuf.data(), mono, numSamples);
 
     // The tank always runs so a toggle rides the bypass crossfade with its
     // tail intact; left/right carry pure wet until the blend below.

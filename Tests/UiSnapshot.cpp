@@ -153,6 +153,18 @@ int main (int argc, char* argv[])
         writePng (eqShot, outDir.getChildFile ("eq-editor.png"));
         problems += countBlankButtons (main, "the EQ editor");
 
+        // The autotune strip: the switch, its three faders, and the status line.
+        params.set (rig::pVocalOn, 1.0f);
+        main.selectVocalForSnapshot();
+
+        juce::Image vocalShot (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
+        {
+            juce::Graphics g (vocalShot);
+            main.paintEntireComponent (g, true);
+        }
+        writePng (vocalShot, outDir.getChildFile ("vocal.png"));
+        problems += countBlankButtons (main, "the vocal editor");
+
         // The tuner tab, mid-note.
         main.showTunerForSnapshot();
 

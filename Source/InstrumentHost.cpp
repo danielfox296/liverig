@@ -5,10 +5,12 @@ namespace rig
 
 static juce::File cacheFile()
 {
+    // "plugins" rather than the old "instruments": the scan now records
+    // effects too, and an old cache without them must trigger a fresh scan.
     return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
               .getChildFile ("Application Support")
               .getChildFile ("LiveRig")
-              .getChildFile ("instruments.xml");
+              .getChildFile ("plugins.xml");
 }
 
 InstrumentHost::InstrumentHost()
@@ -17,18 +19,23 @@ InstrumentHost::InstrumentHost()
     scratch.setSize (2, 512);
     midi.ensureSize (512);
 
-    // A cached list means the picker is populated the moment it opens; a live
-    // scan instantiates plugins and some of them are slow or broken.
+    // A cached list means the pickers are populated the moment they open; a
+    // live scan instantiates plugins and some of them are slow or broken.
     if (auto xml = juce::XmlDocument::parse (cacheFile()))
     {
         const juce::ScopedLock sl (listLock);
 
-        for (auto* child : xml->getChildIterator())
+        for (auto* group : xml->getChildIterator())
         {
-            juce::PluginDescription description;
+            auto& into = group->hasTagName ("effects") ? effects : instruments;
 
-            if (description.loadFromXml (*child))
-                instruments.add (description);
+            for (auto* child : group->getChildIterator())
+            {
+                juce::PluginDescription description;
+
+                if (description.loadFromXml (*child))
+                    into.add (description);
+            }
         }
     }
 
@@ -86,7 +93,7 @@ void InstrumentHost::beginScan()
 
 void InstrumentHost::scanOnThisThread()
 {
-    juce::Array<juce::PluginDescription> found;
+    juce::Array<juce::PluginDescription> foundInstruments, foundEffects;
 
     for (int i = 0; i < formats.getNumFormats(); ++i)
     {
@@ -101,13 +108,15 @@ void InstrumentHost::scanOnThisThread()
         // Audio Units carry their type in the identifier, and instantiating a
         // plugin to ask what it is costs real time — this machine has 341
         // components and one of them refuses to open at all. Filter to the
-        // instrument type first and the scan touches a dozen rather than
-        // hundreds.
+        // types the rig can use — instruments, effects, music effects — and
+        // the converters, panners and codecs stay untouched.
         const bool isAudioUnit = format->getName().containsIgnoreCase ("AudioUnit");
 
         for (const auto& identifier : identifiers)
         {
-            if (isAudioUnit && ! identifier.contains ("aumu"))
+            if (isAudioUnit && ! (identifier.contains ("aumu")
+                                   || identifier.contains ("aufx")
+                                   || identifier.contains ("aumf")))
                 continue;
 
             if (abortScan.load (std::memory_order_relaxed))
@@ -120,8 +129,7 @@ void InstrumentHost::scanOnThisThread()
             format->findAllTypesForFile (types, identifier);
 
             for (auto* type : types)
-                if (type->isInstrument)
-                    found.add (*type);
+                (type->isInstrument ? foundInstruments : foundEffects).add (*type);
         }
     }
 
@@ -134,17 +142,24 @@ void InstrumentHost::scanOnThisThread()
     };
 
     ByName sorter;
-    found.sort (sorter);
+    foundInstruments.sort (sorter);
+    foundEffects.sort (sorter);
 
     {
         const juce::ScopedLock sl (listLock);
-        instruments = found;
+        instruments = foundInstruments;
+        effects = foundEffects;
     }
 
-    juce::XmlElement root ("instruments");
+    juce::XmlElement root ("plugins");
+    auto* instrumentGroup = root.createNewChildElement ("instruments");
+    auto* effectGroup = root.createNewChildElement ("effects");
 
-    for (const auto& description : found)
-        root.addChildElement (description.createXml().release());
+    for (const auto& description : foundInstruments)
+        instrumentGroup->addChildElement (description.createXml().release());
+
+    for (const auto& description : foundEffects)
+        effectGroup->addChildElement (description.createXml().release());
 
     cacheFile().getParentDirectory().createDirectory();
     root.writeTo (cacheFile());
@@ -152,15 +167,84 @@ void InstrumentHost::scanOnThisThread()
     scanning.store (false, std::memory_order_relaxed);
 }
 
+// A plugin installed as both AU and VST3 is one plugin, not two: names are
+// deduplicated and lookups prefer the AU, the native citizen here.
+static juce::StringArray dedupedNames (const juce::Array<juce::PluginDescription>& list)
+{
+    juce::StringArray names;
+
+    for (const auto& description : list)
+        names.addIfNotAlreadyThere (description.name);
+
+    return names;
+}
+
+static bool pickByName (const juce::Array<juce::PluginDescription>& list,
+                        const juce::String& name, juce::PluginDescription& out)
+{
+    bool matched = false;
+
+    for (const auto& description : list)
+    {
+        if (description.name != name)
+            continue;
+
+        if (! matched || description.pluginFormatName.containsIgnoreCase ("AudioUnit"))
+        {
+            out = description;
+            matched = true;
+        }
+    }
+
+    return matched;
+}
+
 juce::StringArray InstrumentHost::getAvailableNames() const
 {
     const juce::ScopedLock sl (listLock);
-    juce::StringArray names;
+    return dedupedNames (instruments);
+}
 
-    for (const auto& description : instruments)
-        names.add (description.name);
+juce::StringArray InstrumentHost::getEffectNames() const
+{
+    const juce::ScopedLock sl (listLock);
+    return dedupedNames (effects);
+}
 
-    return names;
+juce::String InstrumentHost::preferredPitchPlugin() const
+{
+    // Real pitch correctors only, preference first. Graillon is the intended
+    // tenant; MAutoPitch is the stopgap already on this machine; the rest
+    // are the usual suspects should one of them be what is installed.
+    static const char* const wanted[] = { "Graillon", "MAutoPitch", "Auto-Tune",
+                                          "Auto-Key", "MetaTune", "KeroVee", "Voloco" };
+
+    const auto names = getEffectNames();
+
+    for (auto* candidate : wanted)
+        for (const auto& name : names)
+            if (name.containsIgnoreCase (candidate))
+                return name;
+
+    return {};
+}
+
+std::unique_ptr<juce::AudioPluginInstance> InstrumentHost::createEffectInstance (
+        const juce::String& name, double sampleRate, int blockSize, juce::String& error)
+{
+    juce::PluginDescription wanted;
+
+    {
+        const juce::ScopedLock sl (listLock);
+
+        if (! pickByName (effects, name, wanted))
+        {
+            error = "no effect called \"" + name + "\"";
+            return nullptr;
+        }
+    }
+
+    return formats.createPluginInstance (wanted, sampleRate, blockSize, error);
 }
 
 bool InstrumentHost::load (const juce::String& name, juce::String& error)
@@ -170,16 +254,7 @@ bool InstrumentHost::load (const juce::String& name, juce::String& error)
 
     {
         const juce::ScopedLock sl (listLock);
-
-        for (const auto& description : instruments)
-        {
-            if (description.name == name)
-            {
-                wanted = description;
-                matched = true;
-                break;
-            }
-        }
+        matched = pickByName (instruments, name, wanted);
     }
 
     if (! matched)

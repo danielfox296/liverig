@@ -14,7 +14,13 @@ class LiveRigApplication : public juce::JUCEApplication
 public:
     const juce::String getApplicationName() override    { return "LiveRig"; }
     const juce::String getApplicationVersion() override { return "0.1.0"; }
-    bool moreThanOneInstanceAllowed() override          { return false; }
+
+    // One instance on stage — but the diagnostic must be able to run beside
+    // a live session, because "it doesn't work" is exactly when it runs.
+    bool moreThanOneInstanceAllowed() override
+    {
+        return getCommandLineParameters().contains ("--diagnose");
+    }
 
     void initialise (const juce::String&) override
     {
@@ -33,11 +39,93 @@ public:
 
         const auto error = engine.initialise (std::move (deviceState));
 
-        if (error.isNotEmpty())
+        const bool diagnosing = getCommandLineParameters().contains ("--diagnose");
+
+        if (error.isNotEmpty() && ! diagnosing)
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
                                                     "Audio device", error);
 
         window = std::make_unique<MainWindow> (params, engine, settings);
+
+        // `LiveRig --diagnose` from a terminal: the full real startup — same
+        // binary, same settings, same device — then the facts and out. This
+        // exists because "nothing happens" must always be answerable.
+        if (diagnosing)
+        {
+            const auto say = [] (const char* fmt, auto... args)
+            { std::fprintf (stderr, fmt, args...); };
+
+            say ("LiveRig diagnose\n================\n");
+
+            if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
+                say ("device: %s | %.0f Hz | %d samples | %d in / %d out\n",
+                     device->getName().toRawUTF8(),
+                     device->getCurrentSampleRate(),
+                     device->getCurrentBufferSizeSamples(),
+                     device->getActiveInputChannels().countNumberOfSetBits(),
+                     device->getActiveOutputChannels().countNumberOfSetBits());
+            else
+                say ("device: NONE OPEN%s%s\n", error.isEmpty() ? "" : " — ",
+                     error.toRawUTF8());
+
+            say ("mic path: %s\n", engine.getActiveInputCount() >= 2
+                                       ? "input 2 available"
+                                       : "NO INPUT 2 on this device — the mic lane is silent");
+
+            say ("registry: %d effects, %d instruments cached\n",
+                 engine.getInstrument().getEffectNames().size(),
+                 engine.getInstrument().getAvailableNames().size());
+
+            say ("preferred pitch plugin: %s\n",
+                 engine.getInstrument().preferredPitchPlugin().toRawUTF8());
+
+            auto& tune = engine.getTuneSlot();
+            say ("tune slot: %s\n",
+                 tune.isLoaded()
+                     ? (tune.getLoadedName() + " loaded, " + juce::String (tune.getLatencyMs(), 1)
+                          + " ms latency").toRawUTF8()
+                     : (tune.getLastError().isNotEmpty() ? tune.getLastError().toRawUTF8()
+                                                         : "EMPTY, no error recorded"));
+
+            say ("autotune switch: %s | vocal gain %.1f dB, gate %.1f dB, level %.1f dB\n",
+                 params.getBool (pVocalOn) ? "ON" : "off",
+                 params.get (pVocalGain), params.get (pVocalGate), params.get (pVocalLevel));
+
+            // The editor needs the message loop to lay itself out — Melda's
+            // report 1x1 until then — so it is measured in a real window
+            // after the loop has run, exactly the way a person meets it.
+            if (auto* plugin = tune.getLiveProcessor())
+            {
+                if (auto* editor = plugin->createEditorIfNeeded())
+                {
+                    probeWindow = std::make_unique<juce::DocumentWindow> (
+                        "probe", juce::Colours::black, juce::DocumentWindow::closeButton);
+                    probeWindow->setUsingNativeTitleBar (true);
+
+                    if (editor->getWidth() < 40 || editor->getHeight() < 40)
+                        editor->setSize (560, 400);
+
+                    probeWindow->setContentOwned (editor, true);
+                    probeWindow->setVisible (true);
+
+                    juce::Timer::callAfterDelay (800, [this]
+                    {
+                        auto* content = probeWindow->getContentComponent();
+                        std::fprintf (stderr, "tune editor after layout: %dx%d\n",
+                                      content != nullptr ? content->getWidth() : 0,
+                                      content != nullptr ? content->getHeight() : 0);
+                        probeWindow.reset();
+                        quit();
+                    });
+
+                    return;
+                }
+
+                say ("tune editor: REFUSED — Key & style... would do nothing\n");
+            }
+
+            quit();
+        }
     }
 
     void shutdown() override
@@ -92,6 +180,7 @@ private:
     AudioEngine engine { params };
     RigLookAndFeel lookAndFeel;
     std::unique_ptr<MainWindow> window;
+    std::unique_ptr<juce::DocumentWindow> probeWindow;   // --diagnose only
 };
 
 } // namespace rig

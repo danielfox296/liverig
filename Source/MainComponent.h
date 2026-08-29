@@ -34,6 +34,7 @@ public:
     // Used by the offscreen snapshot tool.
     void selectFxForSnapshot();
     void selectEqForSnapshot();
+    void selectVocalForSnapshot();
     void showTunerForSnapshot();
     void showJobStripForSnapshot();
 
@@ -74,7 +75,10 @@ private:
     void chooseAmpCapture();
     void refreshAmpControls();
     void refreshInstrumentControls();
+    void refreshSlotControls();
+    void autoBindPitchPlugin();
     void openPluginWindow();
+    void openPluginWindowFor (juce::AudioProcessor* plugin, const juce::String& title);
     void loadAmpFile (const juce::File& file);
     void applyAmpCapture (const juce::var& captureName);
 
@@ -96,6 +100,7 @@ private:
 
     LevelMeter masterMeter { 2 };
     LevelMeter inputMeter { 1 };
+    LevelMeter vocalMeter { 1 };
     MidiStatusView midiStatus;
 
     juce::ListBox songList { "songs", this };
@@ -189,6 +194,94 @@ private:
 
     InstrumentControls instrumentControls;
 
+    // One hosted-plugin role: a label naming it, the picker, and the way
+    // into the plugin's own window. "None" empties the slot.
+    struct SlotRow : juce::Component
+    {
+        explicit SlotRow (const juce::String& roleName)
+        {
+            label.setText (roleName, juce::dontSendNotification);
+            label.setColour (juce::Label::textColourId, juce::Colour (0xff9a9da6));
+            open.setButtonText ("UI");
+            open.setWantsKeyboardFocus (false);
+            box.setTextWhenNothingSelected ("None");
+            addAndMakeVisible (label);
+            addAndMakeVisible (box);
+            addAndMakeVisible (open);
+        }
+
+        void resized() override
+        {
+            auto b = getLocalBounds();
+            label.setBounds (b.removeFromLeft (64));
+            open.setBounds (b.removeFromRight (40));
+            b.removeFromRight (4);
+            box.setBounds (b);
+        }
+
+        juce::Label label;
+        juce::ComboBox box;
+        juce::TextButton open;
+    };
+
+    // The Autotune row's editor header: no picker, no rack — the rig chooses
+    // the pitch plugin itself from a short list of real autotunes. The label
+    // says what it found (or what to install), and Key... opens the plugin's
+    // own window, where key, scale and correction amount live.
+    struct AutotuneControls : juce::Component
+    {
+        AutotuneControls()
+        {
+            status.setFont (juce::Font (juce::FontOptions (12.0f)));
+            status.setColour (juce::Label::textColourId, juce::Colour (0xff9a9da6));
+            open.setButtonText ("Key & style...");
+            open.setWantsKeyboardFocus (false);
+            addAndMakeVisible (status);
+            addAndMakeVisible (open);
+        }
+
+        void resized() override
+        {
+            auto b = getLocalBounds();
+            open.setBounds (b.removeFromRight (96));
+            b.removeFromRight (6);
+            status.setBounds (b);
+        }
+
+        juce::Label status;
+        juce::TextButton open;
+    };
+
+    AutotuneControls autotuneControls;
+
+    // The Pedal row's editor header: the insert's picker and its own line of
+    // truth about latency.
+    struct PedalControls : juce::Component
+    {
+        static constexpr int preferredHeight = 46;
+
+        PedalControls()
+        {
+            status.setFont (juce::Font (juce::FontOptions (11.0f)));
+            status.setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
+            addAndMakeVisible (pedal);
+            addAndMakeVisible (status);
+        }
+
+        void resized() override
+        {
+            auto b = getLocalBounds();
+            pedal.setBounds (b.removeFromTop (26));
+            b.removeFromTop (2);
+            status.setBounds (b);
+        }
+
+        SlotRow pedal { "Pedal" };
+        juce::Label status;
+    };
+
+    PedalControls pedalControls;
+
     // The EQ's whole control surface — the curve is the interface, so the
     // editor shows it in place of fader rows.
     EqView eqControls { params };
@@ -219,6 +312,9 @@ private:
     float snapshot[(size_t) NumParams] {};
     int saveCounter = 0;
     int pendingLoopIn = -1;
+    int lastVocalOn = -1;
+    int midiInputRefresh = 0;
+    int lastSlotFailures = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

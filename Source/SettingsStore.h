@@ -24,6 +24,12 @@ public:
     juce::String chainOrder;    // movable stage keys, comma-separated, top to bottom
     juce::String tuner;         // "bass" or "guitar"
     juce::String ampModel;      // path of the loaded NAM capture, empty for none
+
+    // The hosted-plugin roles: plugin name and its state blob, recalled on
+    // launch the way the instrument is. The autotune's key and style live in
+    // tunePluginState.
+    juce::String tunePlugin, tunePluginState;
+    juce::String pedalPlugin, pedalPluginState;
 };
 
 } // namespace rig

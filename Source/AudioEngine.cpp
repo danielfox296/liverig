@@ -3,7 +3,10 @@
 namespace rig
 {
 
-AudioEngine::AudioEngine (ParamStore& p) : params (p), stems (p), fx (p) {}
+AudioEngine::AudioEngine (ParamStore& p) : params (p), stems (p), fx (p)
+{
+    fx.setPedalSlot (&pedalSlot);
+}
 
 AudioEngine::~AudioEngine()
 {
@@ -30,7 +33,31 @@ juce::String AudioEngine::initialise (std::unique_ptr<juce::XmlElement> savedSta
         callbackAdded = true;
     }
 
+    enableAllMidiInputs();
+    deviceManager.addMidiInputDeviceCallback ({}, this);
+
     return error;
+}
+
+void AudioEngine::enableAllMidiInputs()
+{
+    for (const auto& device : juce::MidiInput::getAvailableDevices())
+        if (! deviceManager.isMidiInputDeviceEnabled (device.identifier))
+            deviceManager.setMidiInputDeviceEnabled (device.identifier, true);
+}
+
+void AudioEngine::handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& message)
+{
+    // The autotune switch, foot-controller shaped: Program Change 0 is off,
+    // 1 is on, landing straight in the parameter store, which is atomic —
+    // no thread gymnastics.
+    if (message.isProgramChange())
+    {
+        const int program = message.getProgramChangeNumber();
+
+        if (program == 0 || program == 1)
+            params.set (pVocalOn, (float) program);
+    }
 }
 
 void AudioEngine::preferLowLatencyBuffer()
@@ -70,6 +97,7 @@ float AudioEngine::getIoLatencyMs() noexcept
 
 void AudioEngine::shutdown()
 {
+    deviceManager.removeMidiInputDeviceCallback ({}, this);
     midi.close();
     if (callbackAdded)
     {
@@ -93,13 +121,19 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
     currentRate.store (rate, std::memory_order_relaxed);
     currentBlock.store (maxBlock, std::memory_order_relaxed);
+    activeInputs.store (device->getActiveInputChannels().countNumberOfSetBits(),
+                        std::memory_order_relaxed);
 
-    scratch.setSize (5, maxBlock, false, true, false);
+    scratch.setSize (6, maxBlock, false, true, false);
     scratch.clear();
 
     fx.prepare (rate, maxBlock);
     instrument.prepare (rate, maxBlock);
     stems.prepare (rate, maxBlock);
+
+    tuneSlot.prepare (rate, maxBlock);
+    pedalSlot.prepare (rate, maxBlock);
+    vocal.prepare (rate, maxBlock);
 
     ducker.prepare (rate);
     limiter.prepare (rate);
@@ -108,6 +142,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
         juce::Decibels::decibelsToGain (params.get (pMasterGain), -60.0f));
 
     inPeak.store (0.0f);
+    vocalPeak.store (0.0f);
     outPeakL.store (0.0f);
     outPeakR.store (0.0f);
     limiterGr.store (0.0f);
@@ -118,6 +153,7 @@ void AudioEngine::audioDeviceStopped()
     currentRate.store (0.0, std::memory_order_relaxed);
     currentBlock.store (0, std::memory_order_relaxed);
     inPeak.store (0.0f);
+    vocalPeak.store (0.0f);
     outPeakL.store (0.0f);
     outPeakR.store (0.0f);
 }
@@ -145,11 +181,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     const double rate = currentRate.load (std::memory_order_relaxed);
     const float decay = rate > 0.0 ? std::exp (-(float) numSamples / (float) (rate * 0.35)) : 0.0f;
 
-    float* monoIn = scratch.getWritePointer (0);
-    float* liveL  = scratch.getWritePointer (1);
-    float* liveR  = scratch.getWritePointer (2);
-    float* mixL   = scratch.getWritePointer (3);
-    float* mixR   = scratch.getWritePointer (4);
+    float* monoIn  = scratch.getWritePointer (0);
+    float* liveL   = scratch.getWritePointer (1);
+    float* liveR   = scratch.getWritePointer (2);
+    float* mixL    = scratch.getWritePointer (3);
+    float* mixR    = scratch.getWritePointer (4);
+    float* vocalIn = scratch.getWritePointer (5);
 
     for (int offset = 0; offset < numSamples;)
     {
@@ -177,6 +214,15 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             instrumentGain += 0.25f * (target - instrumentGain);
             instrument.process (events, midiCount, liveL, liveR, n, instrumentGain);
         }
+
+        // --- autotune lane: the mic on input 2, summed in as performance ---
+        if (numInputChannels > 1 && inputChannelData[1] != nullptr)
+            juce::FloatVectorOperations::copy (vocalIn, inputChannelData[1] + offset, n);
+        else
+            juce::FloatVectorOperations::clear (vocalIn, n);
+
+        updatePeak (vocalPeak, vocalIn, n, decay);
+        vocal.process (vocalIn, liveL, liveR, n);
 
         // --- playback lane ---
         juce::FloatVectorOperations::clear (mixL, n);

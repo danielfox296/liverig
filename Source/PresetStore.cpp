@@ -6,7 +6,7 @@ namespace rig
 // Bumped when the factory content changes. On load, an older file gets its
 // factory presets refreshed by name and any new ones added — presets the
 // user saved under their own names are never touched.
-static constexpr int kFactoryVersion = 11;
+static constexpr int kFactoryVersion = 13;
 
 // The order the factory chain presets were voiced in. Recalling one rewires
 // the chain to match, the same as any preset saved in the app.
@@ -285,6 +285,7 @@ const std::vector<FactoryChain>& factoryChains()
                            { pDelayModRate, 0.9f }, { pDelayModDepth, 0.4f }, { pDelaySat, 0.6f },
                            { pRevOn, 1.0f }, { pRevSize, 0.68f }, { pRevDamp, 0.4f },
                            { pRevPre, 20.0f }, { pRevMod, 0.5f }, { pRevMix, 0.3f } } },
+
     };
 
     return list;
@@ -645,6 +646,28 @@ void PresetStore::addFactoryPresets()
 // under their own names are left exactly as they were.
 void PresetStore::mergeFactoryContent()
 {
+    // Factory content that shipped briefly and was withdrawn is swept out by
+    // name, so a file that merged it once does not carry ghosts. Presets the
+    // user saved under their own names never collide with these.
+    static const char* const retiredChains[] = { "Singing bass", "Ventriloquist" };
+
+    for (auto* retired : retiredChains)
+    {
+        const int index = names.indexOf (retired);
+
+        if (index >= 0)
+        {
+            names.remove (index);
+            values.remove (index);
+            orders.remove (index);
+            ampCaptures.remove (index);
+        }
+    }
+
+    for (int i = effectPresets.size(); --i >= 0;)
+        if (effectPresets.getReference (i).effect == "vocal")
+            effectPresets.remove (i);
+
     for (const auto& factory : factoryEffects())
     {
         const auto value = settingsToVar (factory.settings);

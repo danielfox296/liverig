@@ -66,6 +66,13 @@ enum ParamId
     // An AU instrument played by those notes, inside the rig.
     pInstOn, pInstLevel,
 
+    // The autotune lane: the mic through a hosted pitch corrector, on or
+    // off. One function, one switch.
+    pVocalOn, pVocalGain, pVocalGate, pVocalLevel,
+
+    // A hosted plugin as a chain insert.
+    pPedalOn,
+
     pLiveOut,
 
     pMasterGain,

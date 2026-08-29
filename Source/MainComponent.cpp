@@ -77,12 +77,14 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     fxDefs = {
         { "input",  -1,                false, "",       "Input",      -1,        { pInGain } },
+        { "vocal",  -1,                false, "",       "Autotune",   pVocalOn,  { pVocalGain, pVocalGate, pVocalLevel } },
         { "midi",   -1,                false, "midi",   "MIDI",       pMidiOn,   { pMidiChannel, pMidiTranspose, pMidiGate, pMidiHold, pMidiRelease, pMidiBendRange, pMidiExpression, pMidiThru, pInstOn, pInstLevel } },
         { "comp",   FxChain::stComp,   true,  "comp",   "Compressor", pCompOn,   { pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup, pCompBlend, pCompSidechain } },
         { "eq",     FxChain::stEq,     true,  "eq",     "EQ",         pEqOn,     { pEq1Freq, pEq1Gain, pEq1Q, pEq2Freq, pEq2Gain, pEq2Q, pEq3Freq, pEq3Gain, pEq3Q, pEq4Freq, pEq4Gain, pEq4Q, pEq5Freq, pEq5Gain, pEq5Q } },
         { "filter", FxChain::stFilter, true,  "filter", "Filter",     pFltOn,    { pFltSens, pFltAttack, pFltRelease, pFltFrom, pFltTo, pFltRes, pFltMix } },
         { "boost",  FxChain::stBoost,  true,  "boost",  "Boost",      pBoostOn,  { pBoostGain, pBoostSheen, pBoostHair } },
         { "drive",  FxChain::stDrive,  true,  "drive",  "Overdrive",  pDriveOn,  { pDriveVoice, pDriveAmount, pDriveTone, pDriveLevel, pDriveStack, pDriveBite, pDriveXover, pDriveBlend } },
+        { "pedal",  FxChain::stPedal,  true,  "",       "Pedal",      pPedalOn,  {} },
         { "amp",    FxChain::stAmp,    true,  "amp",    "Amp",        pAmpOn,    { pAmpIn, pAmpOut } },
         { "cab",    FxChain::stCab,    true,  "cab",    "Cab (B)",    pCabOn,    { pCabBumpFreq, pCabBumpGain, pCabTop, pCabPresence } },
         { "octave", FxChain::stOctave, true,  "octave", "Octave",     pOctOn,    { pOctInterval, pOctMix, pOct2Interval, pOct2Level } },
@@ -103,7 +105,8 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     {
         auto* panel = panels.add (new FxPanel (params, def.name, def.onParam, def.movable,
                                                def.key == "input" ? &inputMeter
-                                                    : (def.key == "midi" ? (juce::Component*) &midiStatus : nullptr)));
+                                                    : (def.key == "vocal" ? (juce::Component*) &vocalMeter
+                                                        : (def.key == "midi" ? (juce::Component*) &midiStatus : nullptr))));
 
         // Tapping the selected row again puts its controls away. Either way,
         // the effect tab comes forward — tapping a row means "show me this".
@@ -143,11 +146,14 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     midiStatus.onPanic = [this] { engine.getMidi().panic(); };
 
-    // The cached list is on disk, so the picker fills the moment the window
+    // The cached list is on disk, so the pickers fill the moment the window
     // opens. Only scan when there is nothing cached — identifying an Audio
-    // Unit means instantiating it, and paying forty-five seconds on every
-    // launch to rediscover the same nine plugins is not a trade worth making.
-    if (engine.getInstrument().getAvailableNames().isEmpty())
+    // Unit means instantiating it, and paying that on every launch to
+    // rediscover the same plugins is not a trade worth making. An old cache
+    // from before effects were recorded reads as an empty effect list, which
+    // triggers the rescan that upgrades it.
+    if (engine.getInstrument().getAvailableNames().isEmpty()
+         || engine.getInstrument().getEffectNames().isEmpty())
         engine.getInstrument().beginScan();
 
     instrumentControls.instrumentBox.onChange = [this]
@@ -156,6 +162,10 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
         if (name.isEmpty() || name == engine.getInstrument().getLoadedName())
             return;
+
+        // The window may be showing the editor of the instance about to be
+        // retired; close it before the ground moves.
+        pluginWindow.reset();
 
         juce::String error;
 
@@ -186,6 +196,59 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     if (settings.instrument.isNotEmpty())
         engine.getInstrument().restore (settings.instrument, settings.instrumentState);
+
+    // The pedal slot keeps its picker — "any effect in the chain" is its
+    // whole point. The autotune slot has no picker at all: the rig binds
+    // the machine's pitch corrector itself.
+    pedalControls.pedal.box.onChange = [this]
+    {
+        auto& slot = engine.getPedalSlot();
+        auto& box = pedalControls.pedal.box;
+
+        pluginWindow.reset();   // the old instance is about to retire
+
+        if (box.getSelectedId() == 1)
+        {
+            if (slot.isLoaded() || slot.getLoadedName().isNotEmpty())
+            {
+                slot.unload();
+                refreshSlotControls();
+                saveSettings();
+            }
+
+            return;
+        }
+
+        const auto name = box.getText();
+
+        if (name.isEmpty() || name == slot.getLoadedName())
+            return;
+
+        juce::String error;
+
+        if (! slot.load (engine.getInstrument(), name, error))
+            songPanel.showFailure ("Could not load " + name + ".\n\n" + error);
+
+        refreshSlotControls();
+        saveSettings();
+    };
+
+    pedalControls.pedal.open.onClick = [this]
+    {
+        openPluginWindowFor (engine.getPedalSlot().getLiveProcessor(),
+                             engine.getPedalSlot().getLoadedName());
+    };
+
+    autotuneControls.open.onClick = [this]
+    {
+        openPluginWindowFor (engine.getTuneSlot().getLiveProcessor(),
+                             engine.getTuneSlot().getLoadedName());
+    };
+
+    engine.getTuneSlot().restore (engine.getInstrument(), settings.tunePlugin, settings.tunePluginState);
+    engine.getPedalSlot().restore (engine.getInstrument(), settings.pedalPlugin, settings.pedalPluginState);
+    autoBindPitchPlugin();
+    refreshSlotControls();
 
     songPanel.onJobStarted = [this] { resized(); grabKeyboardFocus(); };
     addChildComponent (songPanel);
@@ -367,6 +430,18 @@ void MainComponent::selectEqForSnapshot()
     }
 }
 
+void MainComponent::selectVocalForSnapshot()
+{
+    for (int i = 0; i < (int) fxDefs.size(); ++i)
+    {
+        if (fxDefs[(size_t) i].key == "vocal")
+        {
+            selectFx (i);
+            return;
+        }
+    }
+}
+
 void MainComponent::showTunerForSnapshot()
 {
     editorTabs.setCurrentTabIndex (1);
@@ -435,6 +510,15 @@ void MainComponent::selectFx (int index)
             extra = &eqControls;
             extraHeight = EqView::preferredHeight;
             faderRows = false;
+        }
+        else if (def.key == "vocal")
+        {
+            extra = &autotuneControls;
+        }
+        else if (def.key == "pedal")
+        {
+            extra = &pedalControls;
+            extraHeight = PedalControls::preferredHeight;
         }
 
         fxEditor.show (def.scope, def.name, def.ids, extra, extraHeight, faderRows);
@@ -1038,16 +1122,19 @@ void MainComponent::refreshInstrumentControls()
 
 void MainComponent::openPluginWindow()
 {
-    auto* plugin = engine.getInstrument().getLiveInstrument();
+    openPluginWindowFor (engine.getInstrument().getLiveInstrument(),
+                         engine.getInstrument().getLoadedName());
+}
 
+// One plugin window at a time, on purpose: this is a stage rig, not a studio
+// session, and a stack of floating editors is how a window ends up covering
+// the panic button.
+void MainComponent::openPluginWindowFor (juce::AudioProcessor* plugin, const juce::String& title)
+{
     if (plugin == nullptr)
         return;
 
-    if (pluginWindow != nullptr)
-    {
-        pluginWindow->toFront (true);
-        return;
-    }
+    pluginWindow.reset();
 
     auto* editor = plugin->createEditorIfNeeded();
 
@@ -1056,14 +1143,24 @@ void MainComponent::openPluginWindow()
 
     struct PluginWindow : juce::DocumentWindow
     {
-        PluginWindow (const juce::String& title, juce::AudioProcessorEditor* content,
+        PluginWindow (const juce::String& titleText, juce::AudioProcessorEditor* content,
                       std::unique_ptr<juce::DocumentWindow>& slot)
-            : juce::DocumentWindow (title, juce::Colour (0xff17181c), closeButton), owner (slot)
+            : juce::DocumentWindow (titleText, juce::Colour (0xff17181c), closeButton), owner (slot)
         {
             setUsingNativeTitleBar (true);
+
+            // Some editors — Melda's among them — report 1x1 until their own
+            // GUI thread has laid them out. A window sized to that is
+            // invisible and reads as "nothing happened". Give such an editor
+            // room; it announces its real size a moment later and the window
+            // follows, because the content is tracked.
+            if (content->getWidth() < 40 || content->getHeight() < 40)
+                content->setSize (560, 400);
+
             setContentOwned (content, true);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
+            toFront (true);
         }
 
         void closeButtonPressed() override { owner.reset(); }
@@ -1071,8 +1168,98 @@ void MainComponent::openPluginWindow()
         std::unique_ptr<juce::DocumentWindow>& owner;
     };
 
-    pluginWindow = std::make_unique<PluginWindow> (engine.getInstrument().getLoadedName(),
-                                                   editor, pluginWindow);
+    pluginWindow = std::make_unique<PluginWindow> (title, editor, pluginWindow);
+}
+
+// The autotune slot binds itself: the highest-preference pitch corrector
+// installed on this machine, re-checked on launch and after every scan.
+// Nothing to pick, nothing to configure — install Graillon and it simply
+// takes over from the stopgap on the next launch or rescan.
+//
+// Deliberately no saveSettings() here: this runs during construction, and a
+// constructor must never write to disk — the snapshot tool builds this
+// window with an unloaded settings store, and saving from here once
+// flattened the real settings file with blanks. The binding is re-derived
+// every launch anyway; it persists with the next ordinary save.
+void MainComponent::autoBindPitchPlugin()
+{
+    auto& slot = engine.getTuneSlot();
+    const auto wanted = engine.getInstrument().preferredPitchPlugin();
+
+    if (wanted.isEmpty() || wanted == slot.getLoadedName())
+        return;
+
+    pluginWindow.reset();
+
+    juce::String error;
+    slot.load (engine.getInstrument(), wanted, error);
+    refreshSlotControls();
+}
+
+// The pedal picker and both status lines. Latency is stated the moment it
+// exists, and the autotune line always says which plugin is doing the work —
+// or what to install when none is.
+void MainComponent::refreshSlotControls()
+{
+    const auto names = engine.getInstrument().getEffectNames();
+    const bool scanning = engine.getInstrument().isScanning();
+
+    auto& pedalBox = pedalControls.pedal.box;
+    pedalBox.clear (juce::dontSendNotification);
+    pedalBox.setTextWhenNothingSelected (scanning ? "Scanning..." : "None");
+    pedalBox.addItem ("None", 1);
+
+    int id = 2, selected = 0;
+
+    for (const auto& name : names)
+    {
+        pedalBox.addItem (name, id);
+
+        if (engine.getPedalSlot().getLoadedName() == name)
+            selected = id;
+
+        ++id;
+    }
+
+    pedalBox.setSelectedId (selected, juce::dontSendNotification);
+    pedalControls.pedal.open.setEnabled (engine.getPedalSlot().isLoaded());
+
+    const auto describe = [] (EffectSlot& slot) -> juce::String
+    {
+        if (slot.hasFailed())
+            return "failed and was removed";
+
+        if (! slot.isLoaded())
+            return {};
+
+        return slot.getLatencyMs() > 0.05f
+                 ? "adds " + juce::String (slot.getLatencyMs(), 1) + " ms"
+                 : "zero latency";
+    };
+
+    auto& tune = engine.getTuneSlot();
+    juce::String tuneLine;
+
+    if (tune.isLoaded() || tune.hasFailed())
+        tuneLine = tune.getLoadedName() + " — " + describe (tune);
+    else if (tune.getLastError().isNotEmpty())
+        tuneLine = tune.getLastError();
+    else if (scanning)
+        tuneLine = "looking for a pitch plugin...";
+    else
+        tuneLine = "no pitch plugin installed — Graillon 3 is free (auburnsounds.com)";
+
+    // The other half of "nothing happens": the mic lane reads the device's
+    // second input, and a one-input device simply has no mic path.
+    if (engine.getActiveInputCount() < 2 && engine.getSampleRate() > 0.0)
+        tuneLine += "   ·   this audio device has no input 2 — the mic needs the interface";
+
+    autotuneControls.status.setText (tuneLine, juce::dontSendNotification);
+    autotuneControls.open.setEnabled (tune.isLoaded());
+
+    auto pedalLine = describe (engine.getPedalSlot());
+    pedalControls.status.setText (pedalLine.isEmpty() ? juce::String() : "pedal: " + pedalLine,
+                                  juce::dontSendNotification);
 }
 
 void MainComponent::refreshAmpControls()
@@ -1144,6 +1331,10 @@ void MainComponent::saveSettings()
     settings.expandedPanels = expandedStateString();
     settings.instrument = engine.getInstrument().getLoadedName();
     settings.instrumentState = engine.getInstrument().getStateBase64();
+    settings.tunePlugin = engine.getTuneSlot().getLoadedName();
+    settings.tunePluginState = engine.getTuneSlot().getStateBase64();
+    settings.pedalPlugin = engine.getPedalSlot().getLoadedName();
+    settings.pedalPluginState = engine.getPedalSlot().getStateBase64();
     settings.chainOrder = chainOrderString();
     settings.tuner = tunerView.isBassMode() ? "bass" : "guitar";
     settings.save (params);
@@ -1210,13 +1401,49 @@ void MainComponent::timerCallback()
     {
         instrumentScanning = engine.getInstrument().isScanning();
         refreshInstrumentControls();
+
+        // A finished scan may have just discovered a better pitch corrector.
+        if (! instrumentScanning)
+            autoBindPitchPlugin();
+
+        refreshSlotControls();
     }
 
     midiStatus.setNote (engine.getFxChain().getSoundingNote());
     engine.getMidi().setChannel ((int) std::lround (params.get (pMidiChannel)));
     engine.getMidi().setExpressionController ((int) std::lround (params.get (pMidiExpression)));
 
+    // The switch can arrive from a foot controller as well as the button;
+    // when it moves underneath the UI, the editor catches up here. The same
+    // tick notices a plugin that ejected itself mid-song.
+    const int vocalOn = params.getBool (pVocalOn) ? 1 : 0;
+
+    if (vocalOn != lastVocalOn)
+    {
+        lastVocalOn = vocalOn;
+        refreshAllControls();
+    }
+
+    const int failureMask = (engine.getTuneSlot().hasFailed() ? 1 : 0)
+                              | (engine.getPedalSlot().hasFailed() ? 2 : 0)
+                              | (engine.getActiveInputCount() < 2 ? 4 : 0);
+
+    if (failureMask != lastSlotFailures)
+    {
+        lastSlotFailures = failureMask;
+        refreshSlotControls();
+    }
+
+    // A controller plugged in mid-session should just work: re-enable every
+    // few seconds. Cheap — enumeration only, no device churn.
+    if (++midiInputRefresh >= 90)
+    {
+        midiInputRefresh = 0;
+        engine.enableAllMidiInputs();
+    }
+
     inputMeter.setLevel (0, engine.getInputPeak());
+    vocalMeter.setLevel (0, engine.getVocalPeak());
     masterMeter.setLevel (0, engine.getOutputPeakL());
     masterMeter.setLevel (1, engine.getOutputPeakR());
 

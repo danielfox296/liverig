@@ -153,6 +153,13 @@ static const ParamSpec specs[] =
     { "instOn",    "Instrument", 0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, offOnChoices },
     { "instLevel", "Level",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
 
+    { "vocalOn",   "Autotune",   0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
+    { "vocalGain", "Gain",     -24.0f,  24.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
+    { "vocalGate", "Gate",     -80.0f, -20.0f, -50.0f,     0.0f, 0.0f, " dB",  1, false },
+    { "vocalLevel","Level",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
+
+    { "pedalOn",   "Pedal",      0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
+
     { "liveOut",   "Live out", -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
 
     { "masterGain","Gain",     -12.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },

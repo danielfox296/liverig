@@ -20,6 +20,8 @@
 namespace rig
 {
 
+class EffectSlot;
+
 // The live lane: mono in, stereo out, fixed effect order.
 //
 // Every effect runs on every block whether or not it is bypassed, and bypass
@@ -37,6 +39,7 @@ public:
     {
         stComp = 0, stEq, stFilter, stBoost, stDrive, stAmp, stCab,
         stOctave, stSub, stSynth, stPhaser, stChorus, stDelay, stTape,
+        stPedal,   // a hosted plugin as a chain insert — 15 stages still packs into the order word
         numMovableStages
     };
 
@@ -79,6 +82,16 @@ public:
 
     // The NAM capture player behind the Amp stage — the UI loads into it.
     AmpModel& getAmp() noexcept { return amp; }
+
+    // The Pedal stage's hosted plugin. Set once before audio starts; the
+    // slot handles its own thread-safety, so the chain just calls it.
+    void setPedalSlot (EffectSlot* slot) noexcept { pedal = slot; }
+
+    // The bass after every movable stage — octave, drive, all of it — before
+    // the reverb makes it stereo and before Live out scales it. This is the
+    // vocoder's carrier: it stays alive even when MIDI thru mutes the lane,
+    // which is exactly the "bass sings, bass silent" configuration.
+    const float* getCarrier() const noexcept { return carrierBuf.data(); }
 
 private:
     void updateFromParams() noexcept;
@@ -226,7 +239,11 @@ private:
     juce::SmoothedValue<float> reverbMix;
 
     juce::SmoothedValue<float> bypComp, bypEq, bypFilter, bypBoost, bypDrive, bypAmp, bypOct,
-                               bypSynth, bypPhaser, bypChorus, bypDelay, bypTape, bypReverb, bypCab, bypSub;
+                               bypSynth, bypPhaser, bypChorus, bypDelay, bypTape, bypReverb, bypCab, bypSub,
+                               bypPedal;
+
+    EffectSlot* pedal = nullptr;
+    std::vector<float> carrierBuf;
 
     std::vector<float> dry;
 

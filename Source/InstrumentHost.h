@@ -36,6 +36,21 @@ public:
     bool isScanning() const noexcept        { return scanning.load (std::memory_order_relaxed); }
     juce::StringArray getAvailableNames() const;
 
+    // The same scan records effect plugins, so the host doubles as the
+    // machine's plugin registry: the vocal channel and the pedal slot pick
+    // from this list. Where a plugin ships as both AU and VST3 the AU wins —
+    // one name, one entry, and AU is the native citizen on this platform.
+    juce::StringArray getEffectNames() const;
+    std::unique_ptr<juce::AudioPluginInstance> createEffectInstance (const juce::String& name,
+                                                                     double sampleRate, int blockSize,
+                                                                     juce::String& error);
+
+    // The pitch corrector this machine should use, best first: a curated
+    // list of actual autotune plugins matched against what is installed —
+    // never a picker full of every effect on the system. Empty when none is
+    // installed, and the row's status line says what to install.
+    juce::String preferredPitchPlugin() const;
+
     bool load (const juce::String& name, juce::String& error);
     void unload();
 
@@ -59,7 +74,7 @@ private:
     void scanOnThisThread();
 
     juce::AudioPluginFormatManager formats;
-    juce::Array<juce::PluginDescription> instruments;
+    juce::Array<juce::PluginDescription> instruments, effects;
     mutable juce::CriticalSection listLock;
 
     std::unique_ptr<juce::AudioPluginInstance> owned;      // message thread owns
