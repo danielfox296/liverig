@@ -48,15 +48,19 @@ void AudioEngine::enableAllMidiInputs()
 
 void AudioEngine::handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& message)
 {
-    // The autotune switch, foot-controller shaped: Program Change 0 is off,
-    // 1 is on, landing straight in the parameter store, which is atomic —
-    // no thread gymnastics.
+    // The mic lanes, foot-controller shaped: Program Change 0 is silence,
+    // 1 sings through the autotune, 2 makes the bass sing. Values land
+    // straight in the parameter store, which is atomic — no thread
+    // gymnastics. Stacking both lanes stays a hands-on-the-screen choice.
     if (message.isProgramChange())
     {
-        const int program = message.getProgramChangeNumber();
-
-        if (program == 0 || program == 1)
-            params.set (pVocalOn, (float) program);
+        switch (message.getProgramChangeNumber())
+        {
+            case 0: params.set (pVocalOn, 0.0f); params.set (pVocoderOn, 0.0f); break;
+            case 1: params.set (pVocalOn, 1.0f); params.set (pVocoderOn, 0.0f); break;
+            case 2: params.set (pVocalOn, 0.0f); params.set (pVocoderOn, 1.0f); break;
+            default: break;
+        }
     }
 }
 
@@ -132,6 +136,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     stems.prepare (rate, maxBlock);
 
     tuneSlot.prepare (rate, maxBlock);
+    vocoderSlot.prepare (rate, maxBlock);
     pedalSlot.prepare (rate, maxBlock);
     vocal.prepare (rate, maxBlock);
 
@@ -215,14 +220,16 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             instrument.process (events, midiCount, liveL, liveR, n, instrumentGain);
         }
 
-        // --- autotune lane: the mic on input 2, summed in as performance ---
+        // --- mic lanes: input 2, summed in as performance. The vocoder's
+        // carrier is the bass after the whole chain, tapped ahead of Live
+        // out — so the bass can sing while the bass itself is silent. ---
         if (numInputChannels > 1 && inputChannelData[1] != nullptr)
             juce::FloatVectorOperations::copy (vocalIn, inputChannelData[1] + offset, n);
         else
             juce::FloatVectorOperations::clear (vocalIn, n);
 
         updatePeak (vocalPeak, vocalIn, n, decay);
-        vocal.process (vocalIn, liveL, liveR, n);
+        vocal.process (vocalIn, fx.getCarrier(), liveL, liveR, n);
 
         // --- playback lane ---
         juce::FloatVectorOperations::clear (mixL, n);

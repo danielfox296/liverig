@@ -31,6 +31,17 @@ public:
     // --- device thread, callback stopped ---
     void prepare (double sampleRate, int maxBlockSize);
 
+    // The scan-worker entry point: describe one plugin and hard-exit. Runs
+    // in a disposable child process the scan spawns per identifier, because
+    // instantiating a stranger's plugin in the rig's own process is how a
+    // stranger's bug becomes the rig's crash — one JUCE-built sampler posts
+    // a deferred load lambda that fires after the scanner has destroyed the
+    // instance. Out of process, that is the child's funeral, not the show's.
+    // Prints PluginDescription XML between markers on stdout; never returns
+    // normally — it _Exits before any pending lambda can dereference a corpse.
+    [[noreturn]] static void runScanWorker (const juce::String& formatName,
+                                            const juce::String& identifier);
+
     // --- message thread ---
     void beginScan();                       // background; cached after the first time
     bool isScanning() const noexcept        { return scanning.load (std::memory_order_relaxed); }
@@ -50,6 +61,10 @@ public:
     // never a picker full of every effect on the system. Empty when none is
     // installed, and the row's status line says what to install.
     juce::String preferredPitchPlugin() const;
+
+    // Same idea for the vocoder role: real vocoders only, TAL-Vocoder 3
+    // first because it is the intended tenant.
+    juce::String preferredVocoderPlugin() const;
 
     bool load (const juce::String& name, juce::String& error);
     void unload();

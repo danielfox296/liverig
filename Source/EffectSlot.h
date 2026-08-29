@@ -101,6 +101,7 @@ private:
     std::atomic<int> totalIns { 2 }, totalOuts { 2 };
     std::atomic<int> latencySamples { 0 };
     std::atomic<bool> carrierOnRight { false };
+    int noteHoldCounter = 1 << 30;   // audio-thread only; huge so the first block sends
 
     juce::String loadedName, lastError;
     double sr = 48000.0;

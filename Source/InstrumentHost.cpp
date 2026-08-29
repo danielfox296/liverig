@@ -91,9 +91,108 @@ void InstrumentHost::beginScan()
     scanThread->startThread (juce::Thread::Priority::background);
 }
 
+void InstrumentHost::runScanWorker (const juce::String& formatName,
+                                    const juce::String& identifier)
+{
+    juce::AudioPluginFormatManager workerFormats;
+    workerFormats.addDefaultFormats();
+
+    for (int i = 0; i < workerFormats.getNumFormats(); ++i)
+    {
+        auto* format = workerFormats.getFormat (i);
+
+        if (format == nullptr || format->getName() != formatName)
+            continue;
+
+        juce::OwnedArray<juce::PluginDescription> types;
+        format->findAllTypesForFile (types, identifier);
+
+        for (auto* type : types)
+            if (auto xml = type->createXml())
+                std::printf ("<rig-found>\n%s\n</rig-found>\n", xml->toString().toRawUTF8());
+    }
+
+    std::printf ("<rig-scan-done/>\n");
+    std::fflush (stdout);
+
+    // Straight out, no destructors: a plugin may have posted a deferred
+    // lambda against an instance the scan already destroyed, and giving the
+    // message loop one more turn is how this process earns its own crash
+    // report. The results are on stdout; nothing else here matters.
+    std::_Exit (0);
+}
+
+// One disposable child per plugin. A plugin that crashes being described
+// takes its child down and is skipped; one that hangs is killed at the
+// deadline. Either way the rig's own process never runs a stranger's code
+// during a scan, and the show goes on.
+static bool describeInChild (const juce::String& formatName, const juce::String& identifier,
+                             juce::Array<juce::PluginDescription>& into,
+                             std::atomic<bool>& abortFlag)
+{
+    const auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+
+    juce::ChildProcess child;
+    juce::StringArray args { exe.getFullPathName(), "--scan-worker", formatName, identifier };
+
+    if (! child.start (args, juce::ChildProcess::wantStdOut))
+        return false;
+
+    juce::String output;
+    const auto deadline = juce::Time::getMillisecondCounterHiRes() + 20000.0;
+
+    while (juce::Time::getMillisecondCounterHiRes() < deadline
+            && ! abortFlag.load (std::memory_order_relaxed))
+    {
+        char buffer[4096];
+        const int got = child.readProcessOutput (buffer, sizeof (buffer));
+
+        if (got > 0)
+        {
+            output += juce::String::fromUTF8 (buffer, got);
+            continue;
+        }
+
+        if (! child.isRunning())
+            break;
+
+        juce::Thread::sleep (10);
+    }
+
+    child.kill();   // a no-op when it already exited; the end of it when it hung
+
+    bool complete = output.contains ("<rig-scan-done/>");
+    int searchFrom = 0;
+
+    for (;;)
+    {
+        const int start = output.indexOf (searchFrom, "<rig-found>");
+
+        if (start < 0)
+            break;
+
+        const int end = output.indexOf (start, "</rig-found>");
+
+        if (end < 0)
+            break;
+
+        if (auto xml = juce::parseXML (output.substring (start + 11, end)))
+        {
+            juce::PluginDescription description;
+
+            if (description.loadFromXml (*xml))
+                into.add (description);
+        }
+
+        searchFrom = end + 12;
+    }
+
+    return complete;
+}
+
 void InstrumentHost::scanOnThisThread()
 {
-    juce::Array<juce::PluginDescription> foundInstruments, foundEffects;
+    juce::Array<juce::PluginDescription> found;
 
     for (int i = 0; i < formats.getNumFormats(); ++i)
     {
@@ -105,11 +204,11 @@ void InstrumentHost::scanOnThisThread()
         const auto identifiers = format->searchPathsForPlugins (
                                      format->getDefaultLocationsToSearch(), true, false);
 
-        // Audio Units carry their type in the identifier, and instantiating a
-        // plugin to ask what it is costs real time — this machine has 341
-        // components and one of them refuses to open at all. Filter to the
-        // types the rig can use — instruments, effects, music effects — and
-        // the converters, panners and codecs stay untouched.
+        // Audio Units carry their type in the identifier, and describing a
+        // plugin costs a child process and real time — this machine has 341
+        // components. Filter to the types the rig can use — instruments,
+        // effects, music effects — and the converters, panners and codecs
+        // stay untouched.
         const bool isAudioUnit = format->getName().containsIgnoreCase ("AudioUnit");
 
         for (const auto& identifier : identifiers)
@@ -125,13 +224,14 @@ void InstrumentHost::scanOnThisThread()
                 return;
             }
 
-            juce::OwnedArray<juce::PluginDescription> types;
-            format->findAllTypesForFile (types, identifier);
-
-            for (auto* type : types)
-                (type->isInstrument ? foundInstruments : foundEffects).add (*type);
+            describeInChild (format->getName(), identifier, found, abortScan);
         }
     }
+
+    juce::Array<juce::PluginDescription> foundInstruments, foundEffects;
+
+    for (const auto& type : found)
+        (type.isInstrument ? foundInstruments : foundEffects).add (type);
 
     struct ByName
     {
@@ -211,22 +311,31 @@ juce::StringArray InstrumentHost::getEffectNames() const
     return dedupedNames (effects);
 }
 
-juce::String InstrumentHost::preferredPitchPlugin() const
+static juce::String firstMatch (const juce::StringArray& names,
+                                std::initializer_list<const char*> wanted)
 {
-    // Real pitch correctors only, preference first. Graillon is the intended
-    // tenant; MAutoPitch is the stopgap already on this machine; the rest
-    // are the usual suspects should one of them be what is installed.
-    static const char* const wanted[] = { "Graillon", "MAutoPitch", "Auto-Tune",
-                                          "Auto-Key", "MetaTune", "KeroVee", "Voloco" };
-
-    const auto names = getEffectNames();
-
     for (auto* candidate : wanted)
         for (const auto& name : names)
             if (name.containsIgnoreCase (candidate))
                 return name;
 
     return {};
+}
+
+juce::String InstrumentHost::preferredPitchPlugin() const
+{
+    // Real pitch correctors only, preference first. Graillon is the intended
+    // tenant; MAutoPitch is the stopgap already on this machine; the rest
+    // are the usual suspects should one of them be what is installed.
+    return firstMatch (getEffectNames(),
+                       { "Graillon", "MAutoPitch", "Auto-Tune",
+                         "Auto-Key", "MetaTune", "KeroVee", "Voloco" });
+}
+
+juce::String InstrumentHost::preferredVocoderPlugin() const
+{
+    return firstMatch (getEffectNames(),
+                       { "TAL-Vocoder", "TAL Vocoder", "MVocoder", "OrangeVocoder", "Vocoder" });
 }
 
 std::unique_ptr<juce::AudioPluginInstance> InstrumentHost::createEffectInstance (

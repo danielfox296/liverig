@@ -3826,11 +3826,25 @@ static void testVirtualMidiPort()
 {
     std::printf ("\n Virtual MIDI port\n");
 
-    auto port = juce::MidiOutput::createNewDevice ("LiveRig test port");
+    // MIDIServer garbage-collects dead clients lazily, and back-to-back
+    // harness runs each leave one; a request landing mid-cleanup is refused.
+    // The app's own retry is short because a launch is never that close to a
+    // corpse — the harness waits the cleanup out.
+    std::unique_ptr<juce::MidiOutput> port;
+    int attempts = 0;
+
+    for (; attempts < 8 && port == nullptr; ++attempts)
+    {
+        if (attempts > 0)
+            juce::Thread::sleep (500);
+
+        port = juce::MidiOutput::createNewDevice ("LiveRig test port");
+    }
 
     report ("macOS publishes a virtual MIDI source", port != nullptr,
-            port != nullptr ? "created and visible to other apps"
-                            : "createNewDevice returned nothing");
+            port != nullptr ? "created and visible to other apps (attempt "
+                                + juce::String (attempts) + ")"
+                            : "createNewDevice refused 8 times over 3.5 s");
 
     if (port != nullptr)
     {
@@ -3873,12 +3887,10 @@ static void testPluginRegistry (double sr, int block)
 
         host.beginScan();
 
-        // The wait must pump the message loop: out-of-process Audio Units
-        // block on main-thread XPC during instantiation, and a sleeping main
-        // thread deadlocks the scan. The app never sees this because its
-        // event loop is always running.
+        // Plain sleep is enough: the scan runs in child processes now, so
+        // nothing foreign ever needs this process's message loop.
         while (host.isScanning())
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            juce::Thread::sleep (100);
 
         std::printf ("  scan took %.1f s\n", (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
         std::fflush (stdout);
@@ -4106,17 +4118,19 @@ static void testVocalChannel (double sr, int block)
     host.prepare (sr, block);
 
     ParamStore params;
-    EffectSlot tune ("tune");
-    VocalChannel vocal (params, tune);
+    EffectSlot tune ("tune"), vocoderSlot ("vocoder", true);
+    VocalChannel vocal (params, tune, vocoderSlot);
 
     tune.prepare (sr, block);
+    vocoderSlot.prepare (sr, block);
     vocal.prepare (sr, block);
 
     double phase = 0.0;
 
     const auto run = [&] (float amplitude, double seconds, float* largestStep) -> float
     {
-        std::vector<float> mic ((size_t) block), l ((size_t) block), r ((size_t) block);
+        std::vector<float> mic ((size_t) block), car ((size_t) block, 0.0f),
+                           l ((size_t) block), r ((size_t) block);
         float peak = 0.0f, previous = 0.0f;
 
         const int blocks = (int) (sr * seconds) / block;
@@ -4131,7 +4145,7 @@ static void testVocalChannel (double sr, int block)
 
             std::fill (l.begin(), l.end(), 0.0f);
             std::fill (r.begin(), r.end(), 0.0f);
-            vocal.process (mic.data(), l.data(), r.data(), block);
+            vocal.process (mic.data(), car.data(), l.data(), r.data(), block);
 
             for (int k = 0; k < block; ++k)
             {
@@ -4157,6 +4171,15 @@ static void testVocalChannel (double sr, int block)
     const float unboundPeak = run (0.2f, 0.4, nullptr);
     report ("on with no plugin is silence, not a crash", unboundPeak < 1.0e-6f,
             "peak " + juce::String (unboundPeak, 7));
+
+    params.set (pVocalOn, 0.0f);
+    params.set (pVocoderOn, 1.0f);
+    const float vocoderUnbound = run (0.2f, 0.4, nullptr);
+    params.set (pVocoderOn, 0.0f);
+    params.set (pVocalOn, 1.0f);
+
+    report ("vocoder lane with no plugin is silence too", vocoderUnbound < 1.0e-6f,
+            "peak " + juce::String (vocoderUnbound, 7));
 
     // The rest needs audio through the slot; any clean-passing effect will do.
     const auto name = pickEffect (host.getEffectNames(),
@@ -4277,6 +4300,134 @@ static void testAutotunePicksAndCorrects (double sr, int block)
             std::abs (outCents) < 15.0 && std::abs (outCents) < 30.0 * 0.66,
             "in -30.0 cents, out " + juce::String (outCents, 1) + " cents ("
               + juce::String (got, 2) + " Hz)");
+}
+
+// The acceptance sentence made measurable: speak over a played bassline and
+// out comes singing bass. Intelligibility is a human call, but its two
+// physical halves are not — the output must follow the VOICE's envelope
+// (a vocoder passes nothing when nobody talks, however loud the bass runs),
+// and it must ride the BASS's pitch (the words come out at the carrier's
+// note, not the voice's). Runs through the whole mic lane, gate included,
+// with whatever vocoder the registry picks.
+static void testVocoderSings (double sr, int block)
+{
+    std::printf ("\n Vocoder end to end: the bass sings\n");
+
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    InstrumentHost host;
+    host.prepare (sr, block);
+
+    if (host.getEffectNames().isEmpty())
+    {
+        std::printf ("  no cached plugin list — run the registry test first\n");
+        return;
+    }
+
+    const auto pick = host.preferredVocoderPlugin();
+
+    report ("a vocoder is picked automatically", pick.isNotEmpty(),
+            pick.isEmpty() ? "none installed — TAL-Vocoder 3 is the intended tenant" : pick);
+
+    if (pick.isEmpty())
+        return;
+
+    ParamStore params;
+    EffectSlot tune ("tune"), vocoder ("vocoder", true);
+    VocalChannel vocal (params, tune, vocoder);
+
+    tune.prepare (sr, block);
+    vocoder.prepare (sr, block);
+    vocal.prepare (sr, block);
+
+    juce::String error;
+
+    if (! vocoder.load (host, pick, error))
+    {
+        report ((pick + " loads").toRawUTF8(), false, error);
+        return;
+    }
+
+    std::printf ("  %s: %.1f ms latency, %s\n", pick.toRawUTF8(), vocoder.getLatencyMs(),
+                 vocoder.getSidechainChannels() > 0 ? "carrier on the sidechain"
+                                                    : "carrier on the right main channel");
+
+    params.set (pVocoderOn, 1.0f);
+
+    // Half-second bursts of speech-shaped noise, half a second of silence,
+    // over a saw bass that never stops.
+    const double cycle = 1.0, talk = 0.5;
+    const int total = (int) (sr * 6.0);
+
+    std::vector<float> mic ((size_t) block), car ((size_t) block),
+                       l ((size_t) block), r ((size_t) block);
+    std::vector<float> talkTail;
+
+    uint32_t noise = 77777u;
+    double sawPhase = 0.0;
+    double talkEnergy = 0.0, quietEnergy = 0.0;
+    long talkCount = 0, quietCount = 0;
+
+    for (int i = 0; i + block <= total; i += block)
+    {
+        const double t0 = i / sr;
+
+        for (int k = 0; k < block; ++k)
+        {
+            const double t = t0 + k / sr;
+            const bool talking = std::fmod (t, cycle) < talk;
+
+            noise = noise * 1664525u + 1013904223u;
+            mic[(size_t) k] = talking ? 0.25f * (float) (int32_t) noise * 4.6566129e-10f : 0.0f;
+
+            sawPhase += 110.0 / sr;
+            if (sawPhase >= 1.0) sawPhase -= 1.0;
+            car[(size_t) k] = 0.3f * (float) (2.0 * sawPhase - 1.0);
+        }
+
+        std::fill (l.begin(), l.end(), 0.0f);
+        std::fill (r.begin(), r.end(), 0.0f);
+        vocal.process (mic.data(), car.data(), l.data(), r.data(), block);
+
+        if (i < (int) sr)   // let ramps settle and the plugin wake
+            continue;
+
+        for (int k = 0; k < block; ++k)
+        {
+            const double phase = std::fmod (t0 + k / sr, cycle);
+            const double v = l[(size_t) k];
+
+            // Guard bands around the edges absorb the plugin's latency on
+            // the way in and its band release on the way out.
+            if (phase > 0.15 && phase < talk - 0.02)
+            {
+                talkEnergy += v * v;
+                ++talkCount;
+
+                if (talkTail.size() < (size_t) sr)
+                    talkTail.push_back (l[(size_t) k]);
+            }
+            else if (phase > talk + 0.25 && phase < cycle - 0.02)
+            {
+                quietEnergy += v * v;
+                ++quietCount;
+            }
+        }
+    }
+
+    const double talkRms = std::sqrt (talkEnergy / (double) std::max (1L, talkCount));
+    const double quietRms = std::sqrt (quietEnergy / (double) std::max (1L, quietCount));
+
+    report ("talking over the bassline makes sound", talkRms > 0.01,
+            "rms " + juce::String (talkRms, 4));
+
+    report ("a silent mic silences the bass's voice", quietRms < talkRms * 0.25,
+            "talk rms " + juce::String (talkRms, 4) + " vs quiet " + juce::String (quietRms, 5));
+
+    const double got = estimateF0 (talkTail.data(), (int) talkTail.size(), sr, 60.0, 400.0);
+
+    report ("the words come out at the bass's pitch", std::abs (cents (got, 110.0)) < 100.0,
+            juce::String (got, 1) + " Hz against the 110 Hz carrier");
 }
 
 // The carrier tap: the bass after every movable stage, alive even when MIDI
@@ -4520,6 +4671,13 @@ static void testInstrumentHosting (const juce::String& wanted, double sr, int bl
 //==============================================================================
 int main (int argc, char* argv[])
 {
+    // The scan spawns this same binary as its disposable per-plugin worker.
+    if (argc >= 4 && juce::String (argv[1]) == "--scan-worker")
+    {
+        juce::ScopedJuceInitialiser_GUI juceInit;
+        InstrumentHost::runScanWorker (juce::String (argv[2]), juce::String (argv[3]));
+    }
+
     if (argc == 4 && juce::String (argv[1]) == "--scenario")
     {
         runScenario (juce::File (juce::String (argv[2])),
@@ -4565,6 +4723,7 @@ int main (int argc, char* argv[])
     testVocoderSidechain (48000.0, 64);
     testVocalChannel (48000.0, 64);
     testAutotunePicksAndCorrects (48000.0, 64);
+    testVocoderSings (48000.0, 64);
     testCarrierTap (48000.0, 64);
     testPedalStage (48000.0, 64);
     testInstrumentHosting ("SKY Keys", 48000.0, 64);

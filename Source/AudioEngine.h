@@ -36,11 +36,13 @@ public:
     FxChain& getFxChain() noexcept                        { return fx; }
 
     EffectSlot& getTuneSlot() noexcept                    { return tuneSlot; }
+    EffectSlot& getVocoderSlot() noexcept                 { return vocoderSlot; }
     EffectSlot& getPedalSlot() noexcept                   { return pedalSlot; }
 
-    // Every connected MIDI input feeds the rig; Program Change 0/1 switches
-    // the autotune off/on, which is how the foot controller will drive it.
-    // Called again periodically so a controller plugged in mid-session joins.
+    // Every connected MIDI input feeds the rig; Program Change picks the mic
+    // lane the way a foot controller would: 0 both off, 1 autotune, 2
+    // vocoder. Called again periodically so a controller plugged in
+    // mid-session joins.
     void enableAllMidiInputs();
 
     double getSampleRate() const noexcept   { return currentRate.load (std::memory_order_relaxed); }
@@ -85,11 +87,13 @@ private:
     StemPlayer stems;
     FxChain fx;
 
-    // The autotune lane and the two hosted-plugin roles: the pitch corrector
-    // on the mic, the pedal as a bass-chain insert.
+    // The mic lanes and the three hosted-plugin roles: the pitch corrector
+    // and the vocoder on the mic, the pedal as a bass-chain insert. The
+    // vocoder slot asks for a sidechain bus — the carrier arrives there.
     EffectSlot tuneSlot { "tune" };
+    EffectSlot vocoderSlot { "vocoder", true };
     EffectSlot pedalSlot { "pedal" };
-    VocalChannel vocal { params, tuneSlot };
+    VocalChannel vocal { params, tuneSlot, vocoderSlot };
 
     // The tracker as a note source. FxChain produces the events; carrying
     // them to a port is the engine's job, not the chain's.

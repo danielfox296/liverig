@@ -87,6 +87,20 @@ public:
                      : (tune.getLastError().isNotEmpty() ? tune.getLastError().toRawUTF8()
                                                          : "EMPTY, no error recorded"));
 
+            auto& vocoder = engine.getVocoderSlot();
+            say ("vocoder slot: %s\n",
+                 vocoder.isLoaded()
+                     ? (vocoder.getLoadedName() + " loaded, " + juce::String (vocoder.getLatencyMs(), 1)
+                          + " ms latency, "
+                          + (vocoder.getSidechainChannels() > 0
+                                 ? "carrier on the sidechain (" + juce::String (vocoder.getSidechainChannels()) + "ch)"
+                                 : juce::String ("carrier on the right main channel"))).toRawUTF8()
+                     : (vocoder.getLastError().isNotEmpty() ? vocoder.getLastError().toRawUTF8()
+                                                            : "EMPTY, no error recorded"));
+
+            say ("vocoder switch: %s | level %.1f dB\n",
+                 params.getBool (pVocoderOn) ? "ON" : "off", params.get (pVocoderLevel));
+
             say ("autotune switch: %s | vocal gain %.1f dB, gate %.1f dB, level %.1f dB\n",
                  params.getBool (pVocalOn) ? "ON" : "off",
                  params.get (pVocalGain), params.get (pVocalGate), params.get (pVocalLevel));
@@ -185,4 +199,23 @@ private:
 
 } // namespace rig
 
-START_JUCE_APPLICATION (rig::LiveRigApplication)
+// START_JUCE_APPLICATION, unrolled: the scan worker must be intercepted
+// before any application machinery — no window, no audio, no Dock presence —
+// because its whole job is to die in the rig's place.
+JUCE_CREATE_APPLICATION_DEFINE (rig::LiveRigApplication)
+
+int main (int argc, char* argv[])
+{
+    if (argc >= 4 && juce::String (argv[1]) == "--scan-worker")
+    {
+        juce::ScopedJuceInitialiser_GUI juceInit;
+        rig::InstrumentHost::runScanWorker (juce::String (argv[2]), juce::String (argv[3]));
+    }
+
+    // What START_JUCE_APPLICATION's main actually does before handing over:
+    // register the application factory. Skip it and main() creates the app
+    // through a null pointer and dies before its first line of output.
+    juce::JUCEApplicationBase::createInstance = &juce_CreateApplication;
+
+    return juce::JUCEApplicationBase::main (argc, (const char**) argv);
+}

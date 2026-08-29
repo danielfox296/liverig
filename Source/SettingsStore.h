@@ -27,8 +27,9 @@ public:
 
     // The hosted-plugin roles: plugin name and its state blob, recalled on
     // launch the way the instrument is. The autotune's key and style live in
-    // tunePluginState.
+    // tunePluginState; the vocoder's voicing in vocoderPluginState.
     juce::String tunePlugin, tunePluginState;
+    juce::String vocoderPlugin, vocoderPluginState;
     juce::String pedalPlugin, pedalPluginState;
 };
 

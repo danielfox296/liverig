@@ -165,6 +165,18 @@ int main (int argc, char* argv[])
         writePng (vocalShot, outDir.getChildFile ("vocal.png"));
         problems += countBlankButtons (main, "the vocal editor");
 
+        // The vocoder strip beside it: switch, shared mic controls, status.
+        params.set (rig::pVocoderOn, 1.0f);
+        main.selectVocoderForSnapshot();
+
+        juce::Image vocoderShot (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
+        {
+            juce::Graphics g (vocoderShot);
+            main.paintEntireComponent (g, true);
+        }
+        writePng (vocoderShot, outDir.getChildFile ("vocoder.png"));
+        problems += countBlankButtons (main, "the vocoder editor");
+
         // The tuner tab, mid-note.
         main.showTunerForSnapshot();
 

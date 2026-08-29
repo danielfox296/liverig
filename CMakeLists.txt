@@ -204,7 +204,7 @@ target_sources(rig_tests PRIVATE
     Source/PresetStore.cpp
     ${RIG_DSP_SOURCES})
 
-target_compile_definitions(rig_tests PRIVATE ${RIG_COMPILE_DEFS} JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_STANDALONE_APPLICATION=1)
+target_compile_definitions(rig_tests PRIVATE ${RIG_COMPILE_DEFS} JUCE_STANDALONE_APPLICATION=1)
 
 if (RIG_LIBCXX_FLAGS)
     target_compile_options(rig_tests PRIVATE ${RIG_LIBCXX_FLAGS})

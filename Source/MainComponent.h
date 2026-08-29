@@ -35,6 +35,7 @@ public:
     void selectFxForSnapshot();
     void selectEqForSnapshot();
     void selectVocalForSnapshot();
+    void selectVocoderForSnapshot();
     void showTunerForSnapshot();
     void showJobStripForSnapshot();
 
@@ -76,7 +77,7 @@ private:
     void refreshAmpControls();
     void refreshInstrumentControls();
     void refreshSlotControls();
-    void autoBindPitchPlugin();
+    void autoBindHostedRoles();
     void openPluginWindow();
     void openPluginWindowFor (juce::AudioProcessor* plugin, const juce::String& title);
     void loadAmpFile (const juce::File& file);
@@ -101,6 +102,7 @@ private:
     LevelMeter masterMeter { 2 };
     LevelMeter inputMeter { 1 };
     LevelMeter vocalMeter { 1 };
+    LevelMeter vocoderMeter { 1 };   // the same mic, shown where the vocoder row can see it
     MidiStatusView midiStatus;
 
     juce::ListBox songList { "songs", this };
@@ -224,17 +226,17 @@ private:
         juce::TextButton open;
     };
 
-    // The Autotune row's editor header: no picker, no rack — the rig chooses
-    // the pitch plugin itself from a short list of real autotunes. The label
-    // says what it found (or what to install), and Key... opens the plugin's
-    // own window, where key, scale and correction amount live.
-    struct AutotuneControls : juce::Component
+    // A hosted role's editor header: no picker, no rack — the rig chooses
+    // the plugin itself from a short list of the real thing. The label says
+    // what it found (or what to install), and the button opens the plugin's
+    // own window, where its musical settings live.
+    struct RoleControls : juce::Component
     {
-        AutotuneControls()
+        explicit RoleControls (const juce::String& buttonText)
         {
             status.setFont (juce::Font (juce::FontOptions (12.0f)));
             status.setColour (juce::Label::textColourId, juce::Colour (0xff9a9da6));
-            open.setButtonText ("Key & style...");
+            open.setButtonText (buttonText);
             open.setWantsKeyboardFocus (false);
             addAndMakeVisible (status);
             addAndMakeVisible (open);
@@ -252,7 +254,8 @@ private:
         juce::TextButton open;
     };
 
-    AutotuneControls autotuneControls;
+    RoleControls autotuneControls { "Key & style..." };
+    RoleControls vocoderControls { "Voicing..." };
 
     // The Pedal row's editor header: the insert's picker and its own line of
     // truth about latency.
@@ -312,7 +315,7 @@ private:
     float snapshot[(size_t) NumParams] {};
     int saveCounter = 0;
     int pendingLoopIn = -1;
-    int lastVocalOn = -1;
+    int lastMicLanes = -1;
     int midiInputRefresh = 0;
     int lastSlotFailures = 0;
 

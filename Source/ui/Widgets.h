@@ -212,7 +212,13 @@ private:
 class LevelMeter : public juce::Component
 {
 public:
-    explicit LevelMeter (int numBars = 1) : bars ((size_t) juce::jmax (1, numBars), 0.0f) {}
+    explicit LevelMeter (int numBars = 1) : bars ((size_t) juce::jmax (1, numBars), 0.0f)
+    {
+        // A readout, not a control. The chain rows carry meters in their
+        // headers, and a tap on the meter should select the row like a tap
+        // anywhere else on it.
+        setInterceptsMouseClicks (false, false);
+    }
 
     void setLevel (int bar, float peak)
     {
@@ -655,7 +661,7 @@ private:
 
         if (index >= 0)
             presetBox.setSelectedId (index + 1, juce::dontSendNotification);
-        else if (selectName.isNotEmpty())
+        else
             presetBox.setText (selectName, juce::dontSendNotification);
     }
 

@@ -39,6 +39,7 @@ void EffectSlot::prepare (double sampleRate, int maxBlockSize)
     {
         owned->prepareToPlay (sr, maxBlock);
         latencySamples.store (owned->getLatencySamples(), std::memory_order_relaxed);
+
     }
 }
 
@@ -91,6 +92,30 @@ bool EffectSlot::load (InstrumentHost& registry, const juce::String& name, juce:
     }
 
     instance->prepareToPlay (sr, maxBlock);
+
+    // A vocoder bound for the bass-carrier role must listen to its sidechain
+    // and to nothing else. TAL ships idling on an internal synth waiting for
+    // MIDI nobody sends, and its routing takes two switches, measured, not
+    // read: "inputmode" selects the external carrier and "sidechain" says it
+    // arrives on the sidechain bus — either alone is silence or synth. The
+    // internal oscillators are zeroed so the bass is the only voice box. The
+    // parameter names are TAL's own, so other vocoders are untouched, and a
+    // restored user state is applied after this load and wins.
+    if (wantSidechain)
+    {
+        for (auto* parameter : instance->getParameters())
+        {
+            const auto name = parameter->getName (32);
+
+            if (name.equalsIgnoreCase ("sidechain") || name.equalsIgnoreCase ("inputmode"))
+                parameter->setValueNotifyingHost (1.0f);
+            else if (name.equalsIgnoreCase ("pulsevolume")
+                      || name.equalsIgnoreCase ("sawvolume")
+                      || name.equalsIgnoreCase ("suboscvolume")
+                      || name.equalsIgnoreCase ("noisevolume"))
+                parameter->setValueNotifyingHost (0.0f);
+        }
+    }
 
     // --- swap in, retiring the old instance off the audio thread ---
     live.store (nullptr, std::memory_order_release);
@@ -223,6 +248,24 @@ bool EffectSlot::renderBlock (juce::AudioProcessor* plugin, const float* in,
 
     juce::AudioBuffer<float> block (scratch.getArrayOfWritePointers(), channels, 0, numSamples);
     midi.clear();
+
+    // TAL's band envelopes open per MIDI note even when the carrier comes in
+    // on the sidechain — it is a played vocoder. This role wants it open for
+    // good: the lane's own gate decides when anything is heard, so a note is
+    // held down and re-asserted every half second, because a note sent into
+    // a freshly-prepared engine can be swallowed while it resets its voices.
+    // The same note with no note-off between just stays at sustain, and
+    // vocoders that ignore MIDI are unbothered.
+    if (wantSidechain)
+    {
+        noteHoldCounter += numSamples;
+
+        if (noteHoldCounter >= (int) (sr * 0.5))
+        {
+            noteHoldCounter = 0;
+            midi.addEvent (juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100), 0);
+        }
+    }
 
     try
     {

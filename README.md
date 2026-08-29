@@ -142,9 +142,9 @@ any order in the app; Input, Reverb and Live out hold their places.
 | 15 | Live out | lane gain |
 | 16 | Master | gain over the whole mix — stems and live — into the safety limiter |
 
-The **Autotune** row above the chain is its own lane, not a stage: the
-second interface input (the mic), pitch-corrected, with gain, gate and level
-— see *The autotune channel* below.
+The **Autotune** and **Vocoder** rows above the chain are the mic's two
+lanes, not stages: the second interface input, pitch-corrected or making the
+bass sing — see *The mic lanes* below.
 
 Attack and release are exposed on the compressor because "fast attack
 available" is the whole point of a FET-style feel on bass.
@@ -282,42 +282,69 @@ appears once, as its AU.
 A sample library that starts with no patch loaded will be silent until you
 choose one in its own window. That is the plugin's business, not the host's.
 
-### The autotune channel
+### The mic lanes
 
-The second interface input — the mic beside the bass — does exactly one
-thing: **autotune**. The row is an ON switch like every other row, crossfaded
-so a footswitch press never clicks, with gain, a gate (open at **Gate**, shut
-6 dB under it, so breaths die between phrases without eating consonants) and
-its own level into the mix. The lane counts as performance: it ducks the
-backing stems and rides the master limiter like everything the player does.
+The second interface input — the mic beside the bass — has two lanes, each
+one function with one ON switch, crossfaded so a footswitch press never
+clicks. They share the mic's facts: gain, and a gate (open at **Gate**, shut
+6 dB under it, so breaths die between phrases without eating consonants)
+whose detector listens ahead of the fader. Both lanes count as performance:
+they duck the backing stems and ride the master limiter like everything the
+player does.
 
-**There is nothing to pick.** The rig chooses the pitch corrector itself from
-a short list of real autotunes installed on the machine — Graillon 3 first
-when present, MAutoPitch as the stopgap, the usual suspects after that — and
-the row's status line names what it found. Install Graillon 3 (free,
-auburnsounds.com), hit Rescan on the MIDI row or relaunch, and it takes over
-automatically. **Key & style...** opens the plugin's own window, where key,
-scale and how hard the correction grabs live; those settings persist with the
-rig's. With no pitch plugin installed the row is honest silence and the
-status line says what to install.
+**Autotune** runs the mic through a hosted pitch corrector. **Key &
+style...** opens the plugin's own window, where key, scale and how hard the
+correction grabs live; those settings persist with the rig's.
 
-The switch is MIDI-mapped out of the box: **Program Change 0/1** from any
-connected controller is off/on — foot-controller shaped, nothing to
-configure, controllers plugged in mid-session picked up within seconds.
+**Vocoder** makes the bass sing. The mic is the *modulator*; the carrier is
+the bass **after the whole chain** — octave-up, drive, everything, tapped
+ahead of Live out. That patch is the carrier conditioner: a bright,
+harmonically rich carrier is what makes the words land, so if they come out
+muddy, drive the chain brighter. Words ride the bass line's pitch; the raw
+mic never reaches the mix through this lane. Pull Live out down and the bass
+itself goes silent while it keeps singing — the tap sits ahead of that fader
+on purpose. The carrier reaches the plugin on its **sidechain bus** where
+one is offered; a vocoder without one gets it on the right of the main pair,
+and the status line always names the route in force, because a silently
+failed sidechain would just sound like a broken vocoder.
+
+**There is nothing to pick on either row.** The rig chooses each plugin
+itself from a short list of the real thing — Graillon 3 first for pitch
+(free, auburnsounds.com), TAL-Vocoder first for vocoding (free,
+tal-software.com), with MAutoPitch and MVocoder as the stopgaps — and each
+row's status line names what it found, its latency, and what to install when
+nothing is. Install a better tenant, hit Rescan on the MIDI row or relaunch,
+and it takes over automatically. TAL is also *configured* for the role the
+moment it binds: its routing takes two switches ("inputmode" selects the
+external carrier, "sidechain" says it arrives on the sidechain bus — either
+alone is silence), its internal synth is muted so the bass is the only voice
+box, and a note is held down for it because its band envelopes are
+MIDI-gated even with an external carrier. All of that was measured, not
+read, and your own saved state always wins over it.
+
+The lanes are MIDI-mapped out of the box: **Program Change 0/1/2** from any
+connected controller is silence / autotune / vocoder — foot-controller
+shaped, nothing to configure, controllers plugged in mid-session picked up
+within seconds. Both switches can also be stacked by hand in the UI.
 
 ### Hosted plugins
 
-Third-party AU and VST3 effects load into two fixed roles — the **Autotune**
-lane's corrector (chosen automatically, above) and the **Pedal** stage in the
+Third-party AU and VST3 effects load into three fixed roles — the two mic
+lanes' plugins (chosen automatically, above) and the **Pedal** stage in the
 bass chain, which does have a picker, because "any effect, anywhere in the
 chain" is its whole point. Effects are configuration, not builds.
 
 What the host guarantees, because this is stage software:
 
+- Scanning runs **out of process**: every plugin is described in a
+  disposable child, so a plugin that crashes on inspection crashes the
+  child, not the rig. One JUCE-built sampler on this machine posts a
+  deferred lambda that fires after its instance is destroyed — in-process,
+  that was a startup crash waiting for a stage.
 - A plugin that fails to load leaves its slot empty and audio running.
 - A plugin that blows up mid-song is ejected on the spot and cleaned up off
   the audio thread; the slot's status line says so.
-- An empty Pedal slot is a wire; an empty autotune is silence, not a crash.
+- An empty Pedal slot is a wire; empty mic lanes are silence, not a crash.
 - Added latency is *surfaced* in the row's status line, never silently
   compensated. Real pitch correction inherently costs ~20-25 ms — detecting
   a low voice's pitch takes a couple of its periods, and no plugin escapes

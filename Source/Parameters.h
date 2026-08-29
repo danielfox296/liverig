@@ -66,9 +66,12 @@ enum ParamId
     // An AU instrument played by those notes, inside the rig.
     pInstOn, pInstLevel,
 
-    // The autotune lane: the mic through a hosted pitch corrector, on or
-    // off. One function, one switch.
+    // The mic lanes. Gain and gate are facts about the microphone and are
+    // shared; each lane is one function with one switch. Autotune runs the
+    // mic through a hosted pitch corrector; Vocoder makes the bass sing —
+    // the mic is the modulator, the bass chain's post-FX tap the carrier.
     pVocalOn, pVocalGain, pVocalGate, pVocalLevel,
+    pVocoderOn, pVocoderLevel,
 
     // A hosted plugin as a chain insert.
     pPedalOn,

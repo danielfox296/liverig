@@ -20,7 +20,16 @@ bool MidiSender::open()
     if (output != nullptr)
         return true;
 
-    output = juce::MidiOutput::createNewDevice ("LiveRig");
+    // MIDIServer refuses the occasional request when clients are churning —
+    // plugin scans and app restarts both churn. One refusal at launch would
+    // mean a whole show without the port, so ask more than once.
+    for (int attempt = 0; attempt < 3 && output == nullptr; ++attempt)
+    {
+        if (attempt > 0)
+            juce::Thread::sleep (150);
+
+        output = juce::MidiOutput::createNewDevice ("LiveRig");
+    }
 
     if (output == nullptr)
     {

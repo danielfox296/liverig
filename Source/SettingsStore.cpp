@@ -33,6 +33,8 @@ void SettingsStore::load (ParamStore& params)
         ampModel = obj->getProperty ("ampModel").toString();
         tunePlugin = obj->getProperty ("tunePlugin").toString();
         tunePluginState = obj->getProperty ("tunePluginState").toString();
+        vocoderPlugin = obj->getProperty ("vocoderPlugin").toString();
+        vocoderPluginState = obj->getProperty ("vocoderPluginState").toString();
         pedalPlugin = obj->getProperty ("pedalPlugin").toString();
         pedalPluginState = obj->getProperty ("pedalPluginState").toString();
     }
@@ -52,6 +54,8 @@ void SettingsStore::save (const ParamStore& params) const
     root->setProperty ("ampModel", ampModel);
     root->setProperty ("tunePlugin", tunePlugin);
     root->setProperty ("tunePluginState", tunePluginState);
+    root->setProperty ("vocoderPlugin", vocoderPlugin);
+    root->setProperty ("vocoderPluginState", vocoderPluginState);
     root->setProperty ("pedalPlugin", pedalPlugin);
     root->setProperty ("pedalPluginState", pedalPluginState);
 

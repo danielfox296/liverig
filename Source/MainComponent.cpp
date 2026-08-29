@@ -78,6 +78,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     fxDefs = {
         { "input",  -1,                false, "",       "Input",      -1,        { pInGain } },
         { "vocal",  -1,                false, "",       "Autotune",   pVocalOn,  { pVocalGain, pVocalGate, pVocalLevel } },
+        { "vocoder",-1,                false, "",       "Vocoder",    pVocoderOn,{ pVocalGain, pVocalGate, pVocoderLevel } },
         { "midi",   -1,                false, "midi",   "MIDI",       pMidiOn,   { pMidiChannel, pMidiTranspose, pMidiGate, pMidiHold, pMidiRelease, pMidiBendRange, pMidiExpression, pMidiThru, pInstOn, pInstLevel } },
         { "comp",   FxChain::stComp,   true,  "comp",   "Compressor", pCompOn,   { pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup, pCompBlend, pCompSidechain } },
         { "eq",     FxChain::stEq,     true,  "eq",     "EQ",         pEqOn,     { pEq1Freq, pEq1Gain, pEq1Q, pEq2Freq, pEq2Gain, pEq2Q, pEq3Freq, pEq3Gain, pEq3Q, pEq4Freq, pEq4Gain, pEq4Q, pEq5Freq, pEq5Gain, pEq5Q } },
@@ -106,7 +107,8 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
         auto* panel = panels.add (new FxPanel (params, def.name, def.onParam, def.movable,
                                                def.key == "input" ? &inputMeter
                                                     : (def.key == "vocal" ? (juce::Component*) &vocalMeter
-                                                        : (def.key == "midi" ? (juce::Component*) &midiStatus : nullptr))));
+                                                        : (def.key == "vocoder" ? (juce::Component*) &vocoderMeter
+                                                            : (def.key == "midi" ? (juce::Component*) &midiStatus : nullptr)))));
 
         // Tapping the selected row again puts its controls away. Either way,
         // the effect tab comes forward — tapping a row means "show me this".
@@ -245,9 +247,16 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
                              engine.getTuneSlot().getLoadedName());
     };
 
+    vocoderControls.open.onClick = [this]
+    {
+        openPluginWindowFor (engine.getVocoderSlot().getLiveProcessor(),
+                             engine.getVocoderSlot().getLoadedName());
+    };
+
     engine.getTuneSlot().restore (engine.getInstrument(), settings.tunePlugin, settings.tunePluginState);
+    engine.getVocoderSlot().restore (engine.getInstrument(), settings.vocoderPlugin, settings.vocoderPluginState);
     engine.getPedalSlot().restore (engine.getInstrument(), settings.pedalPlugin, settings.pedalPluginState);
-    autoBindPitchPlugin();
+    autoBindHostedRoles();
     refreshSlotControls();
 
     songPanel.onJobStarted = [this] { resized(); grabKeyboardFocus(); };
@@ -442,6 +451,18 @@ void MainComponent::selectVocalForSnapshot()
     }
 }
 
+void MainComponent::selectVocoderForSnapshot()
+{
+    for (int i = 0; i < (int) fxDefs.size(); ++i)
+    {
+        if (fxDefs[(size_t) i].key == "vocoder")
+        {
+            selectFx (i);
+            return;
+        }
+    }
+}
+
 void MainComponent::showTunerForSnapshot()
 {
     editorTabs.setCurrentTabIndex (1);
@@ -515,6 +536,10 @@ void MainComponent::selectFx (int index)
         {
             extra = &autotuneControls;
         }
+        else if (def.key == "vocoder")
+        {
+            extra = &vocoderControls;
+        }
         else if (def.key == "pedal")
         {
             extra = &pedalControls;
@@ -540,13 +565,25 @@ void MainComponent::renumberFxTitles()
 void MainComponent::pushOrderToChain()
 {
     int order[FxChain::numMovableStages] {};
-    int count = 0;
+    int movableRows = 0;
 
     for (const auto& def : fxDefs)
-        if (def.movable && count < FxChain::numMovableStages)
-            order[count++] = def.stage;
+    {
+        if (! def.movable)
+            continue;
 
-    if (count == FxChain::numMovableStages)
+        if (movableRows < FxChain::numMovableStages)
+            order[movableRows] = def.stage;
+
+        ++movableRows;
+    }
+
+    // A stage added to fxDefs but not the Stage enum — or removed from only
+    // one of them — would otherwise just stop reorders reaching the audio
+    // thread, with nothing on screen to say so.
+    jassert (movableRows == FxChain::numMovableStages);
+
+    if (movableRows == FxChain::numMovableStages)
         engine.getFxChain().setStageOrder (order);
 }
 
@@ -597,8 +634,16 @@ void MainComponent::applyChainOrder (const juce::String& saved)
         }
     }
 
-    // Reassemble: input, the movable stages, reverb, live out.
-    fxDefs.insert (fxDefs.begin() + 1, movable.begin(), movable.end());
+    // Reassemble: the pinned head — input and the lanes — then the movable
+    // run, then reverb, live out, master. Anchoring on reverb rather than on
+    // "index 1" keeps the lanes grouped under the input row however many of
+    // them exist, and heals a layout saved while they drifted below the chain.
+    auto anchor = fxDefs.begin();
+
+    while (anchor != fxDefs.end() && anchor->key != "reverb")
+        ++anchor;
+
+    fxDefs.insert (anchor, movable.begin(), movable.end());
 }
 
 // The same reorder, but with the panels already alive — a preset recalling
@@ -655,8 +700,23 @@ void MainComponent::dragFxRow (FxPanel* panel, const juce::MouseEvent& e)
     }
 
     const int pitch = FxPanel::headerHeight + panelGap;
-    const int first = 1;                       // below the input row
-    const int last = panels.size() - 4;        // above reverb, live out, master
+
+    // The row may land anywhere in the movable run and nowhere else. Derived
+    // from the defs rather than counted from the ends: the pinned rows above
+    // and below have both grown since this was a pair of constants, and a
+    // chain stage dropped among the mic lanes read as one of them.
+    int first = -1, last = -1;
+
+    for (int i = 0; i < (int) fxDefs.size(); ++i)
+    {
+        if (fxDefs[(size_t) i].movable)
+        {
+            if (first < 0)
+                first = i;
+
+            last = i;
+        }
+    }
 
     const int y = juce::jlimit (first * pitch, last * pitch,
                                 dragStartIndex * pitch + e.getDistanceFromDragStartY());
@@ -1171,28 +1231,32 @@ void MainComponent::openPluginWindowFor (juce::AudioProcessor* plugin, const juc
     pluginWindow = std::make_unique<PluginWindow> (title, editor, pluginWindow);
 }
 
-// The autotune slot binds itself: the highest-preference pitch corrector
-// installed on this machine, re-checked on launch and after every scan.
-// Nothing to pick, nothing to configure — install Graillon and it simply
-// takes over from the stopgap on the next launch or rescan.
+// The autotune and vocoder slots bind themselves: the highest-preference
+// real plugin of each kind installed on this machine, re-checked on launch
+// and after every scan. Nothing to pick, nothing to configure — install
+// Graillon or TAL-Vocoder and each simply takes over from the stopgap on
+// the next launch or rescan.
 //
 // Deliberately no saveSettings() here: this runs during construction, and a
 // constructor must never write to disk — the snapshot tool builds this
 // window with an unloaded settings store, and saving from here once
-// flattened the real settings file with blanks. The binding is re-derived
-// every launch anyway; it persists with the next ordinary save.
-void MainComponent::autoBindPitchPlugin()
+// flattened the real settings file with blanks. The bindings are re-derived
+// every launch anyway; they persist with the next ordinary save.
+void MainComponent::autoBindHostedRoles()
 {
-    auto& slot = engine.getTuneSlot();
-    const auto wanted = engine.getInstrument().preferredPitchPlugin();
+    const auto bind = [this] (EffectSlot& slot, const juce::String& wanted)
+    {
+        if (wanted.isEmpty() || wanted == slot.getLoadedName())
+            return;
 
-    if (wanted.isEmpty() || wanted == slot.getLoadedName())
-        return;
+        pluginWindow.reset();
 
-    pluginWindow.reset();
+        juce::String error;
+        slot.load (engine.getInstrument(), wanted, error);
+    };
 
-    juce::String error;
-    slot.load (engine.getInstrument(), wanted, error);
+    bind (engine.getTuneSlot(), engine.getInstrument().preferredPitchPlugin());
+    bind (engine.getVocoderSlot(), engine.getInstrument().preferredVocoderPlugin());
     refreshSlotControls();
 }
 
@@ -1237,6 +1301,12 @@ void MainComponent::refreshSlotControls()
                  : "zero latency";
     };
 
+    // The other half of "nothing happens": the mic lanes read the device's
+    // second input, and a one-input device simply has no mic path.
+    const juce::String noMic = engine.getActiveInputCount() < 2 && engine.getSampleRate() > 0.0
+        ? "   ·   this audio device has no input 2 — the mic needs the interface"
+        : juce::String();
+
     auto& tune = engine.getTuneSlot();
     juce::String tuneLine;
 
@@ -1249,13 +1319,32 @@ void MainComponent::refreshSlotControls()
     else
         tuneLine = "no pitch plugin installed — Graillon 3 is free (auburnsounds.com)";
 
-    // The other half of "nothing happens": the mic lane reads the device's
-    // second input, and a one-input device simply has no mic path.
-    if (engine.getActiveInputCount() < 2 && engine.getSampleRate() > 0.0)
-        tuneLine += "   ·   this audio device has no input 2 — the mic needs the interface";
-
-    autotuneControls.status.setText (tuneLine, juce::dontSendNotification);
+    autotuneControls.status.setText (tuneLine + noMic, juce::dontSendNotification);
     autotuneControls.open.setEnabled (tune.isLoaded());
+
+    auto& vocoder = engine.getVocoderSlot();
+    juce::String vocoderLine;
+
+    if (vocoder.isLoaded() || vocoder.hasFailed())
+    {
+        vocoderLine = vocoder.getLoadedName() + " — " + describe (vocoder);
+
+        // A sidechain that silently failed to negotiate would just sound
+        // like a broken vocoder, so the route is always named.
+        if (vocoder.isLoaded())
+            vocoderLine += vocoder.getSidechainChannels() > 0
+                             ? ", bass carrier on the sidechain"
+                             : ", no sidechain bus — carrier on the right main channel";
+    }
+    else if (vocoder.getLastError().isNotEmpty())
+        vocoderLine = vocoder.getLastError();
+    else if (scanning)
+        vocoderLine = "looking for a vocoder...";
+    else
+        vocoderLine = "no vocoder installed — TAL-Vocoder 3 is free (tal-software.com)";
+
+    vocoderControls.status.setText (vocoderLine + noMic, juce::dontSendNotification);
+    vocoderControls.open.setEnabled (vocoder.isLoaded());
 
     auto pedalLine = describe (engine.getPedalSlot());
     pedalControls.status.setText (pedalLine.isEmpty() ? juce::String() : "pedal: " + pedalLine,
@@ -1288,20 +1377,28 @@ void MainComponent::refreshAmpControls()
 
 //==============================================================================
 // The settings field kept its name from the expanding-panels days; it now
-// carries the single selected row as a one-hot string, and an old multi-open
-// state degrades gracefully to "the first panel you had open".
+// carries the selected row's key. A name survives reorders and new stages,
+// where the one-hot index this field used to hold pointed at whatever row
+// happened to move into that slot.
 juce::String MainComponent::expandedStateString() const
 {
-    juce::String state;
-
-    for (int i = 0; i < panels.size(); ++i)
-        state << (i == selectedFx ? '1' : '0');
-
-    return state;
+    return juce::isPositiveAndBelow (selectedFx, (int) fxDefs.size())
+             ? fxDefs[(size_t) selectedFx].key : juce::String();
 }
 
 void MainComponent::applyExpandedState (const juce::String& state)
 {
+    for (int i = 0; i < (int) fxDefs.size(); ++i)
+    {
+        if (fxDefs[(size_t) i].key == state)
+        {
+            selectFx (i);
+            return;
+        }
+    }
+
+    // An older settings file still holds the one-hot string; its position is
+    // a decent guess, and no '1' at all means nothing was open.
     selectFx (state.indexOfChar ('1'));
 }
 
@@ -1333,6 +1430,8 @@ void MainComponent::saveSettings()
     settings.instrumentState = engine.getInstrument().getStateBase64();
     settings.tunePlugin = engine.getTuneSlot().getLoadedName();
     settings.tunePluginState = engine.getTuneSlot().getStateBase64();
+    settings.vocoderPlugin = engine.getVocoderSlot().getLoadedName();
+    settings.vocoderPluginState = engine.getVocoderSlot().getStateBase64();
     settings.pedalPlugin = engine.getPedalSlot().getLoadedName();
     settings.pedalPluginState = engine.getPedalSlot().getStateBase64();
     settings.chainOrder = chainOrderString();
@@ -1402,9 +1501,9 @@ void MainComponent::timerCallback()
         instrumentScanning = engine.getInstrument().isScanning();
         refreshInstrumentControls();
 
-        // A finished scan may have just discovered a better pitch corrector.
+        // A finished scan may have just discovered better tenants.
         if (! instrumentScanning)
-            autoBindPitchPlugin();
+            autoBindHostedRoles();
 
         refreshSlotControls();
     }
@@ -1413,20 +1512,22 @@ void MainComponent::timerCallback()
     engine.getMidi().setChannel ((int) std::lround (params.get (pMidiChannel)));
     engine.getMidi().setExpressionController ((int) std::lround (params.get (pMidiExpression)));
 
-    // The switch can arrive from a foot controller as well as the button;
-    // when it moves underneath the UI, the editor catches up here. The same
+    // The switches can arrive from a foot controller as well as the buttons;
+    // when they move underneath the UI, the editor catches up here. The same
     // tick notices a plugin that ejected itself mid-song.
-    const int vocalOn = params.getBool (pVocalOn) ? 1 : 0;
+    const int micLanes = (params.getBool (pVocalOn) ? 1 : 0)
+                           | (params.getBool (pVocoderOn) ? 2 : 0);
 
-    if (vocalOn != lastVocalOn)
+    if (micLanes != lastMicLanes)
     {
-        lastVocalOn = vocalOn;
+        lastMicLanes = micLanes;
         refreshAllControls();
     }
 
     const int failureMask = (engine.getTuneSlot().hasFailed() ? 1 : 0)
                               | (engine.getPedalSlot().hasFailed() ? 2 : 0)
-                              | (engine.getActiveInputCount() < 2 ? 4 : 0);
+                              | (engine.getActiveInputCount() < 2 ? 4 : 0)
+                              | (engine.getVocoderSlot().hasFailed() ? 8 : 0);
 
     if (failureMask != lastSlotFailures)
     {
@@ -1435,15 +1536,22 @@ void MainComponent::timerCallback()
     }
 
     // A controller plugged in mid-session should just work: re-enable every
-    // few seconds. Cheap — enumeration only, no device churn.
+    // few seconds. Cheap — enumeration only, no device churn. The same beat
+    // retries the virtual port if launch never got one — MIDIServer refuses
+    // requests while it digests dead clients, and a show should recover from
+    // that by itself rather than run portless.
     if (++midiInputRefresh >= 90)
     {
         midiInputRefresh = 0;
         engine.enableAllMidiInputs();
+
+        if (! engine.getMidi().isOpen())
+            engine.getMidi().open();
     }
 
     inputMeter.setLevel (0, engine.getInputPeak());
     vocalMeter.setLevel (0, engine.getVocalPeak());
+    vocoderMeter.setLevel (0, engine.getVocalPeak());
     masterMeter.setLevel (0, engine.getOutputPeakL());
     masterMeter.setLevel (1, engine.getOutputPeakR());
 
