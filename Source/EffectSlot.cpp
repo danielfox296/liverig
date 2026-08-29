@@ -93,29 +93,32 @@ bool EffectSlot::load (InstrumentHost& registry, const juce::String& name, juce:
 
     instance->prepareToPlay (sr, maxBlock);
 
-    // A vocoder bound for the bass-carrier role must listen to its sidechain
-    // and to nothing else. TAL ships idling on an internal synth waiting for
-    // MIDI nobody sends, and its routing takes two switches, measured, not
-    // read: "inputmode" selects the external carrier and "sidechain" says it
-    // arrives on the sidechain bus — either alone is silence or synth. The
-    // internal oscillators are zeroed so the bass is the only voice box. The
-    // parameter names are TAL's own, so other vocoders are untouched, and a
-    // restored user state is applied after this load and wins.
+    // A vocoder bound for the bass-carrier role must listen to the bass and
+    // to nothing else. TAL ships idling on an internal synth waiting for
+    // MIDI nobody sends, and its routing takes two switches whose meaning
+    // was measured, not read: "inputmode" takes the carrier from the MAIN
+    // input in place of the synth, and "sidechain" moves the MODULATOR — the
+    // voice — onto the sidechain bus. (TAL is built to sit on a synth track
+    // with the voice fed in from the side; the first reading of those names
+    // had the buses exactly backwards, and the bass ended up as the words.)
+    // The internal oscillators are zeroed so the bass is the only voice box.
+    // The parameter names are TAL's own, so other vocoders are untouched,
+    // and renderBlock lays the buffers to match whichever mode is in force.
+    bool hasInputMode = false, hasSidechainSwitch = false;
+
     if (wantSidechain)
     {
         for (auto* parameter : instance->getParameters())
         {
-            const auto name = parameter->getName (32);
-
-            if (name.equalsIgnoreCase ("sidechain") || name.equalsIgnoreCase ("inputmode"))
-                parameter->setValueNotifyingHost (1.0f);
-            else if (name.equalsIgnoreCase ("pulsevolume")
-                      || name.equalsIgnoreCase ("sawvolume")
-                      || name.equalsIgnoreCase ("suboscvolume")
-                      || name.equalsIgnoreCase ("noisevolume"))
-                parameter->setValueNotifyingHost (0.0f);
+            const auto pname = parameter->getName (32);
+            hasInputMode = hasInputMode || pname.equalsIgnoreCase ("inputmode");
+            hasSidechainSwitch = hasSidechainSwitch || pname.equalsIgnoreCase ("sidechain");
         }
+
+        applyCarrierSwitches (*instance, sc);
     }
+
+    const bool talMode = hasInputMode && (sc == 0 || hasSidechainSwitch);
 
     // --- swap in, retiring the old instance off the audio thread ---
     live.store (nullptr, std::memory_order_release);
@@ -126,10 +129,14 @@ bool EffectSlot::load (InstrumentHost& registry, const juce::String& name, juce:
     totalOuts.store (outs, std::memory_order_relaxed);
     latencySamples.store (instance->getLatencySamples(), std::memory_order_relaxed);
 
-    // No sidechain bus on a role that needs a carrier: fall back to the old
-    // L=voice / R=carrier convention on the main pair. Degraded but audible,
-    // and the UI says which mode is in force.
-    carrierOnRight.store (wantSidechain && sc == 0 && mains >= 2, std::memory_order_relaxed);
+    // Which way the buffers get laid, per the measured switch semantics: a
+    // TAL with a sidechain bus takes the voice there and the carrier on the
+    // mains; a TAL without one wants carrier LEFT, voice right. A non-TAL
+    // sidechain vocoder keeps the generic shape (voice main, carrier SC),
+    // and the no-bus fallback keeps the old L=voice / R=carrier split.
+    micOnSidechain.store (talMode && sc > 0, std::memory_order_relaxed);
+    carrierOnLeft.store (talMode && sc == 0 && mains >= 2, std::memory_order_relaxed);
+    carrierOnRight.store (! talMode && wantSidechain && sc == 0 && mains >= 2, std::memory_order_relaxed);
 
     if (retired == nullptr)
         retired = std::move (owned);
@@ -174,6 +181,40 @@ void EffectSlot::restore (InstrumentHost& registry, const juce::String& name,
 
     if (block.fromBase64Encoding (stateBase64))
         owned->setStateInformation (block.getData(), (int) block.getSize());
+
+    // The saved state wins on everything musical — and would also quietly
+    // flip the carrier switches back to whatever era it was written in, so
+    // the rig re-asserts them on top. A state saved before the switch
+    // policy existed put the internal synth back in charge on every launch.
+    applyCarrierSwitches (*owned, sidechainChannels.load (std::memory_order_relaxed));
+}
+
+// The rig owns the routing, wherever the parameter values came from. As
+// measured against TAL-Vocoder-2: "inputmode" takes the carrier from the
+// main input in place of the internal synth, "sidechain" moves the
+// modulator onto the sidechain bus (engaged only when such a bus was
+// actually negotiated), and the oscillator volumes are zeroed so the bass
+// is the only voice box. Plugins without these parameter names are
+// untouched.
+void EffectSlot::applyCarrierSwitches (juce::AudioProcessor& plugin, int scChannels) const
+{
+    if (! wantSidechain)
+        return;
+
+    for (auto* parameter : plugin.getParameters())
+    {
+        const auto pname = parameter->getName (32);
+
+        if (pname.equalsIgnoreCase ("inputmode"))
+            parameter->setValueNotifyingHost (1.0f);
+        else if (pname.equalsIgnoreCase ("sidechain"))
+            parameter->setValueNotifyingHost (scChannels > 0 ? 1.0f : 0.0f);
+        else if (pname.equalsIgnoreCase ("pulsevolume")
+                  || pname.equalsIgnoreCase ("sawvolume")
+                  || pname.equalsIgnoreCase ("suboscvolume")
+                  || pname.equalsIgnoreCase ("noisevolume"))
+            parameter->setValueNotifyingHost (0.0f);
+    }
 }
 
 juce::String EffectSlot::getStateBase64() const
@@ -231,20 +272,40 @@ bool EffectSlot::renderBlock (juce::AudioProcessor* plugin, const float* in,
 
     const int mains = mainInChannels.load (std::memory_order_relaxed);
     const int sc = sidechainChannels.load (std::memory_order_relaxed);
-    const bool split = carrierOnRight.load (std::memory_order_relaxed);
 
-    if (mains > 0)
-        scratch.copyFrom (0, 0, in, numSamples);
-
-    if (mains > 1)
-    {
-        const float* right = (split && sidechain != nullptr) ? sidechain : in;
-        scratch.copyFrom (1, 0, right, numSamples);
-    }
+    // Who drives which bus. The generic shape is voice on the main pair and
+    // carrier on the sidechain; a TAL flips both, and the split modes share
+    // the main pair between them.
+    const float* mainL = in;
+    const float* mainR = in;
+    const float* scSrc = sidechain;
 
     if (sidechain != nullptr)
+    {
+        if (micOnSidechain.load (std::memory_order_relaxed))
+        {
+            mainL = mainR = sidechain;
+            scSrc = in;
+        }
+        else if (carrierOnLeft.load (std::memory_order_relaxed))
+        {
+            mainL = sidechain;
+        }
+        else if (carrierOnRight.load (std::memory_order_relaxed))
+        {
+            mainR = sidechain;
+        }
+    }
+
+    if (mains > 0)
+        scratch.copyFrom (0, 0, mainL, numSamples);
+
+    if (mains > 1)
+        scratch.copyFrom (1, 0, mainR, numSamples);
+
+    if (scSrc != nullptr)
         for (int c = 0; c < sc && mains + c < channels; ++c)
-            scratch.copyFrom (mains + c, 0, sidechain, numSamples);
+            scratch.copyFrom (mains + c, 0, scSrc, numSamples);
 
     juce::AudioBuffer<float> block (scratch.getArrayOfWritePointers(), channels, 0, numSamples);
     midi.clear();

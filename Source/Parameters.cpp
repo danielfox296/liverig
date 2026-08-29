@@ -154,8 +154,8 @@ static const ParamSpec specs[] =
     { "instLevel", "Level",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
 
     { "vocalOn",   "Autotune",   0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
-    { "vocalGain", "Gain",     -24.0f,  24.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
-    { "vocalGate", "Gate",     -80.0f, -20.0f, -50.0f,     0.0f, 0.0f, " dB",  1, false },
+    { "vocalGain", "Mic gain", -24.0f,  24.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
+    { "vocalGate", "Mic gate", -80.0f, -20.0f, -50.0f,     0.0f, 0.0f, " dB",  1, false },
     { "vocalLevel","Level",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
 
     { "vocoderOn", "Vocoder",    0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },

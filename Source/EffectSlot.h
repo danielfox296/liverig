@@ -27,11 +27,12 @@ class InstrumentHost;
 class EffectSlot : private juce::Timer
 {
 public:
-    // wantSidechain asks for a second input bus after the main one — the
-    // vocoder's external carrier arrives there. When a vocoder offers no
-    // sidechain bus at all, the carrier is put on the right of the main
-    // stereo pair instead — the old L=voice/R=carrier convention — which the
-    // status line reports so nobody mistakes it for the real thing.
+    // wantSidechain asks for a second input bus after the main one, for the
+    // vocoder role's second signal. Which of voice and carrier rides which
+    // bus depends on the plugin: a TAL (measured, see load()) takes the
+    // carrier on its MAIN input and the voice on the sidechain; the generic
+    // shape is the reverse; and with no sidechain bus at all the two share
+    // the main pair. The status line reports the mode in force.
     explicit EffectSlot (const juce::String& roleName, bool wantSidechain = false);
     ~EffectSlot() override;
 
@@ -56,6 +57,10 @@ public:
     // 0 when no sidechain bus was negotiated. The vocal UI reads this to say
     // whether the carrier really runs through a sidechain.
     int getSidechainChannels() const noexcept       { return sidechainChannels.load (std::memory_order_relaxed); }
+
+    // True in TAL mode: the voice rides the sidechain and the carrier the
+    // main input. The status line words its route report accordingly.
+    bool isModulatorOnSidechain() const noexcept    { return micOnSidechain.load (std::memory_order_relaxed); }
 
     // What the plugin adds, for the latency readout. Live use wants zero;
     // anything visible here is the plugin's own lookahead, surfaced rather
@@ -82,6 +87,7 @@ public:
 
 private:
     void timerCallback() override;
+    void applyCarrierSwitches (juce::AudioProcessor& plugin, int scChannels) const;
     bool renderBlock (juce::AudioProcessor* plugin, const float* in,
                       const float* sidechain, int numSamples) noexcept;
 
@@ -98,6 +104,7 @@ private:
     juce::MidiBuffer midi;
 
     std::atomic<int> mainInChannels { 2 }, sidechainChannels { 0 };
+    std::atomic<bool> micOnSidechain { false }, carrierOnLeft { false };
     std::atomic<int> totalIns { 2 }, totalOuts { 2 };
     std::atomic<int> latencySamples { 0 };
     std::atomic<bool> carrierOnRight { false };

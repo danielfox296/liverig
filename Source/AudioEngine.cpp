@@ -118,6 +118,40 @@ float AudioEngine::getFxLatencyMs() const noexcept
     return rate > 0.0 ? (float) (fx.getLatencySamples() / rate * 1000.0) : 0.0f;
 }
 
+void AudioEngine::setInputRoles (int bassChannel, int micChannel) noexcept
+{
+    bassWanted.store (bassChannel, std::memory_order_relaxed);
+    micWanted.store (micChannel, std::memory_order_relaxed);
+    updateInputSlots();
+}
+
+void AudioEngine::updateInputSlots() noexcept
+{
+    const juce::uint64 mask = activeInputMask.load (std::memory_order_relaxed);
+
+    // A role's slot is its channel's position among the active channels —
+    // the compaction the device callback applies. Unassigned or inactive
+    // roles fall back to the old rule: bass first, mic second.
+    const auto slotOf = [mask] (int channel, int fallback)
+    {
+        if (channel < 1 || channel > 64 || (mask & (1ull << (channel - 1))) == 0)
+            return fallback;
+
+        int slot = 0;
+
+        for (int bit = 0; bit < channel - 1; ++bit)
+            if ((mask & (1ull << bit)) != 0)
+                ++slot;
+
+        return slot;
+    };
+
+    bassSlot.store (slotOf (bassWanted.load (std::memory_order_relaxed), 0),
+                    std::memory_order_relaxed);
+    micSlot.store (slotOf (micWanted.load (std::memory_order_relaxed), 1),
+                   std::memory_order_relaxed);
+}
+
 void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
     const double rate = device->getCurrentSampleRate();
@@ -125,8 +159,19 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
     currentRate.store (rate, std::memory_order_relaxed);
     currentBlock.store (maxBlock, std::memory_order_relaxed);
-    activeInputs.store (device->getActiveInputChannels().countNumberOfSetBits(),
-                        std::memory_order_relaxed);
+
+    const auto activeChans = device->getActiveInputChannels();
+    activeInputs.store (activeChans.countNumberOfSetBits(), std::memory_order_relaxed);
+
+    juce::uint64 mask = 0;
+
+    for (int bit = activeChans.findNextSetBit (0);
+         bit >= 0 && bit < 64;
+         bit = activeChans.findNextSetBit (bit + 1))
+        mask |= 1ull << bit;
+
+    activeInputMask.store (mask, std::memory_order_relaxed);
+    updateInputSlots();
 
     scratch.setSize (6, maxBlock, false, true, false);
     scratch.clear();
@@ -193,13 +238,16 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     float* mixR    = scratch.getWritePointer (4);
     float* vocalIn = scratch.getWritePointer (5);
 
+    const int bassIn = bassSlot.load (std::memory_order_relaxed);
+    const int micIn = micSlot.load (std::memory_order_relaxed);
+
     for (int offset = 0; offset < numSamples;)
     {
         const int n = juce::jmin (maxBlock, numSamples - offset);
 
-        // --- live lane: instrument on the first active input channel ---
-        if (numInputChannels > 0 && inputChannelData[0] != nullptr)
-            juce::FloatVectorOperations::copy (monoIn, inputChannelData[0] + offset, n);
+        // --- live lane: instrument on its assigned input channel ---
+        if (bassIn < numInputChannels && inputChannelData[bassIn] != nullptr)
+            juce::FloatVectorOperations::copy (monoIn, inputChannelData[bassIn] + offset, n);
         else
             juce::FloatVectorOperations::clear (monoIn, n);
 
@@ -220,11 +268,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             instrument.process (events, midiCount, liveL, liveR, n, instrumentGain);
         }
 
-        // --- mic lanes: input 2, summed in as performance. The vocoder's
-        // carrier is the bass after the whole chain, tapped ahead of Live
-        // out — so the bass can sing while the bass itself is silent. ---
-        if (numInputChannels > 1 && inputChannelData[1] != nullptr)
-            juce::FloatVectorOperations::copy (vocalIn, inputChannelData[1] + offset, n);
+        // --- mic lanes: the assigned mic channel, summed in as performance.
+        // The vocoder's carrier is the bass after the whole chain, tapped
+        // ahead of Live out — so the bass can sing while the bass itself is
+        // silent. One active channel means no mic; the lane goes quiet. ---
+        if (micIn != bassIn && micIn < numInputChannels && inputChannelData[micIn] != nullptr)
+            juce::FloatVectorOperations::copy (vocalIn, inputChannelData[micIn] + offset, n);
         else
             juce::FloatVectorOperations::clear (vocalIn, n);
 

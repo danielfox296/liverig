@@ -1,7 +1,111 @@
 #include "MainComponent.h"
 
+#include <CoreAudio/CoreAudio.h>
+
 namespace rig
 {
+
+// Which sub-device owns each input channel of the named device — empty for
+// anything that is not an aggregate, and when CoreAudio won't say. An
+// aggregate's channels run sub-device by sub-device in its list order, so
+// "Input 1" can introduce itself as the Scarlett's and "Front Left" as the
+// USB mic's.
+static juce::StringArray inputChannelOwners (const juce::String& deviceName, int channelCount)
+{
+    juce::StringArray owners;
+
+    AudioObjectPropertyAddress addr { kAudioHardwarePropertyDevices,
+                                      kAudioObjectPropertyScopeGlobal,
+                                      kAudioObjectPropertyElementMain };
+    UInt32 size = 0;
+
+    if (AudioObjectGetPropertyDataSize (kAudioObjectSystemObject, &addr, 0, nullptr, &size) != noErr || size == 0)
+        return owners;
+
+    std::vector<AudioDeviceID> devices (size / sizeof (AudioDeviceID));
+
+    if (AudioObjectGetPropertyData (kAudioObjectSystemObject, &addr, 0, nullptr, &size, devices.data()) != noErr)
+        return owners;
+
+    const auto nameOf = [] (AudioObjectID id) -> juce::String
+    {
+        CFStringRef cf = nullptr;
+        UInt32 sz = sizeof (cf);
+        AudioObjectPropertyAddress a { kAudioObjectPropertyName,
+                                       kAudioObjectPropertyScopeGlobal,
+                                       kAudioObjectPropertyElementMain };
+
+        if (AudioObjectGetPropertyData (id, &a, 0, nullptr, &sz, &cf) != noErr || cf == nullptr)
+            return {};
+
+        auto s = juce::String::fromCFString (cf);
+        CFRelease (cf);
+        return s;
+    };
+
+    AudioDeviceID aggregate = kAudioObjectUnknown;
+
+    for (auto id : devices)
+    {
+        if (nameOf (id) == deviceName)
+        {
+            aggregate = id;
+            break;
+        }
+    }
+
+    if (aggregate == kAudioObjectUnknown)
+        return owners;
+
+    AudioObjectPropertyAddress subAddr { kAudioAggregateDevicePropertyActiveSubDeviceList,
+                                         kAudioObjectPropertyScopeGlobal,
+                                         kAudioObjectPropertyElementMain };
+
+    if (AudioObjectGetPropertyDataSize (aggregate, &subAddr, 0, nullptr, &size) != noErr || size == 0)
+        return owners;
+
+    std::vector<AudioDeviceID> subs (size / sizeof (AudioDeviceID));
+
+    if (AudioObjectGetPropertyData (aggregate, &subAddr, 0, nullptr, &size, subs.data()) != noErr)
+        return owners;
+
+    const auto inputCountOf = [] (AudioDeviceID id) -> int
+    {
+        AudioObjectPropertyAddress a { kAudioDevicePropertyStreamConfiguration,
+                                       kAudioDevicePropertyScopeInput,
+                                       kAudioObjectPropertyElementMain };
+        UInt32 sz = 0;
+
+        if (AudioObjectGetPropertyDataSize (id, &a, 0, nullptr, &sz) != noErr || sz == 0)
+            return 0;
+
+        std::vector<char> raw (sz);
+        auto* list = reinterpret_cast<AudioBufferList*> (raw.data());
+
+        if (AudioObjectGetPropertyData (id, &a, 0, nullptr, &sz, list) != noErr)
+            return 0;
+
+        int n = 0;
+
+        for (UInt32 i = 0; i < list->mNumberBuffers; ++i)
+            n += (int) list->mBuffers[i].mNumberChannels;
+
+        return n;
+    };
+
+    for (auto sub : subs)
+    {
+        const auto owner = nameOf (sub);
+
+        for (int n = inputCountOf (sub); n > 0; --n)
+            owners.add (owner);
+    }
+
+    if (owners.size() != channelCount)
+        owners.clear();   // the map does not line up; no labels beats wrong labels
+
+    return owners;
+}
 
 static constexpr int panelGap = 7;
 
@@ -9,6 +113,9 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     : params (p), engine (e), settings (s)
 {
     presets.load();
+
+    // The engine already runs; tell it which channels the lanes live on.
+    engine.setInputRoles (settings.bassInput, settings.micInput);
 
     for (auto* b : { &loadButton, &newSongButton, &transportButton, &loopButton,
                      &deviceButton, &savePresetButton, &deletePresetButton })
@@ -980,12 +1087,182 @@ void MainComponent::loadSong (const juce::File& folder)
 
 void MainComponent::showDeviceSettings()
 {
-    auto selector = std::make_unique<juce::AudioDeviceSelectorComponent> (
-                        engine.getDeviceManager(), 0, 2, 0, 2, false, false, true, false);
-    selector->setSize (520, 400);
+    // The generic channel tick-list was the wrong shape for this rig: it
+    // caps at two ticks and evicts one whenever a third lands, it hides the
+    // interesting rows of an aggregate below its four visible lines, and it
+    // cannot say which tick is the bass. So the dialog asks the actual
+    // question — which channel is the bass, which is the mic — by channel
+    // name, where "Front Left" reads as the USB mic and "Loopback 1" reads
+    // as a thing to avoid. The selector keeps devices, outputs, rate and
+    // buffer; its own input channel list is suppressed by a minimum set
+    // above any real device's channel count.
+    struct DeviceContent : juce::Component,
+                           private juce::ChangeListener
+    {
+        explicit DeviceContent (MainComponent& mc)
+            : owner (&mc), manager (mc.engine.getDeviceManager()), settings (mc.settings)
+        {
+            selector = std::make_unique<juce::AudioDeviceSelectorComponent> (
+                           manager, 256, 256, 0, 2, false, false, true, false);
+            addAndMakeVisible (*selector);
+
+            caption.setText ("RIG INPUTS", juce::dontSendNotification);
+            caption.setFont (rigFont (11.0f, true));
+            caption.setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
+            addAndMakeVisible (caption);
+
+            bassLabel.setText ("Instrument", juce::dontSendNotification);
+            micLabel.setText ("Microphone", juce::dontSendNotification);
+
+            for (auto* label : { &bassLabel, &micLabel })
+            {
+                label->setFont (rigFont (12.0f));
+                label->setColour (juce::Label::textColourId, juce::Colour (0xff9a9da6));
+                addAndMakeVisible (label);
+            }
+
+            bassBox.setTextWhenNothingSelected (juce::CharPointer_UTF8 ("\xe2\x80\x94"));
+            micBox.setTextWhenNothingSelected (juce::CharPointer_UTF8 ("\xe2\x80\x94"));
+            bassBox.onChange = [this] { applyRoles(); };
+            micBox.onChange = [this] { applyRoles(); };
+            addAndMakeVisible (bassBox);
+            addAndMakeVisible (micBox);
+
+            manager.addChangeListener (this);
+            refreshPickers();
+            setSize (520, 470);
+        }
+
+        ~DeviceContent() override
+        {
+            manager.removeChangeListener (this);
+        }
+
+        // Device switches land here (so the pickers relist the new device's
+        // channels), and so does every apply — repopulating without
+        // notification keeps that from looping.
+        void changeListenerCallback (juce::ChangeBroadcaster*) override
+        {
+            refreshPickers();
+        }
+
+        void refreshPickers()
+        {
+            bassBox.clear (juce::dontSendNotification);
+            micBox.clear (juce::dontSendNotification);
+            micBox.addItem ("None", noneId);
+
+            auto* device = manager.getCurrentAudioDevice();
+            const bool haveDevice = device != nullptr;
+
+            bassBox.setEnabled (haveDevice);
+            micBox.setEnabled (haveDevice);
+
+            if (! haveDevice)
+                return;
+
+            // Channels introduce themselves with the device they belong to,
+            // so an aggregate's rows read "AT2020USB+ — Front Left" rather
+            // than leaving the mic to be deduced. The lookup wants the input
+            // device's own name: a combined in+out device reports a merged
+            // identity of its own.
+            const auto names = device->getInputChannelNames();
+            const auto owners = inputChannelOwners (manager.getAudioDeviceSetup().inputDeviceName,
+                                                    names.size());
+
+            for (int i = 0; i < names.size(); ++i)
+            {
+                const auto item = i < owners.size()
+                                    ? owners[i] + juce::String (juce::CharPointer_UTF8 (" \xe2\x80\x94 ")) + names[i]
+                                    : names[i];
+
+                bassBox.addItem (item, i + 1);
+                micBox.addItem (item, i + 1);
+            }
+
+            // Show what is actually live: the assigned roles where they are
+            // among the active channels, compaction order where they are not
+            // — the same resolution the engine applies.
+            const auto active = manager.getAudioDeviceSetup().inputChannels;
+            const int first = active.findNextSetBit (0);
+            const int second = first >= 0 ? active.findNextSetBit (first + 1) : -1;
+
+            const int bassChan = settings.bassInput >= 1 && active[settings.bassInput - 1]
+                                   ? settings.bassInput : first + 1;
+            const int micChan = settings.micInput >= 1 && active[settings.micInput - 1]
+                                  && settings.micInput != bassChan
+                                   ? settings.micInput : second + 1;
+
+            bassBox.setSelectedId (bassChan, juce::dontSendNotification);
+            micBox.setSelectedId (micChan >= 1 ? micChan : noneId, juce::dontSendNotification);
+        }
+
+        void applyRoles()
+        {
+            const int bassChan = bassBox.getSelectedId();
+            const int micChan = micBox.getSelectedId() == noneId ? 0 : micBox.getSelectedId();
+
+            if (bassChan < 1)
+                return;
+
+            juce::BigInteger chans;
+            chans.setBit (bassChan - 1);
+
+            if (micChan >= 1)
+                chans.setBit (micChan - 1);
+
+            auto config = manager.getAudioDeviceSetup();
+
+            if (config.inputChannels != chans)
+            {
+                config.inputChannels = chans;
+                config.useDefaultInputChannels = false;
+                manager.setAudioDeviceSetup (config, true);
+            }
+
+            settings.bassInput = bassChan;
+            settings.micInput = micChan;
+
+            if (owner != nullptr)
+            {
+                owner->engine.setInputRoles (bassChan, micChan);
+                owner->saveSettings();
+            }
+        }
+
+        void resized() override
+        {
+            // The rig's own question first, at the top where it cannot be
+            // missed; the stock selector below. Label widths put the boxes
+            // in the same column as the selector's controls.
+            auto b = getLocalBounds();
+            auto top = b.removeFromTop (86).reduced (10, 2);
+
+            caption.setBounds (top.removeFromTop (18));
+            auto row = top.removeFromTop (26);
+            bassLabel.setBounds (row.removeFromLeft (172));
+            bassBox.setBounds (row.reduced (0, 1));
+            top.removeFromTop (4);
+            row = top.removeFromTop (26);
+            micLabel.setBounds (row.removeFromLeft (172));
+            micBox.setBounds (row.reduced (0, 1));
+
+            b.removeFromTop (8);
+            selector->setBounds (b);
+        }
+
+        enum { noneId = 1000 };
+
+        juce::Component::SafePointer<MainComponent> owner;
+        juce::AudioDeviceManager& manager;
+        SettingsStore& settings;
+        std::unique_ptr<juce::AudioDeviceSelectorComponent> selector;
+        juce::Label caption, bassLabel, micLabel;
+        juce::ComboBox bassBox, micBox;
+    };
 
     juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned (selector.release());
+    options.content.setOwned (new DeviceContent (*this));
     options.dialogTitle = "Audio device";
     options.dialogBackgroundColour = juce::Colour (0xff17181c);
     options.escapeKeyTriggersCloseButton = true;
@@ -1301,10 +1578,10 @@ void MainComponent::refreshSlotControls()
                  : "zero latency";
     };
 
-    // The other half of "nothing happens": the mic lanes read the device's
-    // second input, and a one-input device simply has no mic path.
+    // The other half of "nothing happens": with one active input there is
+    // no mic path, whatever the lanes are set to.
     const juce::String noMic = engine.getActiveInputCount() < 2 && engine.getSampleRate() > 0.0
-        ? "   ·   this audio device has no input 2 — the mic needs the interface"
+        ? "   ·   no mic input is active — assign one in Audio device..."
         : juce::String();
 
     auto& tune = engine.getTuneSlot();
@@ -1329,12 +1606,14 @@ void MainComponent::refreshSlotControls()
     {
         vocoderLine = vocoder.getLoadedName() + " — " + describe (vocoder);
 
-        // A sidechain that silently failed to negotiate would just sound
+        // A carrier route that silently failed to negotiate would just sound
         // like a broken vocoder, so the route is always named.
         if (vocoder.isLoaded())
             vocoderLine += vocoder.getSidechainChannels() > 0
-                             ? ", bass carrier on the sidechain"
-                             : ", no sidechain bus — carrier on the right main channel";
+                             ? (vocoder.isModulatorOnSidechain()
+                                  ? ", bass carrier on the main input, mic on the sidechain"
+                                  : ", bass carrier on the sidechain")
+                             : ", no sidechain bus — carrier shares the main pair";
     }
     else if (vocoder.getLastError().isNotEmpty())
         vocoderLine = vocoder.getLastError();

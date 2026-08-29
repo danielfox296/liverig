@@ -25,6 +25,11 @@ public:
     juce::String tuner;         // "bass" or "guitar"
     juce::String ampModel;      // path of the loaded NAM capture, empty for none
 
+    // Which device input channel plays which role, 1-based; 0 means never
+    // assigned (first active channel = bass, second = mic, as it always was).
+    int bassInput = 0;
+    int micInput = 0;
+
     // The hosted-plugin roles: plugin name and its state blob, recalled on
     // launch the way the instrument is. The autotune's key and style live in
     // tunePluginState; the vocoder's voicing in vocoderPluginState.

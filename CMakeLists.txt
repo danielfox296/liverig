@@ -144,9 +144,16 @@ target_link_libraries(LiveRig PRIVATE
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
 
-# Ad-hoc sign so macOS keeps a stable TCC identity for the microphone prompt.
+# Ad-hoc sign so macOS keeps a stable TCC identity for the microphone prompt,
+# then refresh /Applications: the Dock launches that copy, and a build that
+# stops in the build tree is a build that gets tested against last night's
+# app. A running instance keeps its old files until relaunch; the swap is safe.
 add_custom_command(TARGET LiveRig POST_BUILD
     COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:LiveRig>"
+    COMMAND rm -rf "/Applications/LiveRig.app"
+    COMMAND ditto "$<TARGET_BUNDLE_DIR:LiveRig>" "/Applications/LiveRig.app"
+    COMMAND codesign --force --sign - "/Applications/LiveRig.app"
+    COMMENT "Signing and refreshing /Applications/LiveRig.app"
     VERBATIM)
 
 # Puts the built app in /Applications and refreshes the Desktop icon.

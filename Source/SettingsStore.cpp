@@ -31,6 +31,8 @@ void SettingsStore::load (ParamStore& params)
         chainOrder = obj->getProperty ("chainOrder").toString();
         tuner = obj->getProperty ("tuner").toString();
         ampModel = obj->getProperty ("ampModel").toString();
+        bassInput = (int) obj->getProperty ("bassInput");
+        micInput = (int) obj->getProperty ("micInput");
         tunePlugin = obj->getProperty ("tunePlugin").toString();
         tunePluginState = obj->getProperty ("tunePluginState").toString();
         vocoderPlugin = obj->getProperty ("vocoderPlugin").toString();
@@ -52,6 +54,8 @@ void SettingsStore::save (const ParamStore& params) const
     root->setProperty ("chainOrder", chainOrder);
     root->setProperty ("tuner", tuner);
     root->setProperty ("ampModel", ampModel);
+    root->setProperty ("bassInput", bassInput);
+    root->setProperty ("micInput", micInput);
     root->setProperty ("tunePlugin", tunePlugin);
     root->setProperty ("tunePluginState", tunePluginState);
     root->setProperty ("vocoderPlugin", vocoderPlugin);

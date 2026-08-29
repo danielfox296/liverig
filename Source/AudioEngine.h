@@ -60,6 +60,15 @@ public:
     // two; on a one-input device the Autotune row says so instead of playing
     // an unexplained silence.
     int getActiveInputCount() const noexcept { return activeInputs.load (std::memory_order_relaxed); }
+
+    // Which device channels play which role, as 1-based channel numbers; 0
+    // means unassigned. The callback hands over only the *active* channels,
+    // compacted and in channel order — so on an aggregate whose mic device
+    // sits first, the mic would land in slot 0 and the bass lane would sing.
+    // The roles pin each lane to its channel wherever it compacts to; a role
+    // that names an inactive channel falls back to the old rule, bass first,
+    // mic second.
+    void setInputRoles (int bassChannel, int micChannel) noexcept;
     float getOutputPeakL() const noexcept   { return outPeakL.load (std::memory_order_relaxed); }
     float getOutputPeakR() const noexcept   { return outPeakR.load (std::memory_order_relaxed); }
 
@@ -78,6 +87,7 @@ public:
 
 private:
     void preferLowLatencyBuffer();
+    void updateInputSlots() noexcept;
     void handleIncomingMidiMessage (juce::MidiInput* source,
                                     const juce::MidiMessage& message) override;
 
@@ -119,6 +129,13 @@ private:
     std::atomic<double> currentRate { 0.0 };
     std::atomic<int> currentBlock { 0 };
     std::atomic<int> activeInputs { 0 };
+
+    // The active input channels as a bit mask (bit n = channel n+1), the
+    // wanted roles, and the slots they resolve to in the compacted callback
+    // arrays. Slots are what the audio thread reads.
+    std::atomic<juce::uint64> activeInputMask { 0 };
+    std::atomic<int> bassWanted { 0 }, micWanted { 0 };
+    std::atomic<int> bassSlot { 0 }, micSlot { 1 };
     std::atomic<float> inPeak { 0.0f }, vocalPeak { 0.0f }, outPeakL { 0.0f }, outPeakR { 0.0f };
     std::atomic<float> limiterGr { 0.0f };
     bool callbackAdded = false;
