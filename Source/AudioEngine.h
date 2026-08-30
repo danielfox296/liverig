@@ -92,6 +92,13 @@ public:
     float getInputPeak() const noexcept     { return inPeak.load (std::memory_order_relaxed); }
     float getVocalPeak() const noexcept     { return vocalPeak.load (std::memory_order_relaxed); }
 
+    // A generic strip's own level, for its meter on the rail.
+    float getSlotPeak (int slot) const noexcept
+    {
+        return juce::isPositiveAndBelow (slot, ParamStore::maxChannels)
+                 ? slotPeaks[(size_t) slot].load (std::memory_order_relaxed) : 0.0f;
+    }
+
     // How many input channels the device actually opened. The mic lane needs
     // two; on a one-input device the Autotune row says so instead of playing
     // an unexplained silence.
@@ -124,9 +131,11 @@ public:
 private:
     void preferLowLatencyBuffer();
     void updateInputSlots() noexcept;
-    void throughBoard (FxChain& chain, bool active, juce::SmoothedValue<float>& passGain, int slot,
-                       const float* inL, const float* inR, float* outL, float* outR,
-                       float* busIn, float* tmpL, float* tmpR, int n) noexcept;
+    void renderBoard (FxChain& chain, bool active, juce::SmoothedValue<float>& passGain, int slot,
+                      const float* inL, const float* inR, float* pathL, float* pathR,
+                      float* busIn, int n) noexcept;
+    void alignedAdd (int slot, int delaySamples, const float* inL, const float* inR,
+                     float* outL, float* outR, int n) noexcept;
     void handleIncomingMidiMessage (juce::MidiInput* source,
                                     const juce::MidiMessage& message) override;
 
@@ -151,6 +160,17 @@ private:
     // compacted callback slots they resolve to (-1 stays silent).
     std::atomic<int> sourceWanted[ParamStore::maxChannels] {};
     std::atomic<int> sourceSlot[ParamStore::maxChannels] {};
+
+    // Alignment at the sum: parallel jack-fed strips are delayed to the
+    // slowest of them, so the same source through two boards cannot comb.
+    // The lanes are never delayed — a plugin's cost is the player's choice,
+    // and nobody delays the player's hands to flatter a phase meter.
+    static constexpr int alignRingSize = 8192;
+    juce::AudioBuffer<float> alignRings;   // two ring channels per slot
+    int alignPos[ParamStore::maxChannels] {};
+
+    // Per-slot output peaks, for the generic strips' meters.
+    std::atomic<float> slotPeaks[ParamStore::maxChannels] {};
 
     // The keys player's own hands, queued from the MIDI thread to the audio
     // thread in a small lock-free ring and merged with the tracker's notes.

@@ -1049,8 +1049,10 @@ void MainComponent::refreshStripSelection()
 // sum always stands at the end, unremovable.
 void MainComponent::rebuildChannelRail()
 {
-    channelStrips.clear();
+    channelStrips.clear();   // strips go first: they hold raw meter pointers
     masterStrip = nullptr;
+    genericMeters.clear();
+    genericMeterKeys.clear();
 
     struct RailDef { const char* key; const char* name; LevelMeter* meter; juce::String* savedName; };
     const RailDef defs[] = { { "bass", "Bass",  &inputMeter, &settings.bassName },
@@ -1089,11 +1091,12 @@ void MainComponent::rebuildChannelRail()
         else if (key.startsWith ("ch"))
         {
             // A generic channel: its name lives in the extras map, its knob
-            // slot in its key. No source feeds it yet — the board it builds
-            // waits for the jack pickers.
+            // slot in its key, its meter made fresh with the strip.
             const auto saved = genericField (key, 0);
+            auto* meter = genericMeters.add (new LevelMeter (1));
+            genericMeterKeys.add (key);
             strip = channelStrips.add (new ChannelStrip (
-                key, saved.isNotEmpty() ? saved : "CH " + juce::String (slotOf (key) + 1), nullptr));
+                key, saved.isNotEmpty() ? saved : "CH " + juce::String (slotOf (key) + 1), meter));
 
             strip->onRename = [this, key] (const juce::String& newName)
             {
@@ -2568,6 +2571,9 @@ void MainComponent::timerCallback()
     vocalMeter.setLevel (0, engine.getVocalPeak());
     masterMeter.setLevel (0, engine.getOutputPeakL());
     masterMeter.setLevel (1, engine.getOutputPeakR());
+
+    for (int i = 0; i < genericMeterKeys.size(); ++i)
+        genericMeters[i]->setLevel (0, engine.getSlotPeak (slotOf (genericMeterKeys[i])));
 
     if (editorTabs.getCurrentTabIndex() == 1)
         tunerView.update (engine.getFxChain().getTrackedHz(),

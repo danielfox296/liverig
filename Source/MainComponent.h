@@ -322,6 +322,10 @@ private:
     juce::OwnedArray<StemStrip> stemStrips;
     juce::OwnedArray<ChannelStrip> channelStrips;
     ChannelStrip* masterStrip = nullptr;   // owned by channelStrips; wears the limiter readout
+
+    // The generic strips' meters, rebuilt with the rail; keys index-align.
+    juce::OwnedArray<LevelMeter> genericMeters;
+    juce::StringArray genericMeterKeys;
     juce::String selectedChannel { "bass" };
     juce::Viewport fxViewport;
     juce::Component fxHolder;

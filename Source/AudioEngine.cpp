@@ -234,6 +234,15 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     for (auto& gain : passGains)
         gain.reset (rate, 0.02);
 
+    alignRings.setSize (ParamStore::maxChannels * 2, alignRingSize, false, true, false);
+    alignRings.clear();
+
+    for (auto& pos : alignPos)
+        pos = 0;
+
+    for (auto& peak : slotPeaks)
+        peak.store (0.0f);
+
     instrument.prepare (rate, maxBlock);
     stems.prepare (rate, maxBlock);
 
@@ -265,24 +274,25 @@ void AudioEngine::audioDeviceStopped()
     vocalPeak.store (0.0f);
     outPeakL.store (0.0f);
     outPeakR.store (0.0f);
+
+    for (auto& peak : slotPeaks)
+        peak.store (0.0f);
 }
 
-// A lane through its strip's board. With pedals loaded the lane folds to
-// mono into the chain and comes back stereo; with the board empty the lane
-// passes in stereo, shaped only by the strip's input and live-out rows.
-void AudioEngine::throughBoard (FxChain& chain, bool active, juce::SmoothedValue<float>& passGain,
-                                int slot, const float* inL, const float* inR,
-                                float* outL, float* outR,
-                                float* busIn, float* tmpL, float* tmpR, int n) noexcept
+// A signal through its strip's board, rendered into the path buffers. With
+// pedals loaded it folds to mono into the chain and comes back stereo;
+// with the board empty it passes in stereo, shaped only by the strip's
+// input and live-out rows.
+void AudioEngine::renderBoard (FxChain& chain, bool active, juce::SmoothedValue<float>& passGain,
+                               int slot, const float* inL, const float* inR,
+                               float* pathL, float* pathR, float* busIn, int n) noexcept
 {
     if (active)
     {
         for (int i = 0; i < n; ++i)
             busIn[i] = 0.5f * (inL[i] + inR[i]);
 
-        chain.process (busIn, tmpL, tmpR, n);
-        juce::FloatVectorOperations::add (outL, tmpL, n);
-        juce::FloatVectorOperations::add (outR, tmpR, n);
+        chain.process (busIn, pathL, pathR, n);
         return;
     }
 
@@ -294,9 +304,36 @@ void AudioEngine::throughBoard (FxChain& chain, bool active, juce::SmoothedValue
     for (int i = 0; i < n; ++i)
     {
         const float g = passGain.getNextValue();
-        outL[i] += inL[i] * g;
-        outR[i] += inR[i] * g;
+        pathL[i] = inL[i] * g;
+        pathR[i] = inR[i] * g;
     }
+}
+
+// A path joins the live sum through its alignment ring. The ring is always
+// written so a delay can arrive without serving stale history; at zero
+// delay the fresh sample reads straight back out.
+void AudioEngine::alignedAdd (int slot, int delaySamples, const float* inL, const float* inR,
+                              float* outL, float* outR, int n) noexcept
+{
+    const int d = juce::jlimit (0, alignRingSize - 1, delaySamples);
+    float* ringL = alignRings.getWritePointer (slot * 2);
+    float* ringR = alignRings.getWritePointer (slot * 2 + 1);
+    int pos = alignPos[slot];
+
+    for (int i = 0; i < n; ++i)
+    {
+        ringL[pos] = inL[i];
+        ringR[pos] = inR[i];
+
+        const int read = pos - d >= 0 ? pos - d : pos - d + alignRingSize;
+        outL[i] += ringL[read];
+        outR[i] += ringR[read];
+
+        if (++pos == alignRingSize)
+            pos = 0;
+    }
+
+    alignPos[slot] = pos;
 }
 
 static void updatePeak (std::atomic<float>& slot, const float* data, int n, float decay) noexcept
@@ -337,6 +374,28 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     const int bassIn = bassSlot.load (std::memory_order_relaxed);
     const int micIn = micSlot.load (std::memory_order_relaxed);
 
+    // Alignment at the sum: every sounding jack-fed path is delayed to the
+    // slowest of them, so one source through two boards cannot comb. An
+    // empty board adds nothing and costs nothing; the lanes stay untouched.
+    int alignDelay[ParamStore::maxChannels] {};
+    {
+        float slowest = fx.getLatencySamples();
+
+        for (int s = 3; s < ParamStore::maxChannels; ++s)
+            if (sourceSlot[(size_t) s].load (std::memory_order_relaxed) >= 0
+                 && boardActive[(size_t) s].load (std::memory_order_relaxed))
+                slowest = juce::jmax (slowest, getChain (s).getLatencySamples());
+
+        alignDelay[0] = (int) std::lround (slowest - fx.getLatencySamples());
+
+        for (int s = 3; s < ParamStore::maxChannels; ++s)
+        {
+            const float own = boardActive[(size_t) s].load (std::memory_order_relaxed)
+                                ? getChain (s).getLatencySamples() : 0.0f;
+            alignDelay[s] = (int) std::lround (slowest - own);
+        }
+    }
+
     for (int offset = 0; offset < numSamples;)
     {
         const int n = juce::jmin (maxBlock, numSamples - offset);
@@ -349,7 +408,10 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
         updatePeak (inPeak, monoIn, n, decay);
 
-        fx.process (monoIn, liveL, liveR, n);
+        fx.process (monoIn, tmpL, tmpR, n);
+        juce::FloatVectorOperations::clear (liveL, n);
+        juce::FloatVectorOperations::clear (liveR, n);
+        alignedAdd (0, alignDelay[0], tmpL, tmpR, liveL, liveR, n);
 
         int midiCount = 0;
         const auto* events = fx.getMidiEvents (midiCount);
@@ -386,8 +448,10 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             juce::FloatVectorOperations::clear (laneL, n);
             juce::FloatVectorOperations::clear (laneR, n);
             instrument.process (merged, mergedCount, laneL, laneR, n, instrumentGain);
-            throughBoard (keysChain, boardActive[2].load (std::memory_order_relaxed), passGains[2],
-                          2, laneL, laneR, liveL, liveR, busIn, tmpL, tmpR, n);
+            renderBoard (keysChain, boardActive[2].load (std::memory_order_relaxed), passGains[2],
+                         2, laneL, laneR, tmpL, tmpR, busIn, n);
+            juce::FloatVectorOperations::add (liveL, tmpL, n);
+            juce::FloatVectorOperations::add (liveR, tmpR, n);
         }
 
         // --- mic lanes: the assigned mic channel, summed in as performance.
@@ -404,10 +468,13 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         juce::FloatVectorOperations::clear (laneL, n);
         juce::FloatVectorOperations::clear (laneR, n);
         vocal.process (vocalIn, fx.getCarrier(), laneL, laneR, n);
-        throughBoard (micChain, boardActive[1].load (std::memory_order_relaxed), passGains[1],
-                      1, laneL, laneR, liveL, liveR, busIn, tmpL, tmpR, n);
+        renderBoard (micChain, boardActive[1].load (std::memory_order_relaxed), passGains[1],
+                     1, laneL, laneR, tmpL, tmpR, busIn, n);
+        juce::FloatVectorOperations::add (liveL, tmpL, n);
+        juce::FloatVectorOperations::add (liveR, tmpR, n);
 
-        // --- the generic strips: each claimed jack through its own board ---
+        // --- the generic strips: each claimed jack through its own board,
+        // aligned into the sum, metered on the way ---
         for (int s = 3; s < ParamStore::maxChannels; ++s)
         {
             const int src = sourceSlot[(size_t) s].load (std::memory_order_relaxed);
@@ -416,8 +483,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                 continue;
 
             const float* jack = inputChannelData[src] + offset;
-            throughBoard (getChain (s), boardActive[(size_t) s].load (std::memory_order_relaxed),
-                          passGains[(size_t) s], s, jack, jack, liveL, liveR, busIn, tmpL, tmpR, n);
+            renderBoard (getChain (s), boardActive[(size_t) s].load (std::memory_order_relaxed),
+                         passGains[(size_t) s], s, jack, jack, laneL, laneR, busIn, n);
+
+            updatePeak (slotPeaks[(size_t) s], laneL, n, decay);
+            alignedAdd (s, alignDelay[s], laneL, laneR, liveL, liveR, n);
         }
 
         // --- playback lane ---
