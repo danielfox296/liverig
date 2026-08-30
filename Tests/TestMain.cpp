@@ -4670,96 +4670,6 @@ static void testInstrumentHosting (const juce::String& wanted, double sr, int bl
 // The parameter store's channel slots: copies are independent, globals are one
 // value everywhere, the one-argument view is channel 0, and the settings shape
 // still reads in an old build's flat form.
-// Voices on the keys strip: the rig lists what the instrument actually
-// offers, and a sound dialled up in the plugin's own window can be named,
-// saved and brought back. SKY Keys is the case that asked for this — a
-// thousand instruments behind a number the AU interface will not name, so
-// the preset file is the only handle there is.
-static void testInstrumentVoices (const juce::String& wanted, double sr, int block)
-{
-    std::printf ("\n Voices on a hosted instrument\n");
-
-    juce::ScopedJuceInitialiser_GUI juceInit;
-
-    InstrumentHost host;
-    host.prepare (sr, block);
-
-    if (! host.getAvailableNames().contains (wanted))
-    {
-        std::printf ("  %s is not installed here — nothing to test\n", wanted.toRawUTF8());
-        return;
-    }
-
-    // Never the player's own voices folder: this test writes files.
-    const auto scratch = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                            .getChildFile ("LiveRigVoiceTest");
-    scratch.deleteRecursively();
-    host.voicesRootOverride = scratch;
-
-    juce::String error;
-
-    if (! host.load (wanted, error))
-    {
-        report ((wanted + " loads").toRawUTF8(), false, error);
-        return;
-    }
-
-    auto* plugin = host.getLiveInstrument();
-    const auto onDisk = host.getVoices();
-
-    std::printf ("  %s offers %d voice(s) before saving any\n", wanted.toRawUTF8(), onDisk.size());
-
-    for (const auto& v : onDisk)
-        std::printf ("    %s%s\n", v.name.toRawUTF8(), v.program >= 0 ? "  (plugin preset)" : "");
-
-    // A parameter to tell one sound from another by.
-    auto* probe = plugin->getParameters().isEmpty() ? nullptr : plugin->getParameters()[0];
-
-    if (probe == nullptr)
-    {
-        std::printf ("  no parameters to watch — plumbing only\n");
-        return;
-    }
-
-    const float saved = probe->getValue();
-
-    report ("saving the current sound writes a voice",
-            host.saveVoice ("Rig test voice", error), error.isEmpty() ? "written" : error);
-
-    const auto after = host.getVoices();
-    bool listed = false, removable = false;
-
-    for (const auto& v : after)
-        if (v.name == "Rig test voice")
-        {
-            listed = true;
-            removable = v.removable;
-        }
-
-    report ("the saved voice joins the list", listed && after.size() == onDisk.size() + 1,
-            juce::String (after.size()) + " voices now");
-    report ("and is the rig's own to delete", removable,
-            "presets the rig did not write stay untouchable");
-
-    // Move the sound, then call the voice back.
-    probe->setValueNotifyingHost (saved > 0.5f ? 0.1f : 0.9f);
-    const float moved = probe->getValue();
-
-    for (const auto& v : after)
-        if (v.name == "Rig test voice")
-            report ("the voice loads", host.setVoice (v, error), error.isEmpty() ? "applied" : error);
-
-    const float restored = probe->getValue();
-
-    report ("and puts the sound back where it was",
-            std::abs (restored - saved) < 1.0e-4f && std::abs (moved - saved) > 1.0e-4f,
-            probe->getName (24) + ": " + juce::String (saved, 4) + " -> "
-              + juce::String (moved, 4) + " -> " + juce::String (restored, 4));
-
-    host.unload();
-    scratch.deleteRecursively();
-}
-
 static void testChannelParams()
 {
     std::printf ("\nChannel parameter store\n");
@@ -4872,7 +4782,6 @@ int main (int argc, char* argv[])
     testInstrumentHosting ("SKY Keys", 48000.0, 64);
     testInstrumentHosting ("DLSMusicDevice", 48000.0, 64, true);   // the control
     testInstrumentHosting ("Vital", 48000.0, 64);
-    testInstrumentVoices ("SKY Keys", 48000.0, 64);
     testVibratoDoesNotChatter (48000.0, 64);
     testTransposeComesBackTrue (48000.0, 64);
     testHoldSurvivesRealTracking (48000.0, 64);

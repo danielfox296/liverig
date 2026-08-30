@@ -28,7 +28,6 @@ void SettingsStore::load (ParamStore& params)
         expandedPanels = obj->getProperty ("expandedPanels").toString();
         instrument = obj->getProperty ("instrument").toString();
         instrumentState = obj->getProperty ("instrumentState").toString();
-        instrumentVoice = obj->getProperty ("instrumentVoice").toString();
         chainOrder = obj->getProperty ("chainOrder").toString();
         tuner = obj->getProperty ("tuner").toString();
         ampModel = obj->getProperty ("ampModel").toString();
@@ -57,7 +56,37 @@ void SettingsStore::load (ParamStore& params)
             bassLoadout = "comp,eq,filter,boost,drive,amp,cab,octave,sub,synth,"
                           "phaser,chorus,delay,tape,reverb";
             micLoadout = "vocal,vocoder";
-            keysLoadout = "midi";
+            keysLoadout = "keys";
+            bassLoadout += ",midi";
+        }
+
+        // The keys strip used to carry one row that was two things at once:
+        // the instrument it plays, and the tracker that turns the bass into
+        // notes. The tracker belongs to the bass, which is what it listens
+        // to, so a file that kept it under the keys hands it back.
+        {
+            auto keysRows = juce::StringArray::fromTokens (keysLoadout, ",", "");
+            keysRows.trim();
+            keysRows.removeEmptyStrings();
+
+            if (keysRows.contains ("midi"))
+            {
+                keysRows.removeString ("midi");
+
+                if (! keysRows.contains ("keys"))
+                    keysRows.add ("keys");
+
+                keysLoadout = keysRows.joinIntoString (",");
+
+                auto bassRows = juce::StringArray::fromTokens (bassLoadout, ",", "");
+                bassRows.trim();
+                bassRows.removeEmptyStrings();
+
+                if (! bassRows.contains ("midi"))
+                    bassRows.insert (0, "midi");
+
+                bassLoadout = bassRows.joinIntoString (",");
+            }
         }
 
         // The loadout's sequence is the board's wiring now. A file whose
@@ -96,7 +125,6 @@ void SettingsStore::save (const ParamStore& params) const
     root->setProperty ("expandedPanels", expandedPanels);
     root->setProperty ("instrument", instrument);
     root->setProperty ("instrumentState", instrumentState);
-    root->setProperty ("instrumentVoice", instrumentVoice);
     root->setProperty ("chainOrder", chainOrder);
     root->setProperty ("tuner", tuner);
     root->setProperty ("ampModel", ampModel);

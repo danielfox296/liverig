@@ -68,10 +68,10 @@ int main (int argc, char* argv[])
         rig::ParamStore params;
         rig::SettingsStore settings;
         settings.channelList = "bass,mic,keys";   // stage the full rail the snapshots document
-        settings.bassLoadout = "comp,eq,filter,boost,drive,amp,cab,octave,sub,synth,"
+        settings.bassLoadout = "midi,comp,eq,filter,boost,drive,amp,cab,octave,sub,synth,"
                                "phaser,chorus,delay,tape,reverb";
         settings.micLoadout = "vocal,vocoder";
-        settings.keysLoadout = "midi";
+        settings.keysLoadout = "keys";
         rig::AudioEngine engine (params);          // deliberately not opened
         rig::MainComponent main (params, engine, settings);   // sizes itself
 
@@ -132,12 +132,6 @@ int main (int argc, char* argv[])
         }
 
         // An effect selected, to check the editor panel lays its controls out.
-        // Apple's own sampler stands in for whatever the player loads: the
-        // keys row is only its full self with an instrument on it, and the
-        // voice line under the picker is the half worth checking.
-        if (! main.loadInstrumentForSnapshot ("DLSMusicDevice"))
-            std::printf ("  DLSMusicDevice would not load — keys row shot without one\n");
-
         main.selectFxForSnapshot();
 
         juce::Image expanded (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
@@ -187,6 +181,18 @@ int main (int argc, char* argv[])
         }
         writePng (vocoderShot, outDir.getChildFile ("vocoder.png"));
         problems += countBlankButtons (main, "the vocoder editor");
+
+        // The keys strip: which instrument it plays and how loud, which is
+        // the whole of that row now the tracker has gone back to the bass.
+        main.selectKeysForSnapshot();
+
+        juce::Image keysShot (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
+        {
+            juce::Graphics g (keysShot);
+            main.paintEntireComponent (g, true);
+        }
+        writePng (keysShot, outDir.getChildFile ("keys.png"));
+        problems += countBlankButtons (main, "the keys editor");
 
         // The tuner tab, mid-note.
         main.showTunerForSnapshot();

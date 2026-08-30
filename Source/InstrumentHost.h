@@ -81,29 +81,6 @@ public:
     juce::String getStateBase64() const;
     void restore (const juce::String& name, const juce::String& stateBase64);
 
-    // A voice is one named sound the loaded instrument can be set to. The
-    // rig invents none of them: they are the plugin's own presets, plus
-    // every .aupreset written for it — the file a plugin's own save button
-    // produces, in the folder macOS keeps them in. SKY Keys' thousand
-    // built-in instruments have no names the AU interface will give up, so
-    // the way one becomes a voice is to dial it up in the plugin's window
-    // and save it here, which writes the same kind of file.
-    struct Voice
-    {
-        juce::String name;
-        int program = -1;        // >= 0: one of the plugin's own presets
-        juce::File file;         // otherwise: a preset file on disk
-        bool removable = false;  // only voices the rig itself wrote
-    };
-
-    juce::Array<Voice> getVoices() const;
-    bool setVoice (const Voice& voice, juce::String& error);
-    bool saveVoice (const juce::String& name, juce::String& error);
-
-    // Where the rig keeps the voices it writes. Tests point this elsewhere.
-    juce::File voicesDir() const;
-    juce::File voicesRootOverride;
-
     // --- audio thread: renders the notes and adds the result in ---
     void process (const NoteEvent* events, int numEvents,
                   float* left, float* right, int numSamples, float gain) noexcept;

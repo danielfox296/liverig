@@ -152,7 +152,7 @@ static const ParamSpec specs[] =
     { "midiThru",  "Live thru",  0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, offOnChoices },
 
     { "instOn",    "Keys",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, offOnChoices },
-    { "instLevel", "Keys level",-60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
+    { "instLevel", "Level",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
 
     { "vocalOn",   "Autotune",   0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
     { "vocalGain", "Mic gain", -24.0f,  24.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },

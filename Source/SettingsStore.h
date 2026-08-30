@@ -21,12 +21,6 @@ public:
     juce::String deviceState;   // AudioDeviceManager state, as XML text
     juce::String expandedPanels;
     juce::String instrument, instrumentState;
-
-    // Which of the instrument's voices the keys strip is playing, by name.
-    // The sound itself travels in instrumentState; this is what the picker
-    // shows, so the row does not come back blank over a real sound.
-    juce::String instrumentVoice;
-
     juce::String chainOrder;    // movable stage keys, comma-separated, top to bottom
     juce::String tuner;         // "bass" or "guitar"
     juce::String ampModel;      // path of the loaded NAM capture, empty for none

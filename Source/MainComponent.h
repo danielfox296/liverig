@@ -37,15 +37,12 @@ public:
     void selectEqForSnapshot();
     void selectVocalForSnapshot();
     void selectVocoderForSnapshot();
+    void selectKeysForSnapshot();
     void showTunerForSnapshot();
     void showJobStripForSnapshot();
 
     // What the instrument picker actually offers — an empty box was the bug.
     int getInstrumentChoiceCount() const { return instrumentControls.instrumentBox.getNumItems(); }
-
-    // Puts a real instrument on the keys strip, so the row is photographed
-    // with its voice line rather than in its empty state.
-    bool loadInstrumentForSnapshot (const juce::String& name);
 
 private:
     void timerCallback() override;
@@ -110,10 +107,6 @@ private:
     void chooseAmpCapture();
     void refreshAmpControls();
     void refreshInstrumentControls();
-    void refreshVoiceList (const juce::String& selectName = {});
-    void applySelectedVoice();
-    void saveCurrentVoice();
-    void deleteSelectedVoice();
     void refreshSlotControls();
     void autoBindHostedRoles();
     void openPluginWindow();
@@ -170,13 +163,20 @@ private:
         std::vector<int> ids;
     };
 
+    // A lane is a single engine with one home strip: the mic's two, the
+    // tracker that turns the bass into notes, and the instrument the keys
+    // strip plays. They move between strips only when their sources do.
+    static bool isLane (const juce::String& key)
+    {
+        return key == "vocal" || key == "vocoder" || key == "midi" || key == "keys";
+    }
+
     // What the player can put on and take off a board. Input, live out and
     // master are the strip's anatomy and always show; everything else is a
     // pedal that exists only when loaded.
     static bool isLoadable (const FxDef& def)
     {
-        return def.movable || def.key == "reverb" || def.key == "vocal"
-                           || def.key == "vocoder" || def.key == "midi";
+        return def.movable || def.key == "reverb" || isLane (def.key);
     }
 
     // The Amp stage's capture picker, shown above its faders in the editor:
@@ -213,87 +213,40 @@ private:
 
     // The Instrument row's picker, shown above its faders: every AU instrument
     // on the machine, and a way into the plugin's own window.
-    // The keys row's editor extra: which instrument is loaded on the top
-    // line, and which of its voices is playing on the second. The voice line
-    // only exists while an instrument does — an empty picker for a plugin
-    // that is not there would be a control over nothing.
     struct InstrumentControls : juce::Component
     {
-        static constexpr int rowHeight = 30;
-        static constexpr int preferredHeight = rowHeight * 2 + 5;
-
         InstrumentControls()
         {
             open.setButtonText ("Open...");
             clear.setButtonText ("Clear");
             rescan.setButtonText ("Rescan");
-            saveVoice.setButtonText ("Save");
-            deleteVoice.setButtonText ("Delete");
-
-            for (auto* b : { &open, &clear, &rescan, &saveVoice, &deleteVoice })
-                b->setWantsKeyboardFocus (false);
-
+            open.setWantsKeyboardFocus (false);
+            clear.setWantsKeyboardFocus (false);
+            rescan.setWantsKeyboardFocus (false);
             instrumentBox.setTextWhenNothingSelected ("No instrument");
-            voiceBox.setTextWhenNothingSelected ("No voices yet");
-
-            voiceLabel.setText ("Voice", juce::dontSendNotification);
-            voiceLabel.setFont (rigFont (12.0f));
-            voiceLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9a9da6));
-            voiceLabel.setInterceptsMouseClicks (false, false);
-
             addAndMakeVisible (instrumentBox);
             addAndMakeVisible (open);
             addAndMakeVisible (clear);
             addAndMakeVisible (rescan);
-            addAndMakeVisible (voiceLabel);
-            addAndMakeVisible (voiceBox);
-            addAndMakeVisible (saveVoice);
-            addAndMakeVisible (deleteVoice);
         }
 
         void resized() override
         {
             auto b = getLocalBounds();
-
-            auto top = b.removeFromTop (rowHeight);
-            open.setBounds (top.removeFromRight (66));
-            top.removeFromRight (4);
-            clear.setBounds (top.removeFromRight (50));
-            top.removeFromRight (4);
-            rescan.setBounds (top.removeFromRight (60));
-            top.removeFromRight (6);
-            instrumentBox.setBounds (top);
-
-            b.removeFromTop (5);
-            auto row = b.removeFromTop (rowHeight);
-            voiceLabel.setBounds (row.removeFromLeft (42));
-            deleteVoice.setBounds (row.removeFromRight (56));
-            row.removeFromRight (4);
-            saveVoice.setBounds (row.removeFromRight (50));
-            row.removeFromRight (6);
-            voiceBox.setBounds (row);
+            open.setBounds (b.removeFromRight (66));
+            b.removeFromRight (4);
+            clear.setBounds (b.removeFromRight (50));
+            b.removeFromRight (4);
+            rescan.setBounds (b.removeFromRight (60));
+            b.removeFromRight (6);
+            instrumentBox.setBounds (b);
         }
 
-        // Nothing loaded means no voice line at all, rather than a picker
-        // standing over an empty stage.
-        void setVoiceRowVisible (bool shouldShow)
-        {
-            for (juce::Component* c : { (juce::Component*) &voiceLabel,
-                                        (juce::Component*) &voiceBox,
-                                        (juce::Component*) &saveVoice })
-                c->setVisible (shouldShow);
-        }
-
-        juce::ComboBox instrumentBox, voiceBox;
-        juce::Label voiceLabel;
-        juce::TextButton open, clear, rescan, saveVoice, deleteVoice;
+        juce::ComboBox instrumentBox;
+        juce::TextButton open, clear, rescan;
     };
 
     InstrumentControls instrumentControls;
-
-    // What the voice picker is showing, in the box's own order, so a
-    // selection is one lookup rather than a name search.
-    juce::Array<InstrumentHost::Voice> voiceList;
 
     // The INPUT row's editor extra: where this strip listens. Audio strips
     // pick a jack by its owner's name; the keys strip picks the MIDI device
