@@ -246,11 +246,16 @@ void FxChain::updateFromParams() noexcept
     inMute.setTargetValue (params.getBool (pInMute) ? 0.0f : 1.0f);
 
     // With MIDI on and Thru off, the rig is a controller: the live lane
-    // leaves the mix and only the pad speaks. The tracker keeps hearing the
-    // input either way — it taps the chain ahead of this gain.
-    const bool thruMuted = params.getBool (pMidiOn) && ! params.getBool (pMidiThru);
-    liveOut.setTargetValue (thruMuted ? 0.0f
-                                      : juce::Decibels::decibelsToGain (params.get (pLiveOut), -60.0f));
+    // leaves the mix and only the pad speaks. That rule belongs to the
+    // tracked channel alone — it taps this chain — so another strip's board
+    // keeps sounding, the keys strip carrying the pad among them. The
+    // tracker keeps hearing the input either way, ahead of this gain.
+    const bool thruMuted = params.channel() == 0
+                             && params.getBool (pMidiOn) && ! params.getBool (pMidiThru);
+
+    liveOut.setTargetValue (thruMuted || params.getBool (pLiveMute)
+                              ? 0.0f
+                              : juce::Decibels::decibelsToGain (params.get (pLiveOut), -60.0f));
 
     if (changed (pCompThresh))  comp.setThreshold (params.get (pCompThresh));
     if (changed (pCompRatio))   comp.setRatio (params.get (pCompRatio));

@@ -3650,6 +3650,116 @@ static void testMidiThruGatesTheLiveLane (double sr, int block)
             report ("  ...and the tracker still hears", std::abs (chain.getTrackedHz() - 110.0f) < 3.0f,
                     juce::String (chain.getTrackedHz(), 1) + " Hz tracked");
     }
+
+    // The controller rule belongs to the tracked channel, which is the one
+    // the tracker taps. Another strip's board is not the bass and keeps
+    // sounding — the keys strip, carrying the pad itself, most of all.
+    {
+        ParamStore params;
+        params.set (pMidiOn, 1.0f);
+        params.set (pMidiThru, 0.0f);
+
+        FxChain board (params, 2);
+        board.prepare (sr, block);
+
+        std::vector<float> mono ((size_t) block), l ((size_t) block), r ((size_t) block);
+        double phase = 0.0;
+        float peak = 0.0f;
+        const int total = (int) (sr * 0.6);
+
+        for (int i = 0; i + block <= total; i += block)
+        {
+            for (int k = 0; k < block; ++k)
+            {
+                mono[(size_t) k] = 0.3f * (float) std::sin (phase);
+                phase += 6.283185307179586 * 110.0 / sr;
+            }
+
+            board.process (mono.data(), l.data(), r.data(), block);
+
+            if (i > (int) (sr * 0.3))
+                for (int k = 0; k < block; ++k)
+                    peak = std::max (peak, std::abs (l[(size_t) k]));
+        }
+
+        report ("MIDI on, thru off: another strip is not the bass and stays",
+                peak > 0.05f, "peak " + juce::String (peak, 4));
+    }
+}
+
+// MUTE on a strip's live out: the one control that has to work while the
+// band is playing. It stops that strip and nothing else, and it fades
+// rather than edits, because a mute mid-phrase must not click the PA.
+static void testLiveOutMute (double sr, int block)
+{
+    std::printf ("\n Live out mute (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    ParamStore params;
+    FxChain strip (params, 1);
+    strip.prepare (sr, block);
+
+    std::vector<float> mono ((size_t) block), l ((size_t) block), r ((size_t) block);
+    double phase = 0.0;
+    float previous = 0.0f, step = 0.0f;
+
+    const auto run = [&] (FxChain& chain, double seconds, bool measureStep) -> float
+    {
+        float peak = 0.0f;
+        const int blocks = (int) (sr * seconds) / block;
+
+        for (int i = 0; i < blocks; ++i)
+        {
+            for (int k = 0; k < block; ++k)
+            {
+                mono[(size_t) k] = 0.3f * (float) std::sin (phase);
+                phase += 6.283185307179586 * 110.0 / sr;
+            }
+
+            chain.process (mono.data(), l.data(), r.data(), block);
+
+            for (int k = 0; k < block; ++k)
+            {
+                if (i > blocks / 2)
+                    peak = std::max (peak, std::abs (l[(size_t) k]));
+
+                if (measureStep)
+                    step = std::max (step, std::abs (l[(size_t) k] - previous));
+
+                previous = l[(size_t) k];
+            }
+        }
+
+        return peak;
+    };
+
+    const float open = run (strip, 0.6, false);
+    report ("an open strip reaches the live out", open > 0.05f,
+            "peak " + juce::String (open, 4));
+
+    params.set (1, pLiveMute, 1.0f);
+    const float muted = run (strip, 0.6, false);
+    report ("MUTE stops it there", muted < 1.0e-4f, "peak " + juce::String (muted, 7));
+
+    // Off and on over one continuous note: the largest sample step must stay
+    // in sine territory. A hard mute would step by the amplitude.
+    params.set (1, pLiveMute, 0.0f);
+    run (strip, 0.3, true);
+    params.set (1, pLiveMute, 1.0f);
+    run (strip, 0.3, true);
+    params.set (1, pLiveMute, 0.0f);
+    run (strip, 0.3, true);
+
+    report ("the mute is a fade, not an edit", step < 0.02f,
+            "largest step " + juce::String (step, 4));
+
+    // One strip's mute is its own: the store keeps a copy per channel.
+    params.set (1, pLiveMute, 1.0f);
+    FxChain other (params, 0);
+    other.prepare (sr, block);
+    const float neighbour = run (other, 0.6, false);
+
+    report ("muting one strip leaves the next one playing", neighbour > 0.05f,
+            "peak " + juce::String (neighbour, 4));
 }
 
 // The tuner display. The tracker is honest about every frame; the filter's
@@ -4075,9 +4185,10 @@ static void testVocoderSidechain (double sr, int block)
             "peak " + juce::String (peak, 4) + " — intelligibility is judged by ear, plumbing by meter");
 }
 
-// The autotune lane: one function with stage manners. Off is silence, on
-// with no plugin is silence too (and the row says why), the gate kills the
-// breaths, and the switch is a crossfade a footswitch cannot click.
+// The mic strip: one function with stage manners. Off is the microphone
+// itself — a channel with no effects still plays — a lane switched on with
+// no plugin is silence (and the row says why), the gate kills the breaths,
+// and the switch is a crossfade a footswitch cannot click.
 static void testVocalChannel (double sr, int block)
 {
     std::printf ("\n Autotune lane (%.0f Hz, %d-sample blocks)\n", sr, block);
@@ -4132,15 +4243,17 @@ static void testVocalChannel (double sr, int block)
         return peak;
     };
 
-    // Off, and on with nothing bound: both silent, neither a crash.
+    // Nothing switched on: the microphone is the output. This is the bug
+    // Daniel found on stage — the strip used to be silent until Autotune.
     params.set (pVocalOn, 0.0f);
     const float offPeak = run (0.2f, 0.4, nullptr);
-    report ("off is silent", offPeak < 1.0e-6f, "peak " + juce::String (offPeak, 7));
+    report ("with no lane on, the mic plays clean", offPeak > 0.15f && offPeak < 0.25f,
+            "peak " + juce::String (offPeak, 4) + " from a 0.2 mic");
 
     params.set (pVocalOn, 1.0f);
     const float unboundPeak = run (0.2f, 0.4, nullptr);
-    report ("on with no plugin is silence, not a crash", unboundPeak < 1.0e-6f,
-            "peak " + juce::String (unboundPeak, 7));
+    report ("a lane on with no plugin takes the voice and is silent, not a crash",
+            unboundPeak < 1.0e-6f, "peak " + juce::String (unboundPeak, 7));
 
     params.set (pVocalOn, 0.0f);
     params.set (pVocoderOn, 1.0f);
@@ -4148,7 +4261,7 @@ static void testVocalChannel (double sr, int block)
     params.set (pVocoderOn, 0.0f);
     params.set (pVocalOn, 1.0f);
 
-    report ("vocoder lane with no plugin is silence too", vocoderUnbound < 1.0e-6f,
+    report ("the vocoder lane takes it over the same way", vocoderUnbound < 1.0e-6f,
             "peak " + juce::String (vocoderUnbound, 7));
 
     // The rest needs audio through the slot; any clean-passing effect will do.
@@ -4674,6 +4787,7 @@ int main (int argc, char* argv[])
     testHoldSurvivesRealTracking (48000.0, 64);
     testTrackerOnDominantSecondHarmonic (48000.0, 64);
     testMidiThruGatesTheLiveLane (48000.0, 64);
+    testLiveOutMute (48000.0, 64);
     testTunerFilter();
     testSegmenterOnRealBass (juce::File ("/Users/fox296/LiveRig/Songs/Plan B/bass.wav"), 48000.0, 64);
     testSubOctave (48000.0, 64);

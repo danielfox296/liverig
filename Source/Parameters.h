@@ -9,7 +9,7 @@ namespace rig
 // Every user-facing value lives in one flat table of atomics. The UI writes,
 // the audio thread reads (relaxed) — no locks, no allocation, no messaging.
 //
-// Ids in the run from pInGain to pRevMix, plus pLiveOut, describe one
+// Ids in the run from pInGain to pRevMix, plus the live-out pair, describe one
 // channel's pedalboard and get a copy per channel slot. Everything else —
 // stems, track, master, and the singleton lane engines (MIDI, keys, the mic
 // lanes) — exists once, whatever strip its row sits on. New ids must join
@@ -80,12 +80,12 @@ enum ParamId
     pVocalOn, pVocalGain, pVocalGate, pVocalLevel,
     pVocoderOn, pVocoderLevel,
 
-    // A hosted plugin as a chain insert.
-
-    pLiveOut,
+    // The channel's live out: its level, and the mute that stands on it.
+    pLiveOut, pLiveMute,
 
     pTrackGain,
     pMasterGain,
+    pMasterMute,
 
     NumParams
 };
@@ -115,7 +115,8 @@ int paramIndexForId (juce::StringRef id) noexcept;
 // the whole rig.
 constexpr bool isChannelParam (int paramId) noexcept
 {
-    return (paramId >= pInGain && paramId <= pRevMix) || paramId == pLiveOut;
+    return (paramId >= pInGain && paramId <= pRevMix)
+             || paramId == pLiveOut || paramId == pLiveMute;
 }
 
 class ParamStore

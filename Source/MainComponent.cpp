@@ -201,17 +201,23 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
         { "delay",  FxChain::stDelay,  true,  "delay",  "Delay",      pDelayOn,  { pDelayTime, pDelayFeedback, pDelayMix, pDelayHighcut, pDelayModRate, pDelayModDepth, pDelaySat, pDelaySmear } },
         { "tape",   FxChain::stTape,   true,  "tape",   "Tape",       pTapeOn,   { pTapeDrive, pTapeSoften, pTapeBump, pTapeMix } },
         { "reverb", -1,                false, "reverb", "Reverb",     pRevOn,    { pRevSize, pRevDamp, pRevPre, pRevMod, pRevMix } },
-        { "out",    -1,                false, "",       "Live out",   -1,        { pLiveOut } },
-        { "master", -1,                false, "",       "Master",     -1,        { pMasterGain } },
+        { "out",    -1,                false, "",       "Live out",   pLiveMute, { pLiveOut } },
+        { "master", -1,                false, "",       "Master",     pMasterMute,{ pMasterGain } },
     };
 
     for (const auto& def : fxDefs)
     {
         // The meters live on the channel strips now; only the MIDI row keeps
         // an extra — the note readout and PANIC.
+        //
+        // A mute is not a bypass: the input, live out and master rows wear the
+        // red MUTE cap, and lit means silenced.
+        const bool muteRow = def.onParam == pInMute || def.onParam == pLiveMute
+                               || def.onParam == pMasterMute;
+
         auto* panel = panels.add (new FxPanel (uiParams, def.name, def.onParam, def.movable,
                                                def.key == "midi" ? &midiStatus : nullptr, 90,
-                                               def.onParam == pInMute));
+                                               muteRow));
 
         // Tapping the selected row again puts its controls away. Either way,
         // the effect tab comes forward — tapping a row means "show me this".
@@ -1628,10 +1634,71 @@ void MainComponent::paintListBoxItem (int row, juce::Graphics& g, int width, int
     g.drawText (songNames[row], 12, 0, width - 18, height, juce::Justification::centredLeft, true);
 }
 
-void MainComponent::listBoxItemClicked (int row, const juce::MouseEvent&)
+void MainComponent::listBoxItemClicked (int row, const juce::MouseEvent& e)
 {
-    if (juce::isPositiveAndBelow (row, songNames.size()))
-        loadSong (SongMaker::songsDir().getChildFile (songNames[row]));
+    if (! juce::isPositiveAndBelow (row, songNames.size()))
+        return;
+
+    const auto name = songNames[row];
+    const auto folder = SongMaker::songsDir().getChildFile (name);
+
+    // A row is a folder of stems on disk, so the library's own menu lives
+    // where the row is. The highlight belongs to the loaded song, not to
+    // whatever was right-clicked, so it goes back when the menu closes.
+    if (e.mods.isPopupMenu())
+    {
+        juce::PopupMenu m;
+        m.addSectionHeader (name);
+        m.addItem ("Remove from library...", [this, name, folder]
+        {
+            juce::AlertWindow::showOkCancelBox (
+                juce::MessageBoxIconType::QuestionIcon,
+                "Remove " + name + "?",
+                "The song folder and its stems go to the Trash, where the Finder "
+                "can still bring them back. Nothing else in the rig changes.",
+                "Remove", "Keep", this,
+                juce::ModalCallbackFunction::create ([this, folder] (int choice)
+                {
+                    if (choice == 1)
+                        removeSong (folder);
+                }));
+        });
+
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(),
+                         [this] (int) { selectLoadedSongRow(); });
+        return;
+    }
+
+    loadSong (folder);
+}
+
+// Removing the song that is playing stops it first: the rig must not be
+// reading stems out of a folder on its way to the Trash.
+void MainComponent::removeSong (const juce::File& folder)
+{
+    if (folder == loadedFolder)
+    {
+        auto& player = engine.getStemPlayer();
+        player.stop();
+        player.clearLoop();
+        player.unload();
+
+        pendingLoopIn = -1;
+        loadedFolder = juce::File();
+        settings.songFolder.clear();
+
+        songLabel.setColour (juce::Label::textColourId, juce::Colour (0xffc8c9ce));
+        songLabel.setText ("no song loaded", juce::dontSendNotification);
+        saveSettings();
+        refreshLoopButton();
+    }
+
+    if (! folder.moveToTrash())
+        juce::AlertWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::WarningIcon, "Remove song",
+            "Could not move " + folder.getFileName() + " to the Trash.");
+
+    refreshSongList();
 }
 
 void MainComponent::refreshSongList()
@@ -1658,15 +1725,20 @@ void MainComponent::refreshSongList()
 
     songNames.sort (true);
     songList.updateContent();
+    selectLoadedSongRow();
+    songList.repaint();
+}
 
+// The highlight in the songs list means "this is the song that is loaded",
+// so it is always derived, never left wherever the mouse last went.
+void MainComponent::selectLoadedSongRow()
+{
     const int index = songNames.indexOf (loadedFolder.getFileName());
 
     if (index >= 0)
         songList.selectRow (index, true, true);
     else
         songList.deselectAllRows();
-
-    songList.repaint();
 }
 
 //==============================================================================

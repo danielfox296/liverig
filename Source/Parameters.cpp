@@ -163,9 +163,11 @@ static const ParamSpec specs[] =
     { "vocoderLvl","Level",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
 
     { "liveOut",   "Live out", -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
+    { "liveMute",  "Mute",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
 
     { "trackGain", "Track",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
     { "masterGain","Gain",     -12.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
+    { "masterMute","Mute",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
 };
 
 static_assert (sizeof (specs) / sizeof (specs[0]) == (size_t) NumParams,

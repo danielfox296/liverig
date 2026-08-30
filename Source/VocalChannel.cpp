@@ -48,22 +48,13 @@ void VocalChannel::process (const float* mic, const float* carrier,
     tuneRamp.setTargetValue (params.getBool (pVocalOn) ? 1.0f : 0.0f);
     vocoderRamp.setTargetValue (params.getBool (pVocoderOn) ? 1.0f : 0.0f);
 
-    // A lane fully faded out is fully skipped, and with both lanes down the
-    // whole channel costs nothing.
+    // A lane fully faded out is fully skipped — the plugin is the expensive
+    // part, and a silent one is not worth running. The front end always
+    // runs: with both lanes down the microphone itself is the output.
     const bool tuneAlive = tuneRamp.getCurrentValue() > 1.0e-4f
                              || tuneRamp.getTargetValue() > 0.5f;
     const bool vocoderAlive = vocoderRamp.getCurrentValue() > 1.0e-4f
                                 || vocoderRamp.getTargetValue() > 0.5f;
-
-    if (! tuneAlive && ! vocoderAlive)
-    {
-        gain.skip (numSamples);
-        tuneLevel.skip (numSamples);
-        vocoderLevel.skip (numSamples);
-        tuneRamp.skip (numSamples);
-        vocoderRamp.skip (numSamples);
-        return;
-    }
 
     // Hysteresis around the threshold: open at Gate, close 6 dB under it,
     // so a level sitting right on the line does not flutter the door. The
@@ -88,30 +79,27 @@ void VocalChannel::process (const float* mic, const float* carrier,
 
     for (int i = 0; i < numSamples; ++i)
     {
-        float l = 0.0f, r = 0.0f;
+        const float tune = tuneRamp.getNextValue();
+        const float voc = vocoderRamp.getNextValue();
+        const float tuneGain = tune * tuneLevel.getNextValue();
+        const float vocGain = voc * vocoderLevel.getNextValue();
+
+        // The direct voice holds the channel until a lane takes it over, so
+        // the strip is never heard twice over.
+        const float dry = gated[(size_t) i] * (1.0f - juce::jmax (tune, voc));
+
+        float l = dry, r = dry;
 
         if (tuneAlive)
         {
-            const float g = tuneRamp.getNextValue() * tuneLevel.getNextValue();
-            l += tuneL[(size_t) i] * g;
-            r += tuneR[(size_t) i] * g;
-        }
-        else
-        {
-            tuneRamp.skip (1);
-            tuneLevel.skip (1);
+            l += tuneL[(size_t) i] * tuneGain;
+            r += tuneR[(size_t) i] * tuneGain;
         }
 
         if (vocoderAlive)
         {
-            const float g = vocoderRamp.getNextValue() * vocoderLevel.getNextValue();
-            l += vocL[(size_t) i] * g;
-            r += vocR[(size_t) i] * g;
-        }
-        else
-        {
-            vocoderRamp.skip (1);
-            vocoderLevel.skip (1);
+            l += vocL[(size_t) i] * vocGain;
+            r += vocR[(size_t) i] * vocGain;
         }
 
         left[i] += l;

@@ -51,6 +51,8 @@ private:
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override;
 
     void refreshSongList();
+    void selectLoadedSongRow();
+    void removeSong (const juce::File& folder);
     void chooseSongFolder();
     void startNewSong();
     void chooseAudioFile();

@@ -11,8 +11,10 @@
 namespace rig
 {
 
-// The mic lanes: the second interface input, into the mix, doing one of two
-// things — or both, for the brave.
+// The mic strip's voice: the second interface input, into the mix. With
+// nothing switched on it is simply the microphone — gain, gate, and out —
+// because a channel with no effects should still be heard. Two lanes can
+// take that voice over:
 //
 //   Autotune — the mic through a hosted pitch corrector.
 //   Vocoder  — the mic is the *modulator*; the carrier is the bass chain's
@@ -20,14 +22,18 @@ namespace rig
 //              is the carrier conditioner. Words ride the bass line. The raw
 //              mic never reaches the mix through this lane.
 //
+// A lane coming up fades the direct voice down as it rises, so the strip
+// speaks with one voice and never doubles itself against a delayed copy of
+// the same words. Both lanes down and the microphone stands alone.
+//
 // The front end is shared — gain, then a gate whose detector listens to the
-// raw mic ahead of the fader, so Gain can only make the lanes quieter, never
+// raw mic ahead of the fader, so Gain can only make the strip quieter, never
 // lock the door. Each lane has its own switch and level; switches are
 // crossfades a footswitch cannot click, and a lane fully faded out costs
 // nothing. Empty slots are silence, never a crash.
 //
-// Both lanes sum into the live output, so they count as performance: they
-// duck the backing stems and ride the master limiter like everything the
+// Everything here sums into the live output, so it counts as performance: it
+// ducks the backing stems and rides the master limiter like everything the
 // player does.
 class VocalChannel
 {
@@ -37,7 +43,8 @@ public:
 
     void prepare (double sampleRate, int maxBlockSize);
 
-    // Adds into left/right. mic is mono; carrier is the bass tap, always live.
+    // Adds into left/right. mic is mono; carrier is the bass tap, always
+    // live. The strip's own input and live-out gains stand downstream.
     void process (const float* mic, const float* carrier,
                   float* left, float* right, int numSamples) noexcept;
 

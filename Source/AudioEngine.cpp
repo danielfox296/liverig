@@ -257,7 +257,8 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
         juce::Decibels::decibelsToGain (params.get (pTrackGain), -60.0f));
     masterGain.reset (rate, 0.02);
     masterGain.setCurrentAndTargetValue (
-        juce::Decibels::decibelsToGain (params.get (pMasterGain), -60.0f));
+        params.getBool (pMasterMute) ? 0.0f
+                                     : juce::Decibels::decibelsToGain (params.get (pMasterGain), -60.0f));
 
     inPeak.store (0.0f);
     vocalPeak.store (0.0f);
@@ -296,7 +297,9 @@ void AudioEngine::renderBoard (FxChain& chain, bool active, juce::SmoothedValue<
         return;
     }
 
-    const bool muted = params.getBool (slot, pInMute);
+    // Either mute on the strip closes the empty board the same way a chain
+    // would: nothing arrives and nothing leaves.
+    const bool muted = params.getBool (slot, pInMute) || params.getBool (slot, pLiveMute);
     passGain.setTargetValue (muted ? 0.0f
                                    : juce::Decibels::decibelsToGain (params.get (slot, pInGain), -60.0f)
                                        * juce::Decibels::decibelsToGain (params.get (slot, pLiveOut), -60.0f));
@@ -514,7 +517,10 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         juce::FloatVectorOperations::add (mixL, liveL, n);
         juce::FloatVectorOperations::add (mixR, liveR, n);
 
-        masterGain.setTargetValue (juce::Decibels::decibelsToGain (params.get (pMasterGain), -60.0f));
+        // Master mute stands on the whole sum — playing and playback alike.
+        masterGain.setTargetValue (params.getBool (pMasterMute)
+                                     ? 0.0f
+                                     : juce::Decibels::decibelsToGain (params.get (pMasterGain), -60.0f));
 
         float worstGr = 0.0f;
 
