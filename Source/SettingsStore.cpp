@@ -48,6 +48,7 @@ void SettingsStore::load (ParamStore& params)
             micLoadout = obj->getProperty ("micLoadout").toString();
             keysLoadout = obj->getProperty ("keysLoadout").toString();
             extraChannels = obj->getProperty ("extraChannels").toString();
+            midiSource = obj->getProperty ("midiSource").toString();
         }
         else
         {
@@ -107,6 +108,7 @@ void SettingsStore::save (const ParamStore& params) const
     root->setProperty ("micLoadout", micLoadout);
     root->setProperty ("keysLoadout", keysLoadout);
     root->setProperty ("extraChannels", extraChannels);
+    root->setProperty ("midiSource", midiSource);
     root->setProperty ("tunePlugin", tunePlugin);
     root->setProperty ("tunePluginState", tunePluginState);
     root->setProperty ("vocoderPlugin", vocoderPlugin);

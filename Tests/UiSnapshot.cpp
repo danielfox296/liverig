@@ -200,6 +200,7 @@ int main (int argc, char* argv[])
         rig::SettingsStore freshSettings;
         rig::AudioEngine freshEngine (freshParams);
         rig::MainComponent fresh (freshParams, freshEngine, freshSettings);
+        fresh.selectInputForSnapshot();   // the INPUT editor and its source picker
 
         juce::Image shot (juce::Image::ARGB, fresh.getWidth(), fresh.getHeight(), true);
         {

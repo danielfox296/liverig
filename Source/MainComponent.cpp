@@ -114,8 +114,10 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 {
     presets.load();
 
-    // The engine already runs; tell it which channels the lanes live on.
+    // The engine already runs; tell it which channels the lanes live on,
+    // and whose hands play the keys.
     engine.setInputRoles (settings.bassInput, settings.micInput);
+    engine.setMidiSource (settings.midiSource);
 
     for (auto* b : { &menuButton, &loopButton,
                      &deviceButton, &savePresetButton, &deletePresetButton })
@@ -538,6 +540,18 @@ void MainComponent::selectFxForSnapshot()
     selectFx (1);
 }
 
+void MainComponent::selectInputForSnapshot()
+{
+    for (int i = 0; i < (int) fxDefs.size(); ++i)
+    {
+        if (fxDefs[(size_t) i].key == "input")
+        {
+            selectFx (i);
+            return;
+        }
+    }
+}
+
 void MainComponent::selectEqForSnapshot()
 {
     for (int i = 0; i < (int) fxDefs.size(); ++i)
@@ -711,18 +725,23 @@ void MainComponent::setLoadout (const juce::String& channel, const juce::String&
     else if (channel.startsWith ("ch")) setGenericField (channel, 1, value);
 }
 
-// The generic channels' names and boards live in one settings string,
-// "ch4=Name;comp,eq|ch5=;reverb" — field 0 the name, field 1 the loadout.
+// The generic channels' names, boards and jacks live in one settings
+// string, "ch4=Name;comp,eq;3|ch5=;;0" — field 0 the name, field 1 the
+// loadout, field 2 the 1-based input channel. Split by hand so an empty
+// field holds its place.
 juce::String MainComponent::genericField (const juce::String& key, int index) const
 {
     for (const auto& entry : juce::StringArray::fromTokens (settings.extraChannels, "|", ""))
     {
-        if (entry.upToFirstOccurrenceOf ("=", false, false) == key)
-        {
-            const auto rest = entry.fromFirstOccurrenceOf ("=", false, false);
-            return index == 0 ? rest.upToFirstOccurrenceOf (";", false, false)
-                              : rest.fromFirstOccurrenceOf (";", false, false);
-        }
+        if (entry.upToFirstOccurrenceOf ("=", false, false) != key)
+            continue;
+
+        auto rest = entry.fromFirstOccurrenceOf ("=", false, false);
+
+        for (int i = 0; i < index; ++i)
+            rest = rest.fromFirstOccurrenceOf (";", false, false);
+
+        return rest.upToFirstOccurrenceOf (";", false, false);
     }
 
     return {};
@@ -731,26 +750,31 @@ juce::String MainComponent::genericField (const juce::String& key, int index) co
 void MainComponent::setGenericField (const juce::String& key, int index, const juce::String& value)
 {
     auto entries = juce::StringArray::fromTokens (settings.extraChannels, "|", "");
-    juce::String name, loadout;
+    juce::String fields[3];
     int found = -1;
 
     for (int i = 0; i < entries.size(); ++i)
     {
-        if (entries[i].upToFirstOccurrenceOf ("=", false, false) == key)
+        if (entries[i].upToFirstOccurrenceOf ("=", false, false) != key)
+            continue;
+
+        auto rest = entries[i].fromFirstOccurrenceOf ("=", false, false);
+
+        for (auto& field : fields)
         {
-            const auto rest = entries[i].fromFirstOccurrenceOf ("=", false, false);
-            name = rest.upToFirstOccurrenceOf (";", false, false);
-            loadout = rest.fromFirstOccurrenceOf (";", false, false);
-            found = i;
+            field = rest.upToFirstOccurrenceOf (";", false, false);
+            rest = rest.fromFirstOccurrenceOf (";", false, false);
         }
+
+        found = i;
     }
 
     // The format's own characters cannot ride in a name.
-    (index == 0 ? name : loadout) = index == 0
+    fields[juce::jlimit (0, 2, index)] = index == 0
         ? value.replaceCharacters ("|=;", "   ").trim()
         : value;
 
-    const auto entry = key + "=" + name + ";" + loadout;
+    const auto entry = key + "=" + fields[0] + ";" + fields[1] + ";" + fields[2];
 
     if (found >= 0)
         entries.set (found, entry);
@@ -898,11 +922,16 @@ void MainComponent::syncLoadoutFromParams (const juce::String& channel)
 }
 
 // One pass that tells the engine the truth about every strip: each live
-// channel's stage order, and which boards actually hold pedals.
+// channel's stage order, which boards actually hold pedals, and which
+// jacks the generic strips have claimed. A strip off the rail keeps
+// nothing running.
 void MainComponent::refreshChainWiring()
 {
     for (int slot = 0; slot < ParamStore::maxChannels; ++slot)
+    {
         engine.setChainActive (slot, false);
+        engine.setChannelSource (slot, 0);
+    }
 
     for (auto* strip : channelStrips)
     {
@@ -913,7 +942,88 @@ void MainComponent::refreshChainWiring()
 
         pushOrderToChain (key);
         engine.setChainActive (slotOf (key), boardHasStages (key));
+
+        if (key.startsWith ("ch"))
+            engine.setChannelSource (slotOf (key), genericField (key, 2).getIntValue());
     }
+}
+
+// The INPUT editor's picker, rebuilt for whichever strip is up: jacks by
+// their owners' names for the audio strips, MIDI devices for the keys.
+void MainComponent::rebuildSourceControls()
+{
+    auto& box = sourceControls.box;
+    box.onChange = nullptr;
+    box.clear (juce::dontSendNotification);
+    sourceControls.midiIds.clear();
+
+    if (selectedChannel == "keys")
+    {
+        box.setTextWhenNothingSelected ("MIDI keyboard...");
+        box.addItem ("All MIDI devices", 1);
+        sourceControls.midiIds.add (juce::String());
+
+        for (const auto& device : juce::MidiInput::getAvailableDevices())
+        {
+            sourceControls.midiIds.add (device.identifier);
+            box.addItem (device.name, sourceControls.midiIds.size());
+        }
+
+        box.setSelectedId (juce::jmax (1, sourceControls.midiIds.indexOf (settings.midiSource) + 1),
+                           juce::dontSendNotification);
+
+        box.onChange = [this]
+        {
+            const int i = sourceControls.box.getSelectedId() - 1;
+            settings.midiSource = juce::isPositiveAndBelow (i, sourceControls.midiIds.size())
+                                    ? sourceControls.midiIds[i] : juce::String();
+            engine.setMidiSource (settings.midiSource);
+            saveSettings();
+        };
+
+        return;
+    }
+
+    // Bass and mic keep their old rule when unassigned — first free channel
+    // steps in — so their blank choice is honestly "Auto", not "No input".
+    box.setTextWhenNothingSelected ("Input...");
+    box.addItem (selectedChannel.startsWith ("ch") ? "No input" : "Auto", 1);
+
+    if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
+    {
+        const auto names = device->getInputChannelNames();
+        const auto owners = inputChannelOwners (
+            engine.getDeviceManager().getAudioDeviceSetup().inputDeviceName, names.size());
+
+        for (int i = 0; i < names.size(); ++i)
+        {
+            const auto item = i < owners.size() && owners[i].isNotEmpty()
+                                ? owners[i] + juce::String (juce::CharPointer_UTF8 (" \xe2\x80\x94 ")) + names[i]
+                                : names[i];
+            box.addItem (item, i + 2);   // id = 1-based channel + 1
+        }
+    }
+
+    const int current = selectedChannel == "bass" ? settings.bassInput
+                      : selectedChannel == "mic"  ? settings.micInput
+                                                  : genericField (selectedChannel, 2).getIntValue();
+    box.setSelectedId (current + 1, juce::dontSendNotification);
+
+    box.onChange = [this]
+    {
+        const int channel = juce::jmax (0, sourceControls.box.getSelectedId() - 1);
+
+        if (selectedChannel == "bass")
+            settings.bassInput = channel;
+        else if (selectedChannel == "mic")
+            settings.micInput = channel;
+        else
+            setGenericField (selectedChannel, 2, juce::String (channel));
+
+        engine.setInputRoles (settings.bassInput, settings.micInput);
+        refreshChainWiring();
+        saveSettings();
+    };
 }
 
 bool MainComponent::boardHasStages (const juce::String& channelKey) const
@@ -1208,6 +1318,11 @@ void MainComponent::selectFx (int index)
         if (def.key == "amp")
         {
             extra = &ampControls;
+        }
+        else if (def.key == "input")
+        {
+            rebuildSourceControls();
+            extra = &sourceControls;
         }
         else if (def.key == "midi")
         {

@@ -36,20 +36,40 @@ public:
     FxChain& getFxChain() noexcept                        { return fx; }
 
     // A channel's own pedalboard: slot 0 is the bass chain, 1 the mic
-    // strip's, 2 the keys strip's. Other slots have no source yet and no
-    // chain to give.
+    // strip's, 2 the keys strip's, 3 and up the generic strips'.
     FxChain& getChain (int slot) noexcept
     {
+        if (slot >= 3 && slot < ParamStore::maxChannels && spareChains[slot - 3] != nullptr)
+            return *spareChains[slot - 3];
+
         return slot == 1 ? micChain : slot == 2 ? keysChain : fx;
     }
 
-    // A lane runs through its strip's board only while the board holds at
-    // least one pedal; an empty board passes the lane in stereo, untouched
-    // but for the strip's input and live-out gains.
+    // A signal runs through its strip's board only while the board holds at
+    // least one pedal; an empty board passes it through untouched but for
+    // the strip's input and live-out gains.
     void setChainActive (int slot, bool active) noexcept
     {
-        if (slot == 1) micChainActive.store (active, std::memory_order_relaxed);
-        if (slot == 2) keysChainActive.store (active, std::memory_order_relaxed);
+        if (juce::isPositiveAndBelow (slot, ParamStore::maxChannels))
+            boardActive[(size_t) slot].store (active, std::memory_order_relaxed);
+    }
+
+    // A generic strip's jack, as a 1-based device input channel; 0 takes the
+    // jack away and the strip goes quiet.
+    void setChannelSource (int slot, int deviceChannel) noexcept
+    {
+        if (slot >= 3 && slot < ParamStore::maxChannels)
+        {
+            sourceWanted[(size_t) slot].store (deviceChannel, std::memory_order_relaxed);
+            updateInputSlots();
+        }
+    }
+
+    // Which hardware MIDI device plays the keys; empty means all of them.
+    void setMidiSource (const juce::String& identifier)
+    {
+        const juce::ScopedLock lock (midiSourceLock);
+        midiSourceId = identifier;
     }
 
     EffectSlot& getTuneSlot() noexcept                    { return tuneSlot; }
@@ -116,15 +136,29 @@ private:
     StemPlayer stems;
     FxChain fx;
 
-    // The mic and keys strips' boards, over their own knob slots. Prepared
+    // The other strips' boards, over their own knob slots. Prepared
     // alongside the bass chain; each runs only while its strip has pedals.
     FxChain micChain { params, 1 };
     FxChain keysChain { params, 2 };
-    std::atomic<bool> micChainActive { false }, keysChainActive { false };
+    std::unique_ptr<FxChain> spareChains[ParamStore::maxChannels - 3];   // slots 3 and up
+    std::atomic<bool> boardActive[ParamStore::maxChannels] {};
 
-    // The empty-board path still honours the strip's input and live-out
-    // rows: one smoothed stereo gain per lane.
-    juce::SmoothedValue<float> micPassGain, keysPassGain;
+    // The empty-board path still honours each strip's input and live-out
+    // rows: one smoothed stereo gain per slot.
+    juce::SmoothedValue<float> passGains[ParamStore::maxChannels];
+
+    // The generic strips' jacks: the wanted 1-based device channels and the
+    // compacted callback slots they resolve to (-1 stays silent).
+    std::atomic<int> sourceWanted[ParamStore::maxChannels] {};
+    std::atomic<int> sourceSlot[ParamStore::maxChannels] {};
+
+    // The keys player's own hands, queued from the MIDI thread to the audio
+    // thread in a small lock-free ring and merged with the tracker's notes.
+    static constexpr int midiQueueSize = 256;
+    NoteEvent midiQueue[midiQueueSize];
+    std::atomic<int> midiWrite { 0 }, midiRead { 0 };
+    juce::CriticalSection midiSourceLock;   // guards the id; never on the audio thread
+    juce::String midiSourceId;
 
     // The mic lanes and their two hosted-plugin roles: the pitch corrector
     // and the vocoder. The vocoder slot asks for a sidechain bus — the

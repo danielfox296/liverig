@@ -33,6 +33,7 @@ public:
 
     // Used by the offscreen snapshot tool.
     void selectFxForSnapshot();
+    void selectInputForSnapshot();
     void selectEqForSnapshot();
     void selectVocalForSnapshot();
     void selectVocoderForSnapshot();
@@ -88,6 +89,7 @@ private:
     void syncLoadoutFromParams (const juce::String& channel);
     void refreshChainWiring();
     bool boardHasStages (const juce::String& channelKey) const;
+    void rebuildSourceControls();
 
     void refreshPresetList (const juce::String& selectName = {});
     juce::String presetKeyFor (const juce::String& displayName) const;
@@ -235,6 +237,21 @@ private:
     };
 
     InstrumentControls instrumentControls;
+
+    // The INPUT row's editor extra: where this strip listens. Audio strips
+    // pick a jack by its owner's name; the keys strip picks the MIDI device
+    // under the player's hands.
+    struct SourceControls : juce::Component
+    {
+        SourceControls() { addAndMakeVisible (box); }
+
+        void resized() override { box.setBounds (getLocalBounds()); }
+
+        juce::ComboBox box;
+        juce::StringArray midiIds;   // parallel to the box on the keys strip
+    };
+
+    SourceControls sourceControls;
 
     // One hosted-plugin role: a label naming it, the picker, and the way
     // into the plugin's own window. "None" empties the slot.

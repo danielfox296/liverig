@@ -44,8 +44,13 @@ public:
     // showed still showing.
     juce::String bassLoadout, micLoadout, keysLoadout;
 
-    // The generic channels' names and boards, "ch4=Name;comp,eq|ch5=;..".
+    // The generic channels' names, boards and jacks,
+    // "ch4=Name;comp,eq;3|ch5=;;0" — name, loadout, 1-based input channel.
     juce::String extraChannels;
+
+    // Which hardware MIDI device plays the keys, by identifier; empty means
+    // every connected device.
+    juce::String midiSource;
 
     // The hosted-plugin roles: plugin name and its state blob, recalled on
     // launch the way the instrument is. The autotune's key and style live in

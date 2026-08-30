@@ -5,6 +5,11 @@ namespace rig
 
 AudioEngine::AudioEngine (ParamStore& p) : params (p), stems (p), fx (p)
 {
+    for (int i = 0; i < ParamStore::maxChannels - 3; ++i)
+        spareChains[i] = std::make_unique<FxChain> (params, 3 + i);
+
+    for (auto& slot : sourceSlot)
+        slot.store (-1, std::memory_order_relaxed);
 }
 
 AudioEngine::~AudioEngine()
@@ -45,7 +50,7 @@ void AudioEngine::enableAllMidiInputs()
             deviceManager.setMidiInputDeviceEnabled (device.identifier, true);
 }
 
-void AudioEngine::handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& message)
+void AudioEngine::handleIncomingMidiMessage (juce::MidiInput* source, const juce::MidiMessage& message)
 {
     // The mic lanes, foot-controller shaped: Program Change 0 is silence,
     // 1 sings through the autotune, 2 makes the bass sing. Values land
@@ -60,6 +65,40 @@ void AudioEngine::handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiM
             case 2: params.set (pVocalOn, 0.0f); params.set (pVocoderOn, 1.0f); break;
             default: break;
         }
+
+        return;
+    }
+
+    // Played notes head for the instrument. This runs on the MIDI thread:
+    // the lock guards only the chosen-device id, never the audio path.
+    if (! (message.isNoteOnOrOff() || message.isPitchWheel()))
+        return;
+
+    {
+        const juce::ScopedLock lock (midiSourceLock);
+
+        if (midiSourceId.isNotEmpty()
+             && (source == nullptr || source->getIdentifier() != midiSourceId))
+            return;
+    }
+
+    NoteEvent event;
+
+    if (message.isNoteOn())
+        event = { NoteEvent::noteOn, (int16_t) message.getNoteNumber(),
+                  (int16_t) juce::jmax (1, (int) message.getVelocity()) };
+    else if (message.isNoteOff())
+        event = { NoteEvent::noteOff, (int16_t) message.getNoteNumber(), 0 };
+    else
+        event = { NoteEvent::bend, (int16_t) message.getPitchWheelValue(), 0 };
+
+    const int w = midiWrite.load (std::memory_order_relaxed);
+    const int next = (w + 1) % midiQueueSize;
+
+    if (next != midiRead.load (std::memory_order_acquire))   // full = drop, never block
+    {
+        midiQueue[w] = event;
+        midiWrite.store (next, std::memory_order_release);
     }
 }
 
@@ -149,6 +188,15 @@ void AudioEngine::updateInputSlots() noexcept
                     std::memory_order_relaxed);
     micSlot.store (slotOf (micWanted.load (std::memory_order_relaxed), 1),
                    std::memory_order_relaxed);
+
+    // The generic strips get no fallback: an unclaimed or vanished jack
+    // leaves the strip silent rather than guessing.
+    for (int s = 3; s < ParamStore::maxChannels; ++s)
+    {
+        const int want = sourceWanted[(size_t) s].load (std::memory_order_relaxed);
+        sourceSlot[(size_t) s].store (want >= 1 ? slotOf (want, -1) : -1,
+                                      std::memory_order_relaxed);
+    }
 }
 
 void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
@@ -178,8 +226,14 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     fx.prepare (rate, maxBlock);
     micChain.prepare (rate, maxBlock);
     keysChain.prepare (rate, maxBlock);
-    micPassGain.reset (rate, 0.02);
-    keysPassGain.reset (rate, 0.02);
+
+    for (auto& chain : spareChains)
+        if (chain != nullptr)
+            chain->prepare (rate, maxBlock);
+
+    for (auto& gain : passGains)
+        gain.reset (rate, 0.02);
+
     instrument.prepare (rate, maxBlock);
     stems.prepare (rate, maxBlock);
 
@@ -303,6 +357,27 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         for (int e = 0; e < midiCount; ++e)
             midi.push (events[e]);
 
+        // The tracker's notes and the keys player's own hands, one stream —
+        // the hardware queue drains here, on the audio thread's clock.
+        NoteEvent merged[96];
+        int mergedCount = 0;
+
+        for (int e = 0; e < midiCount && mergedCount < 64; ++e)
+            merged[mergedCount++] = events[e];
+
+        {
+            int r = midiRead.load (std::memory_order_relaxed);
+            const int w = midiWrite.load (std::memory_order_acquire);
+
+            while (r != w && mergedCount < 96)
+            {
+                merged[mergedCount++] = midiQueue[r];
+                r = (r + 1) % midiQueueSize;
+            }
+
+            midiRead.store (r, std::memory_order_release);
+        }
+
         if (params.getBool (pInstOn))
         {
             const float target = juce::Decibels::decibelsToGain (params.get (pInstLevel), -60.0f);
@@ -310,8 +385,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
             juce::FloatVectorOperations::clear (laneL, n);
             juce::FloatVectorOperations::clear (laneR, n);
-            instrument.process (events, midiCount, laneL, laneR, n, instrumentGain);
-            throughBoard (keysChain, keysChainActive.load (std::memory_order_relaxed), keysPassGain,
+            instrument.process (merged, mergedCount, laneL, laneR, n, instrumentGain);
+            throughBoard (keysChain, boardActive[2].load (std::memory_order_relaxed), passGains[2],
                           2, laneL, laneR, liveL, liveR, busIn, tmpL, tmpR, n);
         }
 
@@ -329,8 +404,21 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         juce::FloatVectorOperations::clear (laneL, n);
         juce::FloatVectorOperations::clear (laneR, n);
         vocal.process (vocalIn, fx.getCarrier(), laneL, laneR, n);
-        throughBoard (micChain, micChainActive.load (std::memory_order_relaxed), micPassGain,
+        throughBoard (micChain, boardActive[1].load (std::memory_order_relaxed), passGains[1],
                       1, laneL, laneR, liveL, liveR, busIn, tmpL, tmpR, n);
+
+        // --- the generic strips: each claimed jack through its own board ---
+        for (int s = 3; s < ParamStore::maxChannels; ++s)
+        {
+            const int src = sourceSlot[(size_t) s].load (std::memory_order_relaxed);
+
+            if (src < 0 || src >= numInputChannels || inputChannelData[src] == nullptr)
+                continue;
+
+            const float* jack = inputChannelData[src] + offset;
+            throughBoard (getChain (s), boardActive[(size_t) s].load (std::memory_order_relaxed),
+                          passGains[(size_t) s], s, jack, jack, liveL, liveR, busIn, tmpL, tmpR, n);
+        }
 
         // --- playback lane ---
         juce::FloatVectorOperations::clear (mixL, n);
