@@ -343,31 +343,6 @@ bool EffectSlot::renderBlock (juce::AudioProcessor* plugin, const float* in,
     }
 }
 
-void EffectSlot::processMono (float* data, int numSamples) noexcept
-{
-    auto* plugin = live.load (std::memory_order_acquire);
-
-    if (plugin == nullptr)
-        return;   // empty slot: dry passes untouched
-
-    if (! renderBlock (plugin, data, nullptr, numSamples))
-        return;
-
-    const int outs = totalOuts.load (std::memory_order_relaxed);
-
-    if (outs == 1)
-    {
-        juce::FloatVectorOperations::copy (data, scratch.getReadPointer (0), numSamples);
-    }
-    else
-    {
-        const float* l = scratch.getReadPointer (0);
-        const float* r = scratch.getReadPointer (1);
-
-        for (int i = 0; i < numSamples; ++i)
-            data[i] = 0.5f * (l[i] + r[i]);
-    }
-}
 
 void EffectSlot::process (const float* in, const float* sidechain,
                           float* outL, float* outR, int numSamples) noexcept

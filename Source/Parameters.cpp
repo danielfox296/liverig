@@ -22,6 +22,7 @@ static const ParamSpec specs[] =
     { "stem3Mute", "Mute",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
 
     { "inGain",    "In",       -24.0f,  24.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
+    { "inMute",    "Mute",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
 
     { "compOn",    "Comp",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
     { "compThr",   "Thresh",   -60.0f,   0.0f, -18.0f,     0.0f, 0.0f, " dB",  1, false },
@@ -150,8 +151,8 @@ static const ParamSpec specs[] =
     { "midiExpr",  "Expression", 0.0f,   2.0f,   2.0f,     0.0f, 1.0f, "",     0, false, expressionChoices },
     { "midiThru",  "Live thru",  0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, offOnChoices },
 
-    { "instOn",    "Instrument", 0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, offOnChoices },
-    { "instLevel", "Level",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
+    { "instOn",    "Keys",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, offOnChoices },
+    { "instLevel", "Keys level",-60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
 
     { "vocalOn",   "Autotune",   0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
     { "vocalGain", "Mic gain", -24.0f,  24.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
@@ -161,10 +162,9 @@ static const ParamSpec specs[] =
     { "vocoderOn", "Vocoder",    0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
     { "vocoderLvl","Level",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
 
-    { "pedalOn",   "Pedal",      0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
-
     { "liveOut",   "Live out", -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
 
+    { "trackGain", "Track",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
     { "masterGain","Gain",     -12.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
 };
 

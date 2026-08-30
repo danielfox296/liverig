@@ -35,7 +35,6 @@ public:
     // tunePluginState; the vocoder's voicing in vocoderPluginState.
     juce::String tunePlugin, tunePluginState;
     juce::String vocoderPlugin, vocoderPluginState;
-    juce::String pedalPlugin, pedalPluginState;
 };
 
 } // namespace rig

@@ -48,7 +48,7 @@ public:
     juce::StringArray getAvailableNames() const;
 
     // The same scan records effect plugins, so the host doubles as the
-    // machine's plugin registry: the vocal channel and the pedal slot pick
+    // machine's plugin registry: the vocal channel picks
     // from this list. Where a plugin ships as both AU and VST3 the AU wins —
     // one name, one entry, and AU is the native citizen on this platform.
     juce::StringArray getEffectNames() const;

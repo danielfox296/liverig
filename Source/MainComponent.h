@@ -57,6 +57,10 @@ private:
     void loadSong (const juce::File& folder);
     void layoutFxPanels();
     void selectFx (int index);
+    void selectChannel (const juce::String& channelKey);
+    void refreshStripSelection();
+    juce::Array<int> visibleFxIndices() const;
+    static juce::String channelOfKey (const juce::String& key);
     void renumberFxTitles();
     void pushOrderToChain();
     juce::String chainOrderString() const;
@@ -68,6 +72,9 @@ private:
     void refreshLoopButton();
 
     void refreshPresetList (const juce::String& selectName = {});
+    juce::String presetKeyFor (const juce::String& displayName) const;
+    juce::String channelDisplayName() const;
+    juce::Array<int> channelParamIds() const;
     void applySelectedPreset();
     void saveCurrentPreset();
     void deleteSelectedPreset();
@@ -92,17 +99,16 @@ private:
     SettingsStore& settings;
     PresetStore presets;
 
-    juce::TextButton loadButton { "Load folder..." };
-    juce::TextButton newSongButton { "New song..." };
+    juce::TextButton menuButton { juce::CharPointer_UTF8 ("\xe2\x89\xa1") };   // the file menu
     juce::TextButton transportButton { "PLAY" };
     juce::TextButton loopButton { "LOOP IN" };
     juce::TextButton deviceButton { "Audio device..." };
-    juce::Label songLabel, statusLabel, latencyLabel, stemsHeader, songsHeader, grLabel;
+    juce::Label songLabel, statusLabel, latencyLabel, stemsHeader, songsHeader, grLabel, trackLabel;
+    juce::Slider trackSlider;
 
     LevelMeter masterMeter { 2 };
     LevelMeter inputMeter { 1 };
     LevelMeter vocalMeter { 1 };
-    LevelMeter vocoderMeter { 1 };   // the same mic, shown where the vocoder row can see it
     MidiStatusView midiStatus;
 
     juce::ListBox songList { "songs", this };
@@ -257,40 +263,14 @@ private:
     RoleControls autotuneControls { "Key & style..." };
     RoleControls vocoderControls { "Voicing..." };
 
-    // The Pedal row's editor header: the insert's picker and its own line of
-    // truth about latency.
-    struct PedalControls : juce::Component
-    {
-        static constexpr int preferredHeight = 46;
-
-        PedalControls()
-        {
-            status.setFont (juce::Font (juce::FontOptions (11.0f)));
-            status.setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
-            addAndMakeVisible (pedal);
-            addAndMakeVisible (status);
-        }
-
-        void resized() override
-        {
-            auto b = getLocalBounds();
-            pedal.setBounds (b.removeFromTop (26));
-            b.removeFromTop (2);
-            status.setBounds (b);
-        }
-
-        SlotRow pedal { "Pedal" };
-        juce::Label status;
-    };
-
-    PedalControls pedalControls;
-
     // The EQ's whole control surface — the curve is the interface, so the
     // editor shows it in place of fader rows.
     EqView eqControls { params };
     std::unique_ptr<juce::DocumentWindow> pluginWindow;
 
     juce::OwnedArray<StemStrip> stemStrips;
+    juce::OwnedArray<ChannelStrip> channelStrips;
+    juce::String selectedChannel { "bass" };
     juce::Viewport fxViewport;
     juce::Component fxHolder;
     juce::OwnedArray<FxPanel> panels;

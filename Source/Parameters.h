@@ -14,6 +14,7 @@ enum ParamId
     pStemMute0, pStemMute1, pStemMute2, pStemMute3,
 
     pInGain,
+    pInMute,
 
     pCompOn, pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup, pCompBlend,
     pCompSidechain,
@@ -74,10 +75,10 @@ enum ParamId
     pVocoderOn, pVocoderLevel,
 
     // A hosted plugin as a chain insert.
-    pPedalOn,
 
     pLiveOut,
 
+    pTrackGain,
     pMasterGain,
 
     NumParams

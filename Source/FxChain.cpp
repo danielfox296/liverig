@@ -116,7 +116,7 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
     dry.assign ((size_t) maxBlock, 0.0f);
     carrierBuf.assign ((size_t) maxBlock, 0.0f);
 
-    juce::SmoothedValue<float>* gains[] { &inGain, &makeup, &compBlend, &driveAmt, &driveLevel, &liveOut,
+    juce::SmoothedValue<float>* gains[] { &inGain, &inMute, &makeup, &compBlend, &driveAmt, &driveLevel, &liveOut,
                                           &ampIn, &ampOut, &octMix, &oct2Lvl,
                                           &delayFb, &delayMix, &reverbMix,
                                           &fltMix, &boostGain, &boostHair, &stackAmt,
@@ -139,7 +139,7 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
 
     juce::SmoothedValue<float>* bypasses[] { &bypComp, &bypEq, &bypFilter, &bypBoost, &bypCab, &bypSub,
                                              &bypDrive, &bypAmp, &bypOct, &bypSynth, &bypPhaser,
-                                             &bypChorus, &bypDelay, &bypTape, &bypReverb, &bypPedal };
+                                             &bypChorus, &bypDelay, &bypTape, &bypReverb };
     for (auto* b : bypasses)
         b->reset (sr, 0.015);
 
@@ -243,6 +243,7 @@ bool FxChain::changed (int paramId) noexcept
 void FxChain::updateFromParams() noexcept
 {
     inGain.setTargetValue (juce::Decibels::decibelsToGain (params.get (pInGain), -60.0f));
+    inMute.setTargetValue (params.getBool (pInMute) ? 0.0f : 1.0f);
 
     // With MIDI on and Thru off, the rig is a controller: the live lane
     // leaves the mix and only the pad speaks. The tracker keeps hearing the
@@ -481,7 +482,6 @@ void FxChain::updateFromParams() noexcept
 
     bypCab.setTargetValue    (params.getBool (pCabOn)    ? 1.0f : 0.0f);
     bypSub.setTargetValue    (params.getBool (pSubOn)    ? 1.0f : 0.0f);
-    bypPedal.setTargetValue  (params.getBool (pPedalOn)  ? 1.0f : 0.0f);
 
     float latency = 0.0f;
 
@@ -490,10 +490,6 @@ void FxChain::updateFromParams() noexcept
 
     if (params.getBool (pOctOn))
         latency += shifter.getLagSamples();
-
-    // A hosted pedal's lookahead is surfaced, never silently compensated.
-    if (params.getBool (pPedalOn) && pedal != nullptr)
-        latency += (float) pedal->getLatencySamples();
 
     reportedLatency.store (latency, std::memory_order_relaxed);
 
@@ -918,7 +914,7 @@ void FxChain::process (float* mono, float* left, float* right, int numSamples) n
     updateFromParams();
 
     for (int i = 0; i < numSamples; ++i)
-        mono[i] = dcBlock.process (mono[i]) * inGain.getNextValue();
+        mono[i] = dcBlock.process (mono[i]) * inGain.getNextValue() * inMute.getNextValue();
 
     // Side-chain: pitch runs off the trimmed input, ahead of the movable
     // stages, so no arrangement of dirt or modulation can fool the detector.
@@ -1034,16 +1030,6 @@ void FxChain::process (float* mono, float* left, float* right, int numSamples) n
 
             case stTape:
                 runStage (mono, numSamples, bypTape, &tapeMix, [this] (float* d, int n) { processTape (d, n); });
-                break;
-
-            case stPedal:
-                runStage (mono, numSamples, bypPedal, nullptr, [this] (float* d, int n)
-                {
-                    // An empty or ejected slot passes dry — the crossfade
-                    // then blends dry with dry and the stage is a wire.
-                    if (pedal != nullptr)
-                        pedal->processMono (d, n);
-                });
                 break;
 
             default:

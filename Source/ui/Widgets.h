@@ -128,8 +128,10 @@ public:
 };
 
 //==============================================================================
-// One parameter as a labelled horizontal fader. Rotary knobs need a slow,
-// accurate drag; this is a wide target you can shove with one hand mid-song.
+// One parameter as a labelled control, and the control matches the shape of
+// the choice: a continuum gets a wide fader you can shove with one hand
+// mid-song, two options get a switch, and a handful of named options gets a
+// menu. The spec decides — no module can opt a binary into a fader.
 class ParamRow : public juce::Component
 {
 public:
@@ -139,6 +141,13 @@ public:
     {
         const auto& s = spec (id);
 
+        const int steps = s.step > 0.0f
+                            ? (int) std::lround ((s.maxValue - s.minValue) / s.step) + 1
+                            : 0;
+
+        mode = steps == 2 ? Mode::toggle
+                          : (steps >= 3 && steps <= 5 ? Mode::menu : Mode::fader);
+
         name.setText (s.label, juce::dontSendNotification);
         name.setFont (rigFont (12.0f));
         name.setColour (juce::Label::textColourId, juce::Colour (0xff9a9da6));
@@ -146,7 +155,38 @@ public:
 
         value.setFont (rigFont (12.0f));
         value.setJustificationType (juce::Justification::centredRight);
+
+        if (mode == Mode::menu)
+        {
+            for (int i = 0; i < steps; ++i)
+                menu.addItem (itemName (s, i), i + 1);
+
+            menu.setSelectedId (stepIndex() + 1, juce::dontSendNotification);
+            menu.onChange = [this]
+            {
+                const auto& sp = spec (id);
+                params.set (id, sp.minValue + (float) (menu.getSelectedId() - 1) * sp.step);
+            };
+            addAndMakeVisible (menu);
+            return;
+        }
+
         addAndMakeVisible (value);
+
+        if (mode == Mode::toggle)
+        {
+            toggle.onClick = [this]
+            {
+                const auto& sp = spec (id);
+                params.set (id, params.getBool (id) ? sp.minValue : sp.maxValue);
+                toggle.setOn (params.getBool (id));
+                updateValueText();
+            };
+            toggle.setOn (params.getBool (id));
+            addAndMakeVisible (toggle);
+            updateValueText();
+            return;
+        }
 
         juce::NormalisableRange<double> range ((double) s.minValue, (double) s.maxValue, (double) s.step);
 
@@ -171,6 +211,19 @@ public:
 
     void refresh()
     {
+        if (mode == Mode::menu)
+        {
+            menu.setSelectedId (stepIndex() + 1, juce::dontSendNotification);
+            return;
+        }
+
+        if (mode == Mode::toggle)
+        {
+            toggle.setOn (params.getBool (id));
+            updateValueText();
+            return;
+        }
+
         slider.setValue ((double) params.get (id), juce::dontSendNotification);
         updateValueText();
     }
@@ -179,33 +232,98 @@ public:
     {
         auto b = getLocalBounds().reduced (0, 2);
         name.setBounds (b.removeFromLeft (82));
+
+        if (mode == Mode::menu)
+        {
+            menu.setBounds (b);
+            return;
+        }
+
         value.setBounds (b.removeFromRight (78));
         b.removeFromRight (6);
-        slider.setBounds (b);
+
+        if (mode == Mode::toggle)
+            toggle.setBounds (b.removeFromLeft (40).reduced (0, 4));
+        else
+            slider.setBounds (b);
     }
 
 private:
+    enum class Mode { fader, toggle, menu };
+
+    // The two-state control: a pill that reads as a switch, not a checkbox.
+    struct Switch : juce::Button
+    {
+        Switch() : juce::Button ({}) { setWantsKeyboardFocus (false); }
+
+        void setOn (bool shouldBeOn)
+        {
+            if (on != shouldBeOn)
+            {
+                on = shouldBeOn;
+                repaint();
+            }
+        }
+
+        void paintButton (juce::Graphics& g, bool, bool) override
+        {
+            auto b = getLocalBounds().toFloat();
+            const float h = juce::jmin (18.0f, b.getHeight());
+            const juce::Rectangle<float> pill (b.getX(), b.getCentreY() - h * 0.5f,
+                                               juce::jmin (36.0f, b.getWidth()), h);
+
+            g.setColour (juce::Colour (on ? 0xff3f9d4a : 0xff32343c));
+            g.fillRoundedRectangle (pill, h * 0.5f);
+
+            const float knob = h - 4.0f;
+            g.setColour (juce::Colour (0xffe8e8ea));
+            g.fillEllipse (on ? pill.getRight() - knob - 2.0f : pill.getX() + 2.0f,
+                           pill.getY() + 2.0f, knob, knob);
+        }
+
+        bool on = false;
+    };
+
+    int stepIndex() const noexcept
+    {
+        const auto& s = spec (id);
+        return juce::jlimit (0, menu.getNumItems() - 1,
+                             (int) std::lround ((params.get (id) - s.minValue) / s.step));
+    }
+
+    static juce::String itemName (const ParamSpec& s, int index)
+    {
+        if (s.choices != nullptr)
+            return s.choices[index];
+
+        return juce::String (s.minValue + (float) index * s.step, s.decimals) + s.suffix;
+    }
+
     void updateValueText()
     {
         const auto& s = spec (id);
+        const float current = mode == Mode::fader ? (float) slider.getValue() : params.get (id);
 
         // A stepped parameter with names shows the name. "Green" beats "1".
         if (s.choices != nullptr)
         {
             const int index = juce::jlimit (0, (int) (s.maxValue - s.minValue),
-                                            (int) std::lround (slider.getValue() - s.minValue));
+                                            (int) std::lround (current - s.minValue));
             value.setText (s.choices[index], juce::dontSendNotification);
             return;
         }
 
-        value.setText (juce::String (slider.getValue(), s.decimals) + s.suffix,
+        value.setText (juce::String (current, s.decimals) + s.suffix,
                        juce::dontSendNotification);
     }
 
     ParamStore& params;
     int id;
+    Mode mode = Mode::fader;
     juce::Label name, value;
     juce::Slider slider;
+    juce::ComboBox menu;
+    Switch toggle;
 };
 
 //==============================================================================
@@ -347,22 +465,28 @@ class FxPanel : public juce::Component
 public:
     static constexpr int headerHeight = 34;
 
+    // muteStyle turns the corner button red and inverts its meaning: lit is
+    // silenced, because muting a live input is a feature, not a bypass.
     FxPanel (ParamStore& p, const juce::String& titleText, int bypassParam,
-             bool canDrag, juce::Component* extra = nullptr)
-        : params (p), bypassId (bypassParam), draggable (canDrag), extraComponent (extra)
+             bool canDrag, juce::Component* extra = nullptr, int extraWidthPx = 90,
+             bool muteStyle = false)
+        : params (p), bypassId (bypassParam), draggable (canDrag),
+          extraComponent (extra), extraWidth (extraWidthPx)
     {
-        title.setText (titleText, juce::dontSendNotification);
-        title.setFont (rigFont (13.0f, true));
+        // Chain rows read as faceplate caps; the editor keeps mixed case.
+        title.setText (titleText.toUpperCase(), juce::dontSendNotification);
+        title.setFont (rigFont (12.0f, true));
         title.setInterceptsMouseClicks (false, false);
         addAndMakeVisible (title);
 
         if (bypassId >= 0)
         {
-            power.setButtonText ("ON");
+            power.setButtonText (muteStyle ? "MUTE" : "ON");
             power.setWantsKeyboardFocus (false);
             power.setClickingTogglesState (true);
             power.setToggleState (params.getBool (bypassId), juce::dontSendNotification);
-            power.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3f9d4a));
+            power.setColour (juce::TextButton::buttonOnColourId,
+                             juce::Colour (muteStyle ? 0xffe4483c : 0xff3f9d4a));
             power.onClick = [this] { params.set (bypassId, power.getToggleState() ? 1.0f : 0.0f); };
             addAndMakeVisible (power);
         }
@@ -392,7 +516,7 @@ public:
 
     void setTitle (const juce::String& titleText)
     {
-        title.setText (titleText, juce::dontSendNotification);
+        title.setText (titleText.toUpperCase(), juce::dontSendNotification);
     }
 
     void refresh()
@@ -436,25 +560,25 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        // Selection is a full border and a raised fill — one convention for
+        // every module, no edge bars.
         g.setColour (juce::Colour (selected ? 0xff2a2d36 : 0xff1c1e24));
         g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
-        g.setColour (juce::Colour (selected ? 0xff6a6e7a : 0xff41444e));
-        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 4.0f, 1.0f);
-
-        if (selected)
-        {
-            g.setColour (juce::Colour (0xffd87b3a));
-            g.fillRoundedRectangle (1.5f, 5.0f, 3.0f, (float) getHeight() - 10.0f, 1.5f);
-        }
+        g.setColour (juce::Colour (selected ? 0xffd87b3a : 0xff41444e));
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (selected ? 0.75f : 0.5f),
+                                4.0f, selected ? 1.5f : 1.0f);
 
         if (draggable)
         {
-            // The gripper: the sign this row can be picked up and moved.
+            // The gripper: a three-by-three dot grid — the sign this row can
+            // be picked up and moved.
             const float cy = (float) getHeight() * 0.5f;
             g.setColour (juce::Colour (dragging ? 0xff9a9da6 : 0xff565963));
 
-            for (int line = -1; line <= 1; ++line)
-                g.fillRoundedRectangle (11.0f, cy - 0.75f + (float) line * 4.5f, 13.0f, 1.5f, 0.75f);
+            for (int row = -1; row <= 1; ++row)
+                for (int col = -1; col <= 1; ++col)
+                    g.fillEllipse (17.5f + (float) col * 4.5f - 1.25f,
+                                   cy + (float) row * 4.5f - 1.25f, 2.5f, 2.5f);
         }
     }
 
@@ -469,7 +593,7 @@ public:
         if (extraComponent != nullptr)
         {
             header.removeFromRight (8);
-            extraComponent->setBounds (header.removeFromRight (90).reduced (0, 6));
+            extraComponent->setBounds (header.removeFromRight (extraWidth).reduced (0, 6));
         }
 
         title.setBounds (header);
@@ -484,8 +608,78 @@ private:
     juce::Label title;
     juce::TextButton power;
     juce::Component* extraComponent = nullptr;
+    int extraWidth = 90;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FxPanel)
+};
+
+//==============================================================================
+// One channel on the rail: a name, its meter, and selection. Tapping a strip
+// scopes the chain list and the editor to that channel — the first visible
+// step of the channel rig, over the lanes that exist today.
+class ChannelStrip : public juce::Component
+{
+public:
+    static constexpr int preferredHeight = 54;
+
+    ChannelStrip (const juce::String& channelKey, const juce::String& nameText,
+                  LevelMeter* meterToShow)
+        : meter (meterToShow)
+    {
+        setComponentID (channelKey);
+        setName (nameText);   // the display name; the id stays the key
+
+        name.setText (nameText.toUpperCase(), juce::dontSendNotification);
+        name.setFont (rigFont (13.0f, true));
+        name.setInterceptsMouseClicks (false, false);
+        addAndMakeVisible (name);
+
+        if (meter != nullptr)
+            addAndMakeVisible (*meter);
+    }
+
+    std::function<void()> onSelect;
+
+    void setSelected (bool shouldBeSelected)
+    {
+        if (selected != shouldBeSelected)
+        {
+            selected = shouldBeSelected;
+            repaint();
+        }
+    }
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (onSelect != nullptr && getLocalBounds().contains (e.getPosition()))
+            onSelect();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (juce::Colour (selected ? 0xff2a2d36 : 0xff1c1e24));
+        g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
+        g.setColour (juce::Colour (selected ? 0xffd87b3a : 0xff41444e));
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (selected ? 0.75f : 0.5f),
+                                4.0f, selected ? 1.5f : 1.0f);
+    }
+
+    void resized() override
+    {
+        auto b = getLocalBounds().reduced (10, 7);
+        name.setBounds (b.removeFromTop (18));
+        b.removeFromTop (5);
+
+        if (meter != nullptr)
+            meter->setBounds (b.removeFromTop (7));
+    }
+
+private:
+    LevelMeter* meter = nullptr;   // not owned
+    juce::Label name;
+    bool selected = false;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChannelStrip)
 };
 
 //==============================================================================

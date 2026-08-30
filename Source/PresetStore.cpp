@@ -408,6 +408,63 @@ void PresetStore::load()
         save();
 }
 
+bool PresetStore::apply (const juce::String& name, ParamStore& params,
+                         const juce::Array<int>& onlyIds) const
+{
+    const int index = names.indexOf (name);
+
+    if (index < 0)
+        return false;
+
+    auto* obj = values[index].getDynamicObject();
+
+    if (obj == nullptr)
+        return false;
+
+    for (int i : onlyIds)
+    {
+        const auto& s = spec (i);
+        const juce::Identifier key (s.id);
+
+        if (obj->hasProperty (key))
+            params.set (i, juce::jlimit (s.minValue, s.maxValue, (float) (double) obj->getProperty (key)));
+    }
+
+    return true;
+}
+
+void PresetStore::store (const juce::String& name, const ParamStore& params,
+                         const juce::String& chainOrder, const juce::var& ampCapture,
+                         const juce::Array<int>& onlyIds)
+{
+    if (name.isEmpty())
+        return;
+
+    auto* obj = new juce::DynamicObject();
+
+    for (int i : onlyIds)
+        obj->setProperty (juce::Identifier (spec (i).id), (double) params.get (i));
+
+    const juce::var subset (obj);
+    const int index = names.indexOf (name);
+
+    if (index >= 0)
+    {
+        values.set (index, subset);
+        orders.set (index, chainOrder);
+        ampCaptures.set (index, ampCapture);
+    }
+    else
+    {
+        names.add (name);
+        values.add (subset);
+        orders.add (chainOrder);
+        ampCaptures.add (ampCapture);
+    }
+
+    save();
+}
+
 bool PresetStore::apply (const juce::String& name, ParamStore& params) const
 {
     const int index = names.indexOf (name);

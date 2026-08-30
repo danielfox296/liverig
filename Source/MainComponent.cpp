@@ -117,7 +117,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     // The engine already runs; tell it which channels the lanes live on.
     engine.setInputRoles (settings.bassInput, settings.micInput);
 
-    for (auto* b : { &loadButton, &newSongButton, &transportButton, &loopButton,
+    for (auto* b : { &menuButton, &transportButton, &loopButton,
                      &deviceButton, &savePresetButton, &deletePresetButton })
     {
         b->setWantsKeyboardFocus (false);
@@ -126,11 +126,34 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     transportButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3f9d4a));
     loopButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd87b3a));
-    loadButton.onClick = [this] { chooseSongFolder(); };
-    newSongButton.onClick = [this] { startNewSong(); };
+
+    // The file actions live behind the menu; the top row belongs to the song.
+    menuButton.onClick = [this]
+    {
+        juce::PopupMenu menu;
+        menu.addItem ("Load folder...", [this] { chooseSongFolder(); });
+        menu.addItem ("New song...", [this] { startNewSong(); });
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuButton));
+    };
+
     deviceButton.onClick = [this] { showDeviceSettings(); };
     transportButton.onClick = [this] { engine.getStemPlayer().togglePlay(); };
     loopButton.onClick = [this] { loopTapped(); };
+
+    // The song's own volume, under the transport it belongs to.
+    trackSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    trackSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    trackSlider.setRange (-60.0, 12.0, 0.1);
+    trackSlider.setDoubleClickReturnValue (true, 0.0);
+    trackSlider.setSliderSnapsToMousePosition (true);
+    trackSlider.setValue ((double) params.get (pTrackGain), juce::dontSendNotification);
+    trackSlider.onValueChange = [this] { params.set (pTrackGain, (float) trackSlider.getValue()); };
+    addAndMakeVisible (trackSlider);
+
+    trackLabel.setText ("Track", juce::dontSendNotification);
+    trackLabel.setFont (rigFont (11.0f));
+    trackLabel.setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
+    addAndMakeVisible (trackLabel);
 
     songsHeader.setText ("SONGS", juce::dontSendNotification);
     stemsHeader.setText ("STEMS", juce::dontSendNotification);
@@ -160,8 +183,6 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     grLabel.setColour (juce::Label::textColourId, juce::Colour (0xffd87b3a));
     addAndMakeVisible (grLabel);
 
-    addAndMakeVisible (masterMeter);
-
     songList.setRowHeight (28);
     songList.setColour (juce::ListBox::backgroundColourId, juce::Colour (0xff17181c));
     songList.setColour (juce::ListBox::outlineColourId, juce::Colour (0xff26272d));
@@ -169,7 +190,6 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     addAndMakeVisible (songList);
 
     presetBox.setEditableText (true);
-    presetBox.setTextWhenNothingSelected ("Whole chain preset");
     presetBox.onChange = [this] { applySelectedPreset(); };
     addAndMakeVisible (presetBox);
 
@@ -183,7 +203,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
                                                           pStemMute0 + i)));
 
     fxDefs = {
-        { "input",  -1,                false, "",       "Input",      -1,        { pInGain } },
+        { "input",  -1,                false, "",       "Input",      pInMute,   { pInGain } },
         { "vocal",  -1,                false, "",       "Autotune",   pVocalOn,  { pVocalGain, pVocalGate, pVocalLevel } },
         { "vocoder",-1,                false, "",       "Vocoder",    pVocoderOn,{ pVocalGain, pVocalGate, pVocoderLevel } },
         { "midi",   -1,                false, "midi",   "MIDI",       pMidiOn,   { pMidiChannel, pMidiTranspose, pMidiGate, pMidiHold, pMidiRelease, pMidiBendRange, pMidiExpression, pMidiThru, pInstOn, pInstLevel } },
@@ -192,7 +212,6 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
         { "filter", FxChain::stFilter, true,  "filter", "Filter",     pFltOn,    { pFltSens, pFltAttack, pFltRelease, pFltFrom, pFltTo, pFltRes, pFltMix } },
         { "boost",  FxChain::stBoost,  true,  "boost",  "Boost",      pBoostOn,  { pBoostGain, pBoostSheen, pBoostHair } },
         { "drive",  FxChain::stDrive,  true,  "drive",  "Overdrive",  pDriveOn,  { pDriveVoice, pDriveAmount, pDriveTone, pDriveLevel, pDriveStack, pDriveBite, pDriveXover, pDriveBlend } },
-        { "pedal",  FxChain::stPedal,  true,  "",       "Pedal",      pPedalOn,  {} },
         { "amp",    FxChain::stAmp,    true,  "amp",    "Amp",        pAmpOn,    { pAmpIn, pAmpOut } },
         { "cab",    FxChain::stCab,    true,  "cab",    "Cab (B)",    pCabOn,    { pCabBumpFreq, pCabBumpGain, pCabTop, pCabPresence } },
         { "octave", FxChain::stOctave, true,  "octave", "Octave",     pOctOn,    { pOctInterval, pOctMix, pOct2Interval, pOct2Level } },
@@ -211,11 +230,11 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     for (const auto& def : fxDefs)
     {
+        // The meters live on the channel strips now; only the MIDI row keeps
+        // an extra — the note readout and PANIC.
         auto* panel = panels.add (new FxPanel (params, def.name, def.onParam, def.movable,
-                                               def.key == "input" ? &inputMeter
-                                                    : (def.key == "vocal" ? (juce::Component*) &vocalMeter
-                                                        : (def.key == "vocoder" ? (juce::Component*) &vocoderMeter
-                                                            : (def.key == "midi" ? (juce::Component*) &midiStatus : nullptr)))));
+                                               def.key == "midi" ? &midiStatus : nullptr, 90,
+                                               def.onParam == pInMute));
 
         // Tapping the selected row again puts its controls away. Either way,
         // the effect tab comes forward — tapping a row means "show me this".
@@ -238,6 +257,23 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     renumberFxTitles();
     pushOrderToChain();
+
+    // The rail: one strip per channel that exists today. Tapping a strip
+    // scopes the chain list and editor below to that channel.
+    struct RailDef { const char* key; const char* name; LevelMeter* meter; };
+    const RailDef railDefs[] = { { "bass",   "Bass",   &inputMeter },
+                                 { "mic",    "Mic",    &vocalMeter },
+                                 { "keys",   "Keys",   nullptr },
+                                 { "master", "Master", &masterMeter } };
+
+    for (const auto& rd : railDefs)
+    {
+        auto* strip = channelStrips.add (new ChannelStrip (rd.key, rd.name, rd.meter));
+        strip->onSelect = [this, key = juce::String (rd.key)] { selectChannel (key); };
+        addAndMakeVisible (strip);
+    }
+
+    refreshStripSelection();
 
     fxViewport.setViewedComponent (&fxHolder, false);
     fxViewport.setScrollBarsShown (true, false);
@@ -306,48 +342,6 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     if (settings.instrument.isNotEmpty())
         engine.getInstrument().restore (settings.instrument, settings.instrumentState);
 
-    // The pedal slot keeps its picker — "any effect in the chain" is its
-    // whole point. The autotune slot has no picker at all: the rig binds
-    // the machine's pitch corrector itself.
-    pedalControls.pedal.box.onChange = [this]
-    {
-        auto& slot = engine.getPedalSlot();
-        auto& box = pedalControls.pedal.box;
-
-        pluginWindow.reset();   // the old instance is about to retire
-
-        if (box.getSelectedId() == 1)
-        {
-            if (slot.isLoaded() || slot.getLoadedName().isNotEmpty())
-            {
-                slot.unload();
-                refreshSlotControls();
-                saveSettings();
-            }
-
-            return;
-        }
-
-        const auto name = box.getText();
-
-        if (name.isEmpty() || name == slot.getLoadedName())
-            return;
-
-        juce::String error;
-
-        if (! slot.load (engine.getInstrument(), name, error))
-            songPanel.showFailure ("Could not load " + name + ".\n\n" + error);
-
-        refreshSlotControls();
-        saveSettings();
-    };
-
-    pedalControls.pedal.open.onClick = [this]
-    {
-        openPluginWindowFor (engine.getPedalSlot().getLiveProcessor(),
-                             engine.getPedalSlot().getLoadedName());
-    };
-
     autotuneControls.open.onClick = [this]
     {
         openPluginWindowFor (engine.getTuneSlot().getLiveProcessor(),
@@ -362,7 +356,6 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     engine.getTuneSlot().restore (engine.getInstrument(), settings.tunePlugin, settings.tunePluginState);
     engine.getVocoderSlot().restore (engine.getInstrument(), settings.vocoderPlugin, settings.vocoderPluginState);
-    engine.getPedalSlot().restore (engine.getInstrument(), settings.pedalPlugin, settings.pedalPluginState);
     autoBindHostedRoles();
     refreshSlotControls();
 
@@ -452,16 +445,8 @@ void MainComponent::resized()
     auto b = getLocalBounds().reduced (10);
 
     auto top = b.removeFromTop (44);
-    loadButton.setBounds (top.removeFromLeft (118).reduced (0, 6));
-    top.removeFromLeft (8);
-    newSongButton.setBounds (top.removeFromLeft (110).reduced (0, 6));
-    top.removeFromLeft (8);
-    transportButton.setBounds (top.removeFromLeft (88).reduced (0, 6));
-    top.removeFromLeft (8);
-    loopButton.setBounds (top.removeFromLeft (96).reduced (0, 6));
+    menuButton.setBounds (top.removeFromLeft (44).reduced (0, 6));
     top.removeFromLeft (10);
-    masterMeter.setBounds (top.removeFromRight (170).reduced (0, 13));
-    top.removeFromRight (6);
     grLabel.setBounds (top.removeFromRight (86));
     top.removeFromRight (10);
     songLabel.setBounds (top);
@@ -486,7 +471,18 @@ void MainComponent::resized()
 
     songsHeader.setBounds (left.removeFromTop (18));
     left.removeFromTop (4);
-    songList.setBounds (left.removeFromTop (juce::jmin (208, left.getHeight() / 3)));
+
+    // The transport is the loaded song's: it lives with the setlist.
+    auto transportRow = left.removeFromTop (28);
+    transportButton.setBounds (transportRow.removeFromLeft (74).reduced (0, 1));
+    transportRow.removeFromLeft (6);
+    loopButton.setBounds (transportRow.removeFromLeft (92).reduced (0, 1));
+    left.removeFromTop (5);
+    auto trackRow = left.removeFromTop (22);
+    trackLabel.setBounds (trackRow.removeFromLeft (40));
+    trackSlider.setBounds (trackRow);
+    left.removeFromTop (6);
+    songList.setBounds (left.removeFromTop (juce::jmin (168, left.getHeight() / 3)));
     left.removeFromTop (12);
     stemsHeader.setBounds (left.removeFromTop (18));
     left.removeFromTop (4);
@@ -501,6 +497,21 @@ void MainComponent::resized()
 
     b.removeFromLeft (10);
 
+    // The channel rail first; the preset bar sits INSIDE the channel scope,
+    // because a preset is one channel's, not the whole window's.
+    auto rail = b.removeFromTop (ChannelStrip::preferredHeight);
+    const int stripGap = 8;
+    const int stripWidth2 = (rail.getWidth() - stripGap * (channelStrips.size() - 1))
+                              / juce::jmax (1, channelStrips.size());
+
+    for (auto* strip : channelStrips)
+    {
+        strip->setBounds (rail.removeFromLeft (stripWidth2));
+        rail.removeFromLeft (stripGap);
+    }
+
+    b.removeFromTop (8);
+
     auto presetBar = b.removeFromTop (30);
     deletePresetButton.setBounds (presetBar.removeFromRight (72));
     presetBar.removeFromRight (6);
@@ -510,8 +521,9 @@ void MainComponent::resized()
 
     b.removeFromTop (8);
 
-    // The chain list on the left, the editor tabs beside it.
-    fxViewport.setBounds (b.removeFromLeft (280));
+    // The chain list on the left — narrow, since caps titles and the dot
+    // grip are all a row carries — and the editor tabs beside it.
+    fxViewport.setBounds (b.removeFromLeft (244));
     b.removeFromLeft (8);
     editorTabs.setBounds (b);
 
@@ -592,10 +604,17 @@ void MainComponent::layoutFxPanels()
         return;
 
     const int pitch = FxPanel::headerHeight + panelGap;
+    const auto visible = visibleFxIndices();
+
+    for (int i = 0; i < panels.size(); ++i)
+        panels[i]->setVisible (visible.contains (i));
+
     int slot = 0;
 
-    for (auto* panel : panels)
+    for (int index : visible)
     {
+        auto* panel = panels[index];
+
         if (panel == draggedPanel)
             continue;   // it rides with the mouse
 
@@ -606,12 +625,77 @@ void MainComponent::layoutFxPanels()
         ++slot;
     }
 
-    fxHolder.setSize (width, panels.size() * pitch);
+    fxHolder.setSize (width, visible.size() * pitch);
+}
+
+// Which strip a chain row belongs to. Input, the movable stages, reverb and
+// live out are the instrument channel; the mic lanes and the keys lane are
+// their own; master is the sum.
+juce::String MainComponent::channelOfKey (const juce::String& key)
+{
+    if (key == "vocal" || key == "vocoder")
+        return "mic";
+
+    if (key == "midi")
+        return "keys";
+
+    if (key == "master")
+        return "master";
+
+    return "bass";
+}
+
+juce::Array<int> MainComponent::visibleFxIndices() const
+{
+    juce::Array<int> visible;
+
+    for (int i = 0; i < (int) fxDefs.size(); ++i)
+        if (channelOfKey (fxDefs[(size_t) i].key) == selectedChannel)
+            visible.add (i);
+
+    return visible;
+}
+
+void MainComponent::refreshStripSelection()
+{
+    for (auto* strip : channelStrips)
+        strip->setSelected (strip->getComponentID() == selectedChannel);
+}
+
+void MainComponent::selectChannel (const juce::String& channelKey)
+{
+    selectedChannel = channelKey;
+    refreshStripSelection();
+    refreshPresetList();
+
+    // Landing on a channel opens its first row, so the editor is never a
+    // stale view of some other channel's effect.
+    if (selectedFx < 0 || channelOfKey (fxDefs[(size_t) selectedFx].key) != channelKey)
+    {
+        const auto visible = visibleFxIndices();
+        selectFx (visible.isEmpty() ? -1 : visible.getFirst());
+    }
+
+    layoutFxPanels();
 }
 
 void MainComponent::selectFx (int index)
 {
     selectedFx = juce::isPositiveAndBelow (index, (int) fxDefs.size()) ? index : -1;
+
+    // Selecting a row pulls its channel forward, so preset recalls and the
+    // snapshot tool land with the row actually on screen.
+    if (selectedFx >= 0)
+    {
+        const auto channel = channelOfKey (fxDefs[(size_t) selectedFx].key);
+
+        if (channel != selectedChannel)
+        {
+            selectedChannel = channel;
+            refreshStripSelection();
+            layoutFxPanels();
+        }
+    }
 
     for (int i = 0; i < panels.size(); ++i)
         panels[i]->setSelected (i == selectedFx);
@@ -646,11 +730,6 @@ void MainComponent::selectFx (int index)
         else if (def.key == "vocoder")
         {
             extra = &vocoderControls;
-        }
-        else if (def.key == "pedal")
-        {
-            extra = &pedalControls;
-            extraHeight = PedalControls::preferredHeight;
         }
 
         fxEditor.show (def.scope, def.name, def.ids, extra, extraHeight, faderRows);
@@ -808,25 +887,31 @@ void MainComponent::dragFxRow (FxPanel* panel, const juce::MouseEvent& e)
 
     const int pitch = FxPanel::headerHeight + panelGap;
 
-    // The row may land anywhere in the movable run and nowhere else. Derived
-    // from the defs rather than counted from the ends: the pinned rows above
-    // and below have both grown since this was a pair of constants, and a
-    // chain stage dropped among the mic lanes read as one of them.
-    int first = -1, last = -1;
+    // The row may land anywhere in the movable run and nowhere else, in
+    // VISIBLE slots — the list shows one channel at a time, so slot numbers
+    // and fxDefs indices are no longer the same thing.
+    const auto visible = visibleFxIndices();
+    int first = -1, last = -1, startSlot = -1;
 
-    for (int i = 0; i < (int) fxDefs.size(); ++i)
+    for (int slot = 0; slot < visible.size(); ++slot)
     {
-        if (fxDefs[(size_t) i].movable)
+        if (fxDefs[(size_t) visible[slot]].movable)
         {
             if (first < 0)
-                first = i;
+                first = slot;
 
-            last = i;
+            last = slot;
         }
+
+        if (visible[slot] == dragStartIndex)
+            startSlot = slot;
     }
 
+    if (first < 0 || startSlot < 0)
+        return;
+
     const int y = juce::jlimit (first * pitch, last * pitch,
-                                dragStartIndex * pitch + e.getDistanceFromDragStartY());
+                                startSlot * pitch + e.getDistanceFromDragStartY());
 
     panel->setTopLeftPosition (0, y);
     dragTargetSlot = juce::jlimit (first, last, (y + pitch / 2) / pitch);
@@ -839,12 +924,14 @@ void MainComponent::dropFxRow (FxPanel* panel)
         return;
 
     const int from = dragStartIndex;
-    const int to = dragTargetSlot;
+    const auto visible = visibleFxIndices();
+    const int to = juce::isPositiveAndBelow (dragTargetSlot, visible.size())
+                     ? visible[dragTargetSlot] : -1;
 
     draggedPanel = nullptr;
     dragStartIndex = dragTargetSlot = -1;
 
-    if (to != from && juce::isPositiveAndBelow (from, panels.size())
+    if (to >= 0 && to != from && juce::isPositiveAndBelow (from, panels.size())
         && juce::isPositiveAndBelow (to, panels.size()))
     {
         FxPanel* wasSelected = juce::isPositiveAndBelow (selectedFx, panels.size())
@@ -1272,16 +1359,63 @@ void MainComponent::showDeviceSettings()
 }
 
 //==============================================================================
+// Presets are one channel's. Bass presets keep the plain names the store has
+// always used (older whole-chain presets keep working as bass presets, and
+// only their chain parameters recall); the other channels file theirs under
+// a "channel:" prefix the bar never shows.
+juce::String MainComponent::presetKeyFor (const juce::String& displayName) const
+{
+    return selectedChannel == "bass" ? displayName
+                                     : selectedChannel + ":" + displayName;
+}
+
+juce::String MainComponent::channelDisplayName() const
+{
+    for (auto* strip : channelStrips)
+        if (strip->getComponentID() == selectedChannel)
+            return strip->getName();
+
+    return selectedChannel;
+}
+
+juce::Array<int> MainComponent::channelParamIds() const
+{
+    juce::Array<int> ids;
+
+    for (const auto& def : fxDefs)
+    {
+        if (channelOfKey (def.key) != selectedChannel)
+            continue;
+
+        if (def.onParam >= 0)
+            ids.addIfNotAlreadyThere (def.onParam);
+
+        for (int id : def.ids)
+            ids.addIfNotAlreadyThere (id);
+    }
+
+    return ids;
+}
+
 void MainComponent::refreshPresetList (const juce::String& selectName)
 {
     presetBox.clear (juce::dontSendNotification);
+    presetBox.setTextWhenNothingSelected (channelDisplayName() + " preset");
 
-    const auto names = presets.getNames();
+    juce::StringArray display;
 
-    for (int i = 0; i < names.size(); ++i)
-        presetBox.addItem (names[i], i + 1);
+    for (const auto& stored : presets.getNames())
+    {
+        if (selectedChannel == "bass" && ! stored.contains (":"))
+            display.add (stored);
+        else if (stored.startsWith (selectedChannel + ":"))
+            display.add (stored.fromFirstOccurrenceOf (":", false, false));
+    }
 
-    const int index = names.indexOf (selectName);
+    for (int i = 0; i < display.size(); ++i)
+        presetBox.addItem (display[i], i + 1);
+
+    const int index = display.indexOf (selectName);
 
     if (index >= 0)
         presetBox.setSelectedId (index + 1, juce::dontSendNotification);
@@ -1291,12 +1425,14 @@ void MainComponent::refreshPresetList (const juce::String& selectName)
 
 void MainComponent::applySelectedPreset()
 {
-    const auto name = presetBox.getText();
+    const auto key = presetKeyFor (presetBox.getText());
 
-    if (presets.apply (name, params))
+    if (presets.apply (key, params, channelParamIds()))
     {
-        applyChainOrderLive (presets.getChainOrder (name));
-        applyAmpCapture (presets.getAmpCapture (name));
+        // Chain order and the amp capture only ever ride bass presets; on
+        // the other channels both come back empty and these are no-ops.
+        applyChainOrderLive (presets.getChainOrder (key));
+        applyAmpCapture (presets.getAmpCapture (key));
         refreshAllControls();
     }
 }
@@ -1308,19 +1444,25 @@ void MainComponent::saveCurrentPreset()
     if (name.isEmpty())
         return;
 
-    presets.store (name, params, chainOrderString(),
-                   juce::var (engine.getFxChain().getAmp().getLoadedName()));
+    const bool bass = selectedChannel == "bass";
+
+    presets.store (presetKeyFor (name), params,
+                   bass ? chainOrderString() : juce::String(),
+                   bass ? juce::var (engine.getFxChain().getAmp().getLoadedName())
+                        : juce::var(),
+                   channelParamIds());
     refreshPresetList (name);
 }
 
 void MainComponent::deleteSelectedPreset()
 {
     const auto name = presetBox.getText().trim();
+    const auto key = presetKeyFor (name);
 
-    if (name.isEmpty() || ! presets.contains (name))
+    if (name.isEmpty() || ! presets.contains (key))
         return;
 
-    presets.remove (name);
+    presets.remove (key);
     refreshPresetList();
 }
 
@@ -1537,33 +1679,13 @@ void MainComponent::autoBindHostedRoles()
     refreshSlotControls();
 }
 
-// The pedal picker and both status lines. Latency is stated the moment it
-// exists, and the autotune line always says which plugin is doing the work —
-// or what to install when none is.
+// Both mic-lane status lines. Latency is stated the moment it exists, and
+// the autotune line always says which plugin is doing the work — or what to
+// install when none is.
 void MainComponent::refreshSlotControls()
 {
     const auto names = engine.getInstrument().getEffectNames();
     const bool scanning = engine.getInstrument().isScanning();
-
-    auto& pedalBox = pedalControls.pedal.box;
-    pedalBox.clear (juce::dontSendNotification);
-    pedalBox.setTextWhenNothingSelected (scanning ? "Scanning..." : "None");
-    pedalBox.addItem ("None", 1);
-
-    int id = 2, selected = 0;
-
-    for (const auto& name : names)
-    {
-        pedalBox.addItem (name, id);
-
-        if (engine.getPedalSlot().getLoadedName() == name)
-            selected = id;
-
-        ++id;
-    }
-
-    pedalBox.setSelectedId (selected, juce::dontSendNotification);
-    pedalControls.pedal.open.setEnabled (engine.getPedalSlot().isLoaded());
 
     const auto describe = [] (EffectSlot& slot) -> juce::String
     {
@@ -1625,9 +1747,7 @@ void MainComponent::refreshSlotControls()
     vocoderControls.status.setText (vocoderLine + noMic, juce::dontSendNotification);
     vocoderControls.open.setEnabled (vocoder.isLoaded());
 
-    auto pedalLine = describe (engine.getPedalSlot());
-    pedalControls.status.setText (pedalLine.isEmpty() ? juce::String() : "pedal: " + pedalLine,
-                                  juce::dontSendNotification);
+
 }
 
 void MainComponent::refreshAmpControls()
@@ -1711,8 +1831,6 @@ void MainComponent::saveSettings()
     settings.tunePluginState = engine.getTuneSlot().getStateBase64();
     settings.vocoderPlugin = engine.getVocoderSlot().getLoadedName();
     settings.vocoderPluginState = engine.getVocoderSlot().getStateBase64();
-    settings.pedalPlugin = engine.getPedalSlot().getLoadedName();
-    settings.pedalPluginState = engine.getPedalSlot().getStateBase64();
     settings.chainOrder = chainOrderString();
     settings.tuner = tunerView.isBassMode() ? "bass" : "guitar";
     settings.save (params);
@@ -1804,7 +1922,6 @@ void MainComponent::timerCallback()
     }
 
     const int failureMask = (engine.getTuneSlot().hasFailed() ? 1 : 0)
-                              | (engine.getPedalSlot().hasFailed() ? 2 : 0)
                               | (engine.getActiveInputCount() < 2 ? 4 : 0)
                               | (engine.getVocoderSlot().hasFailed() ? 8 : 0);
 
@@ -1830,7 +1947,6 @@ void MainComponent::timerCallback()
 
     inputMeter.setLevel (0, engine.getInputPeak());
     vocalMeter.setLevel (0, engine.getVocalPeak());
-    vocoderMeter.setLevel (0, engine.getVocalPeak());
     masterMeter.setLevel (0, engine.getOutputPeakL());
     masterMeter.setLevel (1, engine.getOutputPeakR());
 

@@ -24,6 +24,15 @@ public:
     bool contains (const juce::String& name) const { return names.contains (name); }
 
     bool apply (const juce::String& name, ParamStore& params) const;
+
+    // The channel-scoped forms: only the given parameter ids are captured or
+    // recalled, so a Mic preset can never move a chain knob and vice versa.
+    bool apply (const juce::String& name, ParamStore& params,
+                const juce::Array<int>& onlyIds) const;
+    void store (const juce::String& name, const ParamStore& params,
+                const juce::String& chainOrder, const juce::var& ampCapture,
+                const juce::Array<int>& onlyIds);
+
     void store (const juce::String& name, const ParamStore& params,
                 const juce::String& chainOrder,
                 const juce::var& ampCapture = juce::var());

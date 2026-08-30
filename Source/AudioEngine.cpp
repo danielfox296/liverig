@@ -5,7 +5,6 @@ namespace rig
 
 AudioEngine::AudioEngine (ParamStore& p) : params (p), stems (p), fx (p)
 {
-    fx.setPedalSlot (&pedalSlot);
 }
 
 AudioEngine::~AudioEngine()
@@ -182,11 +181,13 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
     tuneSlot.prepare (rate, maxBlock);
     vocoderSlot.prepare (rate, maxBlock);
-    pedalSlot.prepare (rate, maxBlock);
     vocal.prepare (rate, maxBlock);
 
     ducker.prepare (rate);
     limiter.prepare (rate);
+    trackGain.reset (rate, 0.02);
+    trackGain.setCurrentAndTargetValue (
+        juce::Decibels::decibelsToGain (params.get (pTrackGain), -60.0f));
     masterGain.reset (rate, 0.02);
     masterGain.setCurrentAndTargetValue (
         juce::Decibels::decibelsToGain (params.get (pMasterGain), -60.0f));
@@ -285,6 +286,17 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         juce::FloatVectorOperations::clear (mixR, n);
 
         stems.process (mixL, mixR, n);
+
+        // The whole song under one fader, ahead of the ducker — the track
+        // rides beneath the playing at whatever size the player sets.
+        trackGain.setTargetValue (juce::Decibels::decibelsToGain (params.get (pTrackGain), -60.0f));
+
+        for (int i = 0; i < n; ++i)
+        {
+            const float tg = trackGain.getNextValue();
+            mixL[i] *= tg;
+            mixR[i] *= tg;
+        }
 
         for (int i = 0; i < n; ++i)
             ducker.process (mixL[i], mixR[i], liveL[i], liveR[i]);

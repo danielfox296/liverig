@@ -3951,38 +3951,10 @@ static void testEffectSlot (double sr, int block)
     std::printf ("  latency %.1f ms, sidechain channels %d\n",
                  slot.getLatencyMs(), slot.getSidechainChannels());
 
-    // --- audio through the mono insert path ---
-    std::vector<float> mono ((size_t) block);
-    double phase = 0.0;
-    float peak = 0.0f;
-    bool finite = true;
-
-    const int blocks = (int) (sr * 1.0) / block;
-
-    for (int i = 0; i < blocks; ++i)
-    {
-        for (int k = 0; k < block; ++k)
-        {
-            mono[(size_t) k] = 0.25f * (float) std::sin (phase);
-            phase += 6.283185307179586 * 220.0 / sr;
-        }
-
-        slot.processMono (mono.data(), block);
-
-        for (int k = 0; k < block; ++k)
-        {
-            finite = finite && std::isfinite (mono[(size_t) k]);
-            if (i > blocks / 4)
-                peak = std::max (peak, std::abs (mono[(size_t) k]));
-        }
-    }
-
-    report ("audio passes through, finite and alive", finite && peak > 0.01f,
-            "peak " + juce::String (peak, 3));
-
     // --- the stereo path the vocal lane uses ---
+    const int blocks = (int) (sr * 1.0) / block;
     std::vector<float> in ((size_t) block), outL ((size_t) block), outR ((size_t) block);
-    phase = 0.0;
+    double phase = 0.0;
     float stereoPeak = 0.0f;
 
     for (int i = 0; i < blocks; ++i)
@@ -4009,22 +3981,20 @@ static void testEffectSlot (double sr, int block)
     report ("state round-trips through a reload", slot.isLoaded() && ! slot.hasFailed(),
             state.isEmpty() ? "stateless plugin, reloaded clean" : juce::String (state.length()) + " bytes recalled");
 
-    // --- an emptied slot is a wire ---
+    // --- an emptied slot is silence, never a crash ---
     slot.unload();
 
-    std::vector<float> dry ((size_t) block);
+    for (int k = 0; k < block; ++k)
+        in[(size_t) k] = 0.1f * (float) k / (float) block;
+
+    slot.process (in.data(), nullptr, outL.data(), outR.data(), block);
+
+    bool silent = true;
 
     for (int k = 0; k < block; ++k)
-        dry[(size_t) k] = mono[(size_t) k] = 0.1f * (float) k / (float) block;
+        silent = silent && outL[(size_t) k] == 0.0f && outR[(size_t) k] == 0.0f;
 
-    slot.processMono (mono.data(), block);
-
-    bool untouched = true;
-
-    for (int k = 0; k < block; ++k)
-        untouched = untouched && juce::exactlyEqual (mono[(size_t) k], dry[(size_t) k]);
-
-    report ("an empty slot passes dry untouched", untouched, "identity after unload");
+    report ("an empty slot writes silence", silent, "clean after unload");
 }
 
 // The one nontrivial wiring: a vocoder with the mic on its main input and the
@@ -4501,92 +4471,6 @@ static void testCarrierTap (double sr, int block)
             "carrier " + juce::String (carrierPeak, 3) + ", lane " + juce::String (outPeak, 6));
 }
 
-// The pedal stage: a hosted plugin inside the bass chain. Empty slot = wire;
-// loaded slot = audibly in the signal; both finite at all times.
-static void testPedalStage (double sr, int block)
-{
-    std::printf ("\n Pedal stage in the chain\n");
-
-    juce::ScopedJuceInitialiser_GUI juceInit;
-
-    InstrumentHost host;
-    host.prepare (sr, block);
-
-    ParamStore params;
-    params.set (pPedalOn, 1.0f);
-
-    EffectSlot pedal ("pedal");
-    pedal.prepare (sr, block);
-
-    FxChain chain (params);
-    chain.setPedalSlot (&pedal);
-    chain.prepare (sr, block);
-
-    const auto render = [&] (float* peak) -> std::vector<float>
-    {
-        std::vector<float> tail;
-        std::vector<float> mono ((size_t) block), l ((size_t) block), r ((size_t) block);
-        double phase = 0.0;
-
-        const int blocks = (int) (sr * 0.5) / block;
-
-        for (int i = 0; i < blocks; ++i)
-        {
-            for (int k = 0; k < block; ++k)
-            {
-                mono[(size_t) k] = 0.25f * (float) std::sin (phase);
-                phase += 6.283185307179586 * 110.0 / sr;
-            }
-
-            chain.process (mono.data(), l.data(), r.data(), block);
-
-            if (i > blocks / 2)
-                for (int k = 0; k < block; ++k)
-                {
-                    tail.push_back (l[(size_t) k]);
-                    if (peak != nullptr)
-                        *peak = std::max (*peak, std::abs (l[(size_t) k]));
-                }
-        }
-
-        return tail;
-    };
-
-    float emptyPeak = 0.0f;
-    const auto emptyTail = render (&emptyPeak);
-    report ("stage on with an empty slot is a wire", emptyPeak > 0.2f,
-            "peak " + juce::String (emptyPeak, 3));
-
-    const auto name = pickEffect (host.getEffectNames(),
-                                  { "AUDistortion", "AUDelay", "AUGraphicEQ" });
-
-    if (name.isEmpty())
-    {
-        std::printf ("  no cached plugin list — run the registry test first\n");
-        return;
-    }
-
-    juce::String error;
-
-    if (! pedal.load (host, name, error))
-    {
-        report ((name + " loads into the pedal").toRawUTF8(), false, error);
-        return;
-    }
-
-    chain.reset();
-
-    float loadedPeak = 0.0f;
-    const auto loadedTail = render (&loadedPeak);
-
-    bool finite = true;
-
-    for (const float v : loadedTail)
-        finite = finite && std::isfinite (v);
-
-    report ((name + " runs inside the chain").toRawUTF8(), finite && loadedPeak > 0.005f,
-            "peak " + juce::String (loadedPeak, 3) + ", finite");
-}
 
 // The whole point of hosting is that a real instrument makes a real sound from
 // the notes the tracker produced. Discovery is not the claim; audio is.
@@ -4725,7 +4609,6 @@ int main (int argc, char* argv[])
     testAutotunePicksAndCorrects (48000.0, 64);
     testVocoderSings (48000.0, 64);
     testCarrierTap (48000.0, 64);
-    testPedalStage (48000.0, 64);
     testInstrumentHosting ("SKY Keys", 48000.0, 64);
     testInstrumentHosting ("DLSMusicDevice", 48000.0, 64, true);   // the control
     testInstrumentHosting ("Vital", 48000.0, 64);

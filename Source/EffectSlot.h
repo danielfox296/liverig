@@ -11,7 +11,7 @@ namespace rig
 class InstrumentHost;
 
 // One hosted effect plugin in a fixed role — the vocal channel's pitch
-// corrector, its vocoder, the pedal slot on the bass chain. Three roles, three
+// corrector and its vocoder. Two roles, two
 // slots, each bound to a plugin picked from the machine's registry; no generic
 // rack. Effects become configuration, not builds.
 //
@@ -23,7 +23,7 @@ class InstrumentHost;
 // A slot is defensive by design, because this is stage software. A plugin that
 // fails to load leaves the slot empty and audio running; one that throws in
 // processBlock is dropped on the spot and cleaned up off-thread; an empty slot
-// passes dry signal (the pedal) or silence (the vocal roles). The show goes on.
+// passes silence. The show goes on.
 class EffectSlot : private juce::Timer
 {
 public:
@@ -76,10 +76,6 @@ public:
     juce::String getLastError() const               { return lastError; }
 
     // --- audio thread ---
-    // In-place mono insert for the pedal slot: dry passes untouched when the
-    // slot is empty.
-    void processMono (float* data, int numSamples) noexcept;
-
     // Mono in, stereo out, replacing outL/outR — the vocal roles. sidechain
     // may be nullptr. An empty slot writes silence.
     void process (const float* in, const float* sidechain,
