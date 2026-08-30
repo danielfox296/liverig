@@ -61,11 +61,11 @@ private:
     void refreshStripSelection();
     juce::Array<int> visibleFxIndices() const;
     static juce::String channelOfKey (const juce::String& key);
+    static int slotOf (const juce::String& channelKey);
     void renumberFxTitles();
-    void pushOrderToChain();
-    juce::String chainOrderString() const;
-    void applyChainOrder (const juce::String& saved);
-    void applyChainOrderLive (const juce::String& saved);
+    void pushOrderToChain (const juce::String& channelKey);
+    juce::String orderStringFor (const juce::String& channelKey) const;
+    void applyPresetOrder (const juce::String& channelKey, const juce::String& saved);
     void dragFxRow (FxPanel* panel, const juce::MouseEvent& e);
     void dropFxRow (FxPanel* panel);
     void loopTapped();
@@ -74,20 +74,26 @@ private:
     void rebuildChannelRail();
     void showAddChannelMenu();
     void addChannel (const juce::String& key);
+    void addGenericChannel();
     void removeChannel (const juce::String& key);
 
     juce::String loadoutFor (const juce::String& channel) const;
-    juce::String& loadoutRef (const juce::String& channel);
+    void setLoadout (const juce::String& channel, const juce::String& value);
+    juce::String genericField (const juce::String& key, int index) const;
+    void setGenericField (const juce::String& key, int index, const juce::String& value);
     juce::Array<int> availableFxIndices() const;
     void showAddFxMenu();
     void addFxToChannel (const juce::String& key);
     void removeFxFromChannel (const juce::String& key);
     void syncLoadoutFromParams (const juce::String& channel);
+    void refreshChainWiring();
+    bool boardHasStages (const juce::String& channelKey) const;
 
     void refreshPresetList (const juce::String& selectName = {});
     juce::String presetKeyFor (const juce::String& displayName) const;
     juce::String channelDisplayName() const;
     juce::Array<int> channelParamIds() const;
+    juce::Array<int> applicableParamIds() const;
     void applySelectedPreset();
     void saveCurrentPreset();
     void deleteSelectedPreset();
@@ -111,6 +117,10 @@ private:
     AudioEngine& engine;
     SettingsStore& settings;
     PresetStore presets;
+
+    // Every chain row and editor fader reads and writes through this one
+    // view; selecting a strip retunes it to that channel's slot.
+    SlotParams uiParams { params };
 
     juce::TextButton menuButton { juce::CharPointer_UTF8 ("\xe2\x89\xa1") };   // the file menu
     IconButton transportButton;   // play / stop, drawn rather than written
@@ -289,7 +299,7 @@ private:
 
     // The EQ's whole control surface — the curve is the interface, so the
     // editor shows it in place of fader rows.
-    EqView eqControls { params };
+    EqView eqControls { uiParams };
     std::unique_ptr<juce::DocumentWindow> pluginWindow;
 
     juce::OwnedArray<StemStrip> stemStrips;
@@ -300,7 +310,7 @@ private:
     juce::Component fxHolder;
     juce::OwnedArray<FxPanel> panels;
     std::vector<FxDef> fxDefs;
-    FxEditor fxEditor { params, presets };
+    FxEditor fxEditor { uiParams, presets };
     TunerView tunerView;
     juce::TabbedComponent editorTabs { juce::TabbedButtonBar::TabsAtTop };
     int selectedFx = -1;

@@ -35,6 +35,23 @@ public:
     StemPlayer& getStemPlayer() noexcept                  { return stems; }
     FxChain& getFxChain() noexcept                        { return fx; }
 
+    // A channel's own pedalboard: slot 0 is the bass chain, 1 the mic
+    // strip's, 2 the keys strip's. Other slots have no source yet and no
+    // chain to give.
+    FxChain& getChain (int slot) noexcept
+    {
+        return slot == 1 ? micChain : slot == 2 ? keysChain : fx;
+    }
+
+    // A lane runs through its strip's board only while the board holds at
+    // least one pedal; an empty board passes the lane in stereo, untouched
+    // but for the strip's input and live-out gains.
+    void setChainActive (int slot, bool active) noexcept
+    {
+        if (slot == 1) micChainActive.store (active, std::memory_order_relaxed);
+        if (slot == 2) keysChainActive.store (active, std::memory_order_relaxed);
+    }
+
     EffectSlot& getTuneSlot() noexcept                    { return tuneSlot; }
     EffectSlot& getVocoderSlot() noexcept                 { return vocoderSlot; }
 
@@ -87,6 +104,9 @@ public:
 private:
     void preferLowLatencyBuffer();
     void updateInputSlots() noexcept;
+    void throughBoard (FxChain& chain, bool active, juce::SmoothedValue<float>& passGain, int slot,
+                       const float* inL, const float* inR, float* outL, float* outR,
+                       float* busIn, float* tmpL, float* tmpR, int n) noexcept;
     void handleIncomingMidiMessage (juce::MidiInput* source,
                                     const juce::MidiMessage& message) override;
 
@@ -95,6 +115,16 @@ private:
     ParamStore& params;
     StemPlayer stems;
     FxChain fx;
+
+    // The mic and keys strips' boards, over their own knob slots. Prepared
+    // alongside the bass chain; each runs only while its strip has pedals.
+    FxChain micChain { params, 1 };
+    FxChain keysChain { params, 2 };
+    std::atomic<bool> micChainActive { false }, keysChainActive { false };
+
+    // The empty-board path still honours the strip's input and live-out
+    // rows: one smoothed stereo gain per lane.
+    juce::SmoothedValue<float> micPassGain, keysPassGain;
 
     // The mic lanes and their two hosted-plugin roles: the pitch corrector
     // and the vocoder. The vocoder slot asks for a sidechain bus — the
@@ -121,7 +151,7 @@ private:
     juce::SmoothedValue<float> trackGain, masterGain;
     MasterLimiter limiter;
 
-    juce::AudioBuffer<float> scratch;   // monoIn, liveL, liveR, mixL, mixR, vocalIn
+    juce::AudioBuffer<float> scratch;   // monoIn, liveL/R, mixL/R, vocalIn, laneL/R, busIn, tmpL/R
     int maxBlock = 512;
 
     std::atomic<double> currentRate { 0.0 };

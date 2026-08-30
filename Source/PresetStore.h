@@ -28,10 +28,10 @@ public:
     // The channel-scoped forms: only the given parameter ids are captured or
     // recalled, so a Mic preset can never move a chain knob and vice versa.
     bool apply (const juce::String& name, ParamStore& params,
-                const juce::Array<int>& onlyIds) const;
+                const juce::Array<int>& onlyIds, int slot = 0) const;
     void store (const juce::String& name, const ParamStore& params,
                 const juce::String& chainOrder, const juce::var& ampCapture,
-                const juce::Array<int>& onlyIds);
+                const juce::Array<int>& onlyIds, int slot = 0);
 
     void store (const juce::String& name, const ParamStore& params,
                 const juce::String& chainOrder,
@@ -56,10 +56,11 @@ public:
     // captureOut, when given, receives the preset's stored capture name with
     // the same string-or-void semantics as getAmpCapture.
     bool applyEffect (const juce::String& effect, const juce::String& name,
-                      ParamStore& params, juce::var* captureOut = nullptr) const;
+                      ParamStore& params, juce::var* captureOut = nullptr,
+                      int slot = 0) const;
     void storeEffect (const juce::String& effect, const juce::String& name,
                       const ParamStore& params, const std::vector<int>& paramIds,
-                      const juce::var& capture = juce::var());
+                      const juce::var& capture = juce::var(), int slot = 0);
     void removeEffect (const juce::String& effect, const juce::String& name);
 
 private:

@@ -137,7 +137,7 @@ class ParamRow : public juce::Component
 public:
     static constexpr int preferredHeight = 30;
 
-    ParamRow (ParamStore& p, int paramId) : params (p), id (paramId)
+    ParamRow (SlotParams& p, int paramId) : params (p), id (paramId)
     {
         const auto& s = spec (id);
 
@@ -317,7 +317,7 @@ private:
                        juce::dontSendNotification);
     }
 
-    ParamStore& params;
+    SlotParams& params;
     int id;
     Mode mode = Mode::fader;
     juce::Label name, value;
@@ -382,7 +382,7 @@ private:
 class StemStrip : public juce::Component
 {
 public:
-    StemStrip (ParamStore& p, const juce::String& stemName, int gainParam, int muteParam)
+    StemStrip (SlotParams& p, const juce::String& stemName, int gainParam, int muteParam)
         : params (p), gainId (gainParam), muteId (muteParam)
     {
         name.setText (stemName, juce::dontSendNotification);
@@ -460,7 +460,7 @@ public:
     }
 
 private:
-    ParamStore& params;
+    SlotParams& params;
     int gainId, muteId;
     juce::Label name, status;
     juce::Slider gain;
@@ -480,7 +480,7 @@ public:
 
     // muteStyle turns the corner button red and inverts its meaning: lit is
     // silenced, because muting a live input is a feature, not a bypass.
-    FxPanel (ParamStore& p, const juce::String& titleText, int bypassParam,
+    FxPanel (SlotParams& p, const juce::String& titleText, int bypassParam,
              bool canDrag, juce::Component* extra = nullptr, int extraWidthPx = 90,
              bool muteStyle = false)
         : params (p), bypassId (bypassParam), draggable (canDrag),
@@ -619,7 +619,7 @@ public:
     }
 
 private:
-    ParamStore& params;
+    SlotParams& params;
     int bypassId;
     bool draggable = false;
     bool selected = false;
@@ -828,7 +828,7 @@ private:
 class FxEditor : public juce::Component
 {
 public:
-    FxEditor (ParamStore& p, PresetStore& ps) : params (p), presets (ps)
+    FxEditor (SlotParams& p, PresetStore& ps) : params (p), presets (ps)
     {
         placeholder.setText ("Effect parameters", juce::dontSendNotification);
         placeholder.setFont (rigFont (13.0f));
@@ -1002,7 +1002,7 @@ private:
     {
         juce::var capture;
 
-        if (presets.applyEffect (effect, presetBox.getText(), params, &capture))
+        if (presets.applyEffect (effect, presetBox.getText(), params.owner(), &capture, params.channel()))
         {
             for (auto* r : rows)
                 r->refresh();
@@ -1022,7 +1022,7 @@ private:
         const auto capture = effect == "amp" && ampCaptureProvider != nullptr
                                ? juce::var (ampCaptureProvider()) : juce::var();
 
-        presets.storeEffect (effect, name, params, ids, capture);
+        presets.storeEffect (effect, name, params.owner(), ids, capture, params.channel());
         reloadPresetList (name);
     }
 
@@ -1037,7 +1037,7 @@ private:
         reloadPresetList();
     }
 
-    ParamStore& params;
+    SlotParams& params;
     PresetStore& presets;
     juce::String effect;
     std::vector<int> ids;

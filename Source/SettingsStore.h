@@ -38,10 +38,14 @@ public:
     // migrates to the strips its values imply.
     juce::String channelList = "bass";
 
-    // What each channel has loaded on its board, comma-separated stage keys.
-    // A fresh board is empty — pedals arrive on purpose. A file from before
-    // loadouts migrates with everything it showed still showing.
+    // What each channel has loaded on its board, comma-separated stage keys
+    // whose sequence is the wiring. A fresh board is empty — pedals arrive
+    // on purpose. A file from before loadouts migrates with everything it
+    // showed still showing.
     juce::String bassLoadout, micLoadout, keysLoadout;
+
+    // The generic channels' names and boards, "ch4=Name;comp,eq|ch5=;..".
+    juce::String extraChannels;
 
     // The hosted-plugin roles: plugin name and its state blob, recalled on
     // launch the way the instrument is. The autotune's key and style live in

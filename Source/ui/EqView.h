@@ -22,7 +22,7 @@ class EqView : public juce::Component,
 public:
     static constexpr int preferredHeight = 306;
 
-    explicit EqView (ParamStore& p) : params (p)
+    explicit EqView (SlotParams& p) : params (p)
     {
         caption.setFont (rigFont (11.0f, true));
         caption.setColour (juce::Label::textColourId, juce::Colour (0xff9a9da6));
@@ -485,7 +485,7 @@ private:
         }
     }
 
-    ParamStore& params;
+    SlotParams& params;
 
     Biquad display[5];
     float seen[16] {};

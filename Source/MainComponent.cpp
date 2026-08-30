@@ -170,14 +170,14 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     deletePresetButton.onClick = [this] { deleteSelectedPreset(); };
 
     for (int i = 0; i < StemPlayer::numStems; ++i)
-        addAndMakeVisible (stemStrips.add (new StemStrip (params,
+        addAndMakeVisible (stemStrips.add (new StemStrip (uiParams,
                                                           juce::String (StemPlayer::stemNames[i]).toUpperCase(),
                                                           pStemGain0 + i,
                                                           pStemMute0 + i)));
 
     // The whole song's volume stands at the end of the stem row — the mix
     // board's TOTAL fader, not a rider under the transport.
-    addAndMakeVisible (stemStrips.add (new StemStrip (params, "TOTAL", pTrackGain, -1)));
+    addAndMakeVisible (stemStrips.add (new StemStrip (uiParams, "TOTAL", pTrackGain, -1)));
 
     fxDefs = {
         { "input",  -1,                false, "",       "Input",      pInMute,   { pInGain } },
@@ -203,13 +203,11 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
         { "master", -1,                false, "",       "Master",     -1,        { pMasterGain } },
     };
 
-    applyChainOrder (settings.chainOrder);
-
     for (const auto& def : fxDefs)
     {
         // The meters live on the channel strips now; only the MIDI row keeps
         // an extra — the note readout and PANIC.
-        auto* panel = panels.add (new FxPanel (params, def.name, def.onParam, def.movable,
+        auto* panel = panels.add (new FxPanel (uiParams, def.name, def.onParam, def.movable,
                                                def.key == "midi" ? &midiStatus : nullptr, 90,
                                                def.onParam == pInMute));
 
@@ -249,7 +247,6 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     }
 
     renumberFxTitles();
-    pushOrderToChain();
 
     // The rail: strips come from the settings' channel list, and the player
     // grows or shrinks it by hand. The + at the end offers what can be added.
@@ -258,6 +255,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     addAndMakeVisible (addChannelButton);
 
     rebuildChannelRail();
+    refreshChainWiring();
 
     addFxButton.setWantsKeyboardFocus (false);
     addFxButton.onClick = [this] { showAddFxMenu(); };
@@ -646,49 +644,129 @@ juce::String MainComponent::channelOfKey (const juce::String& key)
     return "bass";
 }
 
+// The one list that decides what a strip shows, in what order: the strip's
+// anatomy (input at the head, live out at the tail), its lanes when loaded
+// here, and the movable run in the board's own sequence with reverb holding
+// the tail. The master strip shows only its own row.
 juce::Array<int> MainComponent::visibleFxIndices() const
 {
     juce::Array<int> visible;
+
+    auto indexOfKey = [this] (const juce::String& key) -> int
+    {
+        for (int i = 0; i < (int) fxDefs.size(); ++i)
+            if (fxDefs[(size_t) i].key == key)
+                return i;
+
+        return -1;
+    };
+
+    if (selectedChannel == "master")
+    {
+        visible.add (indexOfKey ("master"));
+        return visible;
+    }
+
     auto loaded = juce::StringArray::fromTokens (loadoutFor (selectedChannel), ",", "");
     loaded.trim();
 
-    for (int i = 0; i < (int) fxDefs.size(); ++i)
+    visible.add (indexOfKey ("input"));
+
+    for (const auto* laneKey : { "vocal", "vocoder", "midi" })
+        if (channelOfKey (laneKey) == selectedChannel && loaded.contains (laneKey))
+            visible.add (indexOfKey (laneKey));
+
+    for (const auto& key : loaded)
     {
-        const auto& def = fxDefs[(size_t) i];
+        const int i = indexOfKey (key);
 
-        if (channelOfKey (def.key) != selectedChannel)
-            continue;
-
-        if (isLoadable (def) && ! loaded.contains (def.key))
-            continue;
-
-        visible.add (i);
+        if (i >= 0 && fxDefs[(size_t) i].movable && ! visible.contains (i))
+            visible.add (i);
     }
 
+    if (loaded.contains ("reverb"))
+        visible.add (indexOfKey ("reverb"));
+
+    visible.add (indexOfKey ("out"));
     return visible;
 }
 
 juce::String MainComponent::loadoutFor (const juce::String& channel) const
 {
-    return channel == "bass" ? settings.bassLoadout
-         : channel == "mic"  ? settings.micLoadout
-         : channel == "keys" ? settings.keysLoadout
-                             : juce::String();
+    if (channel == "bass") return settings.bassLoadout;
+    if (channel == "mic")  return settings.micLoadout;
+    if (channel == "keys") return settings.keysLoadout;
+
+    if (channel.startsWith ("ch"))
+        return genericField (channel, 1);
+
+    return {};
 }
 
-juce::String& MainComponent::loadoutRef (const juce::String& channel)
+void MainComponent::setLoadout (const juce::String& channel, const juce::String& value)
 {
-    static juce::String none;   // the master loads nothing; writes here go nowhere
+    if      (channel == "bass") settings.bassLoadout = value;
+    else if (channel == "mic")  settings.micLoadout = value;
+    else if (channel == "keys") settings.keysLoadout = value;
+    else if (channel.startsWith ("ch")) setGenericField (channel, 1, value);
+}
 
-    return channel == "bass" ? settings.bassLoadout
-         : channel == "mic"  ? settings.micLoadout
-         : channel == "keys" ? settings.keysLoadout
-                             : none;
+// The generic channels' names and boards live in one settings string,
+// "ch4=Name;comp,eq|ch5=;reverb" — field 0 the name, field 1 the loadout.
+juce::String MainComponent::genericField (const juce::String& key, int index) const
+{
+    for (const auto& entry : juce::StringArray::fromTokens (settings.extraChannels, "|", ""))
+    {
+        if (entry.upToFirstOccurrenceOf ("=", false, false) == key)
+        {
+            const auto rest = entry.fromFirstOccurrenceOf ("=", false, false);
+            return index == 0 ? rest.upToFirstOccurrenceOf (";", false, false)
+                              : rest.fromFirstOccurrenceOf (";", false, false);
+        }
+    }
+
+    return {};
+}
+
+void MainComponent::setGenericField (const juce::String& key, int index, const juce::String& value)
+{
+    auto entries = juce::StringArray::fromTokens (settings.extraChannels, "|", "");
+    juce::String name, loadout;
+    int found = -1;
+
+    for (int i = 0; i < entries.size(); ++i)
+    {
+        if (entries[i].upToFirstOccurrenceOf ("=", false, false) == key)
+        {
+            const auto rest = entries[i].fromFirstOccurrenceOf ("=", false, false);
+            name = rest.upToFirstOccurrenceOf (";", false, false);
+            loadout = rest.fromFirstOccurrenceOf (";", false, false);
+            found = i;
+        }
+    }
+
+    // The format's own characters cannot ride in a name.
+    (index == 0 ? name : loadout) = index == 0
+        ? value.replaceCharacters ("|=;", "   ").trim()
+        : value;
+
+    const auto entry = key + "=" + name + ";" + loadout;
+
+    if (found >= 0)
+        entries.set (found, entry);
+    else
+        entries.add (entry);
+
+    settings.extraChannels = entries.joinIntoString ("|");
 }
 
 juce::Array<int> MainComponent::availableFxIndices() const
 {
     juce::Array<int> out;
+
+    if (selectedChannel == "master")
+        return out;
+
     auto loaded = juce::StringArray::fromTokens (loadoutFor (selectedChannel), ",", "");
     loaded.trim();
 
@@ -696,8 +774,14 @@ juce::Array<int> MainComponent::availableFxIndices() const
     {
         const auto& def = fxDefs[(size_t) i];
 
-        if (channelOfKey (def.key) == selectedChannel && isLoadable (def)
-             && ! loaded.contains (def.key))
+        if (! isLoadable (def) || loaded.contains (def.key))
+            continue;
+
+        // Stages go on any board; a lane is a single engine that lives on
+        // its own strip until sources make it movable.
+        const bool lane = def.key == "vocal" || def.key == "vocoder" || def.key == "midi";
+
+        if (! lane || channelOfKey (def.key) == selectedChannel)
             out.add (i);
     }
 
@@ -725,7 +809,7 @@ void MainComponent::addFxToChannel (const juce::String& key)
     if (! list.contains (key))
         list.add (key);
 
-    loadoutRef (selectedChannel) = list.joinIntoString (",");
+    setLoadout (selectedChannel, list.joinIntoString (","));
 
     for (int i = 0; i < (int) fxDefs.size(); ++i)
     {
@@ -733,7 +817,7 @@ void MainComponent::addFxToChannel (const juce::String& key)
             continue;
 
         if (fxDefs[(size_t) i].onParam >= 0)
-            params.set (fxDefs[(size_t) i].onParam, 1.0f);
+            uiParams.set (fxDefs[(size_t) i].onParam, 1.0f);
 
         panels[i]->refresh();
         layoutFxPanels();
@@ -741,6 +825,8 @@ void MainComponent::addFxToChannel (const juce::String& key)
         break;
     }
 
+    pushOrderToChain (selectedChannel);
+    engine.setChainActive (slotOf (selectedChannel), boardHasStages (selectedChannel));
     saveSettings();
 }
 
@@ -748,12 +834,10 @@ void MainComponent::addFxToChannel (const juce::String& key)
 // knobs keep their values for a return.
 void MainComponent::removeFxFromChannel (const juce::String& key)
 {
-    const auto channel = channelOfKey (key);
-
-    auto list = juce::StringArray::fromTokens (loadoutFor (channel), ",", "");
+    auto list = juce::StringArray::fromTokens (loadoutFor (selectedChannel), ",", "");
     list.trim();
     list.removeString (key);
-    loadoutRef (channel) = list.joinIntoString (",");
+    setLoadout (selectedChannel, list.joinIntoString (","));
 
     for (int i = 0; i < (int) fxDefs.size(); ++i)
     {
@@ -761,7 +845,7 @@ void MainComponent::removeFxFromChannel (const juce::String& key)
             continue;
 
         if (fxDefs[(size_t) i].onParam >= 0)
-            params.set (fxDefs[(size_t) i].onParam, 0.0f);
+            uiParams.set (fxDefs[(size_t) i].onParam, 0.0f);
 
         panels[i]->refresh();
 
@@ -771,6 +855,8 @@ void MainComponent::removeFxFromChannel (const juce::String& key)
         break;
     }
 
+    pushOrderToChain (selectedChannel);
+    engine.setChainActive (slotOf (selectedChannel), boardHasStages (selectedChannel));
     layoutFxPanels();
     saveSettings();
 }
@@ -786,10 +872,15 @@ void MainComponent::syncLoadoutFromParams (const juce::String& channel)
 
     for (const auto& def : fxDefs)
     {
-        if (channelOfKey (def.key) != channel || ! isLoadable (def) || def.onParam < 0)
+        if (! isLoadable (def) || def.onParam < 0 || list.contains (def.key))
             continue;
 
-        if (params.getBool (def.onParam) && ! list.contains (def.key))
+        const bool lane = def.key == "vocal" || def.key == "vocoder" || def.key == "midi";
+
+        if (lane && channelOfKey (def.key) != channel)
+            continue;
+
+        if (params.getBool (slotOf (channel), def.onParam))
         {
             list.add (def.key);
             grown = true;
@@ -798,10 +889,43 @@ void MainComponent::syncLoadoutFromParams (const juce::String& channel)
 
     if (grown)
     {
-        loadoutRef (channel) = list.joinIntoString (",");
+        setLoadout (channel, list.joinIntoString (","));
+        pushOrderToChain (channel);
+        engine.setChainActive (slotOf (channel), boardHasStages (channel));
         layoutFxPanels();
         saveSettings();
     }
+}
+
+// One pass that tells the engine the truth about every strip: each live
+// channel's stage order, and which boards actually hold pedals.
+void MainComponent::refreshChainWiring()
+{
+    for (int slot = 0; slot < ParamStore::maxChannels; ++slot)
+        engine.setChainActive (slot, false);
+
+    for (auto* strip : channelStrips)
+    {
+        const auto key = strip->getComponentID();
+
+        if (key == "master")
+            continue;
+
+        pushOrderToChain (key);
+        engine.setChainActive (slotOf (key), boardHasStages (key));
+    }
+}
+
+bool MainComponent::boardHasStages (const juce::String& channelKey) const
+{
+    auto loaded = juce::StringArray::fromTokens (loadoutFor (channelKey), ",", "");
+    loaded.trim();
+
+    for (const auto& def : fxDefs)
+        if ((def.movable || def.key == "reverb") && loaded.contains (def.key))
+            return true;
+
+    return false;
 }
 
 void MainComponent::refreshStripSelection()
@@ -830,47 +954,73 @@ void MainComponent::rebuildChannelRail()
 
     for (const auto& key : wanted)
     {
-        for (const auto& rd : defs)
+        const RailDef* rd = nullptr;
+
+        for (const auto& d : defs)
+            if (key == d.key)
+                rd = &d;
+
+        ChannelStrip* strip = nullptr;
+
+        if (rd != nullptr)
         {
-            if (key != rd.key)
-                continue;
+            strip = channelStrips.add (new ChannelStrip (rd->key, rd->name, rd->meter));
 
-            auto* strip = channelStrips.add (new ChannelStrip (rd.key, rd.name, rd.meter));
-            strip->onSelect = [this, key] { selectChannel (key); };
-            addAndMakeVisible (strip);
+            if (rd->savedName->isNotEmpty())
+                strip->setChannelName (*rd->savedName);
 
-            if (rd.savedName->isNotEmpty())
-                strip->setChannelName (*rd.savedName);
-
-            strip->onRename = [this, saved = rd.savedName] (const juce::String& newName)
+            strip->onRename = [this, saved = rd->savedName] (const juce::String& newName)
             {
                 *saved = newName;
                 saveSettings();
                 refreshPresetList();   // the preset placeholder wears the channel's name
             };
+        }
+        else if (key.startsWith ("ch"))
+        {
+            // A generic channel: its name lives in the extras map, its knob
+            // slot in its key. No source feeds it yet — the board it builds
+            // waits for the jack pickers.
+            const auto saved = genericField (key, 0);
+            strip = channelStrips.add (new ChannelStrip (
+                key, saved.isNotEmpty() ? saved : "CH " + juce::String (slotOf (key) + 1), nullptr));
 
-            strip->onContextMenu = [this, key, strip]
+            strip->onRename = [this, key] (const juce::String& newName)
             {
-                juce::PopupMenu m;
-                m.addItem ("Remove " + strip->getName() + "...",
-                           [this, key, name = strip->getName()]
-                {
-                    juce::AlertWindow::showOkCancelBox (
-                        juce::MessageBoxIconType::QuestionIcon,
-                        "Remove " + name + "?",
-                        "The strip leaves the rail and its sound stops. "
-                        "Its knobs stay saved for a return.",
-                        "Remove", "Keep", this,
-                        juce::ModalCallbackFunction::create ([this, key] (int choice)
-                        {
-                            if (choice == 1)
-                                removeChannel (key);
-                        }));
-                });
-
-                m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (strip));
+                setGenericField (key, 0, newName);
+                saveSettings();
+                refreshPresetList();
             };
         }
+        else
+        {
+            continue;
+        }
+
+        strip->onSelect = [this, key] { selectChannel (key); };
+        addAndMakeVisible (strip);
+
+        strip->onContextMenu = [this, key, strip]
+        {
+            juce::PopupMenu m;
+            m.addItem ("Remove " + strip->getName() + "...",
+                       [this, key, name = strip->getName()]
+            {
+                juce::AlertWindow::showOkCancelBox (
+                    juce::MessageBoxIconType::QuestionIcon,
+                    "Remove " + name + "?",
+                    "The strip leaves the rail and its sound stops. "
+                    "Its knobs stay saved for a return.",
+                    "Remove", "Keep", this,
+                    juce::ModalCallbackFunction::create ([this, key] (int choice)
+                    {
+                        if (choice == 1)
+                            removeChannel (key);
+                    }));
+            });
+
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (strip));
+        };
     }
 
     masterStrip = channelStrips.add (new ChannelStrip ("master", "Master", &masterMeter));
@@ -889,8 +1039,9 @@ void MainComponent::rebuildChannelRail()
     refreshStripSelection();
 }
 
-// What the + can offer: one strip per kind the engine truly runs today.
-// More kinds join the menu as their engines arrive.
+// The + grows the rail: a fresh empty channel, or a wired strip coming
+// back. Nothing here is ever greyed out — what already stands on the rail
+// simply is not an option to add again.
 void MainComponent::showAddChannelMenu()
 {
     juce::StringArray present;
@@ -898,16 +1049,37 @@ void MainComponent::showAddChannelMenu()
     for (auto* strip : channelStrips)
         present.add (strip->getComponentID());
 
+    juce::PopupMenu m;
+    m.addItem ("New channel", [this] { addGenericChannel(); });
+
     struct Kind { const char* key; const char* label; };
     const Kind kinds[] = { { "bass", "Bass" }, { "mic", "Vocal" }, { "keys", "Keys" } };
 
-    juce::PopupMenu m;
-
     for (const auto& kind : kinds)
-        m.addItem (kind.label, ! present.contains (kind.key), false,
-                   [this, key = juce::String (kind.key)] { addChannel (key); });
+        if (! present.contains (kind.key))
+            m.addItem (kind.label, [this, key = juce::String (kind.key)] { addChannel (key); });
 
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (addChannelButton));
+}
+
+// A new channel claims the lowest free slot; with all eight strips standing
+// the + has nothing left to give.
+void MainComponent::addGenericChannel()
+{
+    auto list = juce::StringArray::fromTokens (settings.channelList, ",", "");
+    list.trim();
+    list.removeEmptyStrings();
+
+    for (int slot = 3; slot < ParamStore::maxChannels; ++slot)
+    {
+        const juce::String key = "ch" + juce::String (slot + 1);
+
+        if (! list.contains (key))
+        {
+            addChannel (key);
+            return;
+        }
+    }
 }
 
 void MainComponent::addChannel (const juce::String& key)
@@ -922,6 +1094,7 @@ void MainComponent::addChannel (const juce::String& key)
     settings.channelList = list.joinIntoString (",");
 
     rebuildChannelRail();
+    refreshChainWiring();
     selectChannel (key);
     saveSettings();
     resized();
@@ -953,6 +1126,7 @@ void MainComponent::removeChannel (const juce::String& key)
     settings.channelList = list.joinIntoString (",");
 
     rebuildChannelRail();
+    refreshChainWiring();
 
     if (removingSelected)
         selectChannel (channelStrips.getFirst()->getComponentID());
@@ -962,9 +1136,26 @@ void MainComponent::removeChannel (const juce::String& key)
     resized();
 }
 
+// Which knob copies a channel's rows edit. The first three strips carry the
+// legacy names; generic channels wear their slot in their key ("ch4" = slot
+// 3). Master's own row is a global, so its slot never matters.
+int MainComponent::slotOf (const juce::String& channelKey)
+{
+    if (channelKey == "bass")   return 0;
+    if (channelKey == "mic")    return 1;
+    if (channelKey == "keys")   return 2;
+
+    if (channelKey.startsWith ("ch"))
+        return juce::jlimit (0, ParamStore::maxChannels - 1,
+                             channelKey.fromFirstOccurrenceOf ("ch", false, false).getIntValue() - 1);
+
+    return 0;
+}
+
 void MainComponent::selectChannel (const juce::String& channelKey)
 {
     selectedChannel = channelKey;
+    uiParams.setChannel (slotOf (channelKey));
     refreshStripSelection();
     refreshPresetList();
 
@@ -983,15 +1174,20 @@ void MainComponent::selectFx (int index)
 {
     selectedFx = juce::isPositiveAndBelow (index, (int) fxDefs.size()) ? index : -1;
 
-    // Selecting a row pulls its channel forward, so preset recalls and the
+    // Stages live on whatever strip shows them; only a lane or the master
+    // row has one home worth jumping to — so preset recalls and the
     // snapshot tool land with the row actually on screen.
     if (selectedFx >= 0)
     {
-        const auto channel = channelOfKey (fxDefs[(size_t) selectedFx].key);
+        const auto& key = fxDefs[(size_t) selectedFx].key;
+        const bool hasOneHome = key == "vocal" || key == "vocoder"
+                             || key == "midi" || key == "master";
+        const auto channel = channelOfKey (key);
 
-        if (channel != selectedChannel)
+        if (hasOneHome && channel != selectedChannel)
         {
             selectedChannel = channel;
+            uiParams.setChannel (slotOf (channel));
             refreshStripSelection();
             refreshPresetList();
             layoutFxPanels();
@@ -1049,131 +1245,92 @@ void MainComponent::renumberFxTitles()
         panels[i]->setTitle (fxDefs[(size_t) i].name);
 }
 
-void MainComponent::pushOrderToChain()
+// The board's sequence goes to that channel's chain: loaded movables first,
+// in the loadout's order, then every stage the board does not hold — all
+// off, but the word must still name each stage exactly once.
+void MainComponent::pushOrderToChain (const juce::String& channelKey)
 {
+    if (channelKey == "master")
+        return;
+
+    auto loaded = juce::StringArray::fromTokens (loadoutFor (channelKey), ",", "");
+    loaded.trim();
+
     int order[FxChain::numMovableStages] {};
-    int movableRows = 0;
+    int count = 0;
+    juce::StringArray placed;
+
+    for (const auto& key : loaded)
+        for (const auto& def : fxDefs)
+            if (def.movable && def.key == key && ! placed.contains (key)
+                 && count < FxChain::numMovableStages)
+            {
+                order[count++] = def.stage;
+                placed.add (key);
+            }
 
     for (const auto& def : fxDefs)
-    {
-        if (! def.movable)
-            continue;
-
-        if (movableRows < FxChain::numMovableStages)
-            order[movableRows] = def.stage;
-
-        ++movableRows;
-    }
+        if (def.movable && ! placed.contains (def.key) && count < FxChain::numMovableStages)
+        {
+            order[count++] = def.stage;
+            placed.add (def.key);
+        }
 
     // A stage added to fxDefs but not the Stage enum — or removed from only
     // one of them — would otherwise just stop reorders reaching the audio
     // thread, with nothing on screen to say so.
-    jassert (movableRows == FxChain::numMovableStages);
+    jassert (count == FxChain::numMovableStages);
 
-    if (movableRows == FxChain::numMovableStages)
-        engine.getFxChain().setStageOrder (order);
+    if (count == FxChain::numMovableStages)
+        engine.getChain (slotOf (channelKey)).setStageOrder (order);
 }
 
-juce::String MainComponent::chainOrderString() const
+juce::String MainComponent::orderStringFor (const juce::String& channelKey) const
 {
+    auto loaded = juce::StringArray::fromTokens (loadoutFor (channelKey), ",", "");
+    loaded.trim();
     juce::StringArray keys;
 
+    for (const auto& key : loaded)
+        for (const auto& def : fxDefs)
+            if (def.movable && def.key == key && ! keys.contains (key))
+                keys.add (key);
+
     for (const auto& def : fxDefs)
-        if (def.movable)
+        if (def.movable && ! keys.contains (def.key))
             keys.add (def.key);
 
     return keys.joinIntoString (",");
 }
 
-void MainComponent::applyChainOrder (const juce::String& saved)
+// A preset recalling the wiring it was saved with: the saved sequence
+// reorders this channel's board. Stages the preset does not know keep their
+// places after the ones it does; an empty string (a preset from before
+// order was captured) leaves the wiring alone.
+void MainComponent::applyPresetOrder (const juce::String& channelKey, const juce::String& saved)
 {
     if (saved.isEmpty())
         return;
 
-    std::vector<FxDef> movable;
+    auto loaded = juce::StringArray::fromTokens (loadoutFor (channelKey), ",", "");
+    loaded.trim();
+    juce::StringArray reordered;
 
-    // Saved keys first, in their saved order...
     for (const auto& key : juce::StringArray::fromTokens (saved, ",", ""))
+        if (loaded.contains (key.trim()))
+            reordered.add (key.trim());
+
+    for (const auto& key : loaded)
+        if (! reordered.contains (key))
+            reordered.add (key);
+
+    if (reordered != loaded)
     {
-        for (auto it = fxDefs.begin(); it != fxDefs.end(); ++it)
-        {
-            if (it->movable && it->key == key.trim())
-            {
-                movable.push_back (*it);
-                fxDefs.erase (it);
-                break;
-            }
-        }
+        setLoadout (channelKey, reordered.joinIntoString (","));
+        pushOrderToChain (channelKey);
+        layoutFxPanels();
+        saveSettings();
     }
-
-    // ...then any stage the saved list does not know about — one added since
-    // it was written — at the end of the movable run.
-    for (auto it = fxDefs.begin(); it != fxDefs.end();)
-    {
-        if (it->movable)
-        {
-            movable.push_back (*it);
-            it = fxDefs.erase (it);
-        }
-        else
-        {
-            ++it;
-        }
-    }
-
-    // Reassemble: the pinned head — input and the lanes — then the movable
-    // run, then reverb, live out, master. Anchoring on reverb rather than on
-    // "index 1" keeps the lanes grouped under the input row however many of
-    // them exist, and heals a layout saved while they drifted below the chain.
-    auto anchor = fxDefs.begin();
-
-    while (anchor != fxDefs.end() && anchor->key != "reverb")
-        ++anchor;
-
-    fxDefs.insert (anchor, movable.begin(), movable.end());
-}
-
-// The same reorder, but with the panels already alive — a preset recalling
-// the wiring it was saved with. An empty string (a preset from before order
-// was captured) leaves the chain exactly as it is.
-void MainComponent::applyChainOrderLive (const juce::String& saved)
-{
-    if (saved.isEmpty() || saved == chainOrderString())
-        return;
-
-    FxPanel* wasSelected = juce::isPositiveAndBelow (selectedFx, panels.size())
-                               ? panels[selectedFx] : nullptr;
-
-    // Panels are index-aligned with fxDefs; remember who belongs to which key
-    // before the defs move.
-    std::vector<std::pair<juce::String, FxPanel*>> byKey;
-
-    for (int i = 0; i < panels.size(); ++i)
-        byKey.emplace_back (fxDefs[(size_t) i].key, panels[i]);
-
-    applyChainOrder (saved);
-
-    for (int i = 0; i < (int) fxDefs.size(); ++i)
-    {
-        for (const auto& [key, panel] : byKey)
-        {
-            if (key == fxDefs[(size_t) i].key)
-            {
-                const int current = panels.indexOf (panel);
-
-                if (current != i)
-                    panels.move (current, i);
-
-                break;
-            }
-        }
-    }
-
-    renumberFxTitles();
-    pushOrderToChain();
-    selectFx (wasSelected != nullptr ? panels.indexOf (wasSelected) : -1);
-    layoutFxPanels();
-    saveSettings();
 }
 
 void MainComponent::dragFxRow (FxPanel* panel, const juce::MouseEvent& e)
@@ -1232,22 +1389,26 @@ void MainComponent::dropFxRow (FxPanel* panel)
     draggedPanel = nullptr;
     dragStartIndex = dragTargetSlot = -1;
 
-    if (to >= 0 && to != from && juce::isPositiveAndBelow (from, panels.size())
-        && juce::isPositiveAndBelow (to, panels.size()))
+    // The move happens in the board's sequence, not in the panel list: this
+    // channel's loadout is the only order that changes.
+    if (to >= 0 && to != from
+        && juce::isPositiveAndBelow (from, (int) fxDefs.size())
+        && juce::isPositiveAndBelow (to, (int) fxDefs.size())
+        && fxDefs[(size_t) from].movable && fxDefs[(size_t) to].movable)
     {
-        FxPanel* wasSelected = juce::isPositiveAndBelow (selectedFx, panels.size())
-                                   ? panels[selectedFx] : nullptr;
+        auto loaded = juce::StringArray::fromTokens (loadoutFor (selectedChannel), ",", "");
+        loaded.trim();
 
-        panels.move (from, to);
+        const int a = loaded.indexOf (fxDefs[(size_t) from].key);
+        const int b = loaded.indexOf (fxDefs[(size_t) to].key);
 
-        const FxDef moved = fxDefs[(size_t) from];
-        fxDefs.erase (fxDefs.begin() + from);
-        fxDefs.insert (fxDefs.begin() + to, moved);
-
-        renumberFxTitles();
-        pushOrderToChain();
-        selectFx (wasSelected != nullptr ? panels.indexOf (wasSelected) : -1);
-        saveSettings();
+        if (a >= 0 && b >= 0 && a != b)
+        {
+            loaded.move (a, b);
+            setLoadout (selectedChannel, loaded.joinIntoString (","));
+            pushOrderToChain (selectedChannel);
+            saveSettings();
+        }
     }
 
     layoutFxPanels();
@@ -1679,13 +1840,53 @@ juce::String MainComponent::channelDisplayName() const
     return selectedChannel;
 }
 
-juce::Array<int> MainComponent::channelParamIds() const
+// Everything a preset could set on this strip — the anatomy plus every
+// pedal that could stand here, loaded or not. Recalls read with this wider
+// net so a preset's pedals land even on a board that lacks them; the sync
+// pass then pulls the switched-on ones aboard.
+juce::Array<int> MainComponent::applicableParamIds() const
 {
     juce::Array<int> ids;
 
     for (const auto& def : fxDefs)
     {
-        if (channelOfKey (def.key) != selectedChannel)
+        const bool lane = def.key == "vocal" || def.key == "vocoder" || def.key == "midi";
+        const bool applies = selectedChannel == "master"
+                               ? def.key == "master"
+                               : def.key == "input" || def.key == "out"
+                                   || (isLoadable (def)
+                                        && (! lane || channelOfKey (def.key) == selectedChannel));
+
+        if (! applies)
+            continue;
+
+        if (def.onParam >= 0)
+            ids.addIfNotAlreadyThere (def.onParam);
+
+        for (int id : def.ids)
+            ids.addIfNotAlreadyThere (id);
+    }
+
+    return ids;
+}
+
+juce::Array<int> MainComponent::channelParamIds() const
+{
+    juce::Array<int> ids;
+
+    auto loaded = juce::StringArray::fromTokens (loadoutFor (selectedChannel), ",", "");
+    loaded.trim();
+
+    // A preset captures the strip's anatomy and its loaded pedals — knobs
+    // of pedals not on the board stay out of the picture.
+    for (const auto& def : fxDefs)
+    {
+        const bool captured = selectedChannel == "master"
+                                ? def.key == "master"
+                                : def.key == "input" || def.key == "out"
+                                    || (isLoadable (def) && loaded.contains (def.key));
+
+        if (! captured)
             continue;
 
         if (def.onParam >= 0)
@@ -1728,13 +1929,14 @@ void MainComponent::applySelectedPreset()
 {
     const auto key = presetKeyFor (presetBox.getText());
 
-    if (presets.apply (key, params, channelParamIds()))
+    if (presets.apply (key, params, applicableParamIds(), slotOf (selectedChannel)))
     {
-        // Chain order and the amp capture only ever ride bass presets; on
-        // the other channels both come back empty and these are no-ops.
-        applyChainOrderLive (presets.getChainOrder (key));
-        applyAmpCapture (presets.getAmpCapture (key));
+        // Pull aboard anything the preset switched on, then let its saved
+        // sequence wire the board. The amp capture only ever rides bass
+        // presets; elsewhere it comes back void and is a no-op.
         syncLoadoutFromParams (selectedChannel);
+        applyPresetOrder (selectedChannel, presets.getChainOrder (key));
+        applyAmpCapture (presets.getAmpCapture (key));
         refreshAllControls();
     }
 }
@@ -1749,10 +1951,10 @@ void MainComponent::saveCurrentPreset()
     const bool bass = selectedChannel == "bass";
 
     presets.store (presetKeyFor (name), params,
-                   bass ? chainOrderString() : juce::String(),
+                   orderStringFor (selectedChannel),
                    bass ? juce::var (engine.getFxChain().getAmp().getLoadedName())
                         : juce::var(),
-                   channelParamIds());
+                   channelParamIds(), slotOf (selectedChannel));
     refreshPresetList (name);
 }
 
@@ -2133,7 +2335,7 @@ void MainComponent::saveSettings()
     settings.tunePluginState = engine.getTuneSlot().getStateBase64();
     settings.vocoderPlugin = engine.getVocoderSlot().getLoadedName();
     settings.vocoderPluginState = engine.getVocoderSlot().getStateBase64();
-    settings.chainOrder = chainOrderString();
+    settings.chainOrder = orderStringFor ("bass");
     settings.tuner = tunerView.isBassMode() ? "bass" : "guitar";
     settings.save (params);
 }

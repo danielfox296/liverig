@@ -409,7 +409,7 @@ void PresetStore::load()
 }
 
 bool PresetStore::apply (const juce::String& name, ParamStore& params,
-                         const juce::Array<int>& onlyIds) const
+                         const juce::Array<int>& onlyIds, int slot) const
 {
     const int index = names.indexOf (name);
 
@@ -427,7 +427,7 @@ bool PresetStore::apply (const juce::String& name, ParamStore& params,
         const juce::Identifier key (s.id);
 
         if (obj->hasProperty (key))
-            params.set (i, juce::jlimit (s.minValue, s.maxValue, (float) (double) obj->getProperty (key)));
+            params.set (slot, i, juce::jlimit (s.minValue, s.maxValue, (float) (double) obj->getProperty (key)));
     }
 
     return true;
@@ -435,7 +435,7 @@ bool PresetStore::apply (const juce::String& name, ParamStore& params,
 
 void PresetStore::store (const juce::String& name, const ParamStore& params,
                          const juce::String& chainOrder, const juce::var& ampCapture,
-                         const juce::Array<int>& onlyIds)
+                         const juce::Array<int>& onlyIds, int slot)
 {
     if (name.isEmpty())
         return;
@@ -443,7 +443,7 @@ void PresetStore::store (const juce::String& name, const ParamStore& params,
     auto* obj = new juce::DynamicObject();
 
     for (int i : onlyIds)
-        obj->setProperty (juce::Identifier (spec (i).id), (double) params.get (i));
+        obj->setProperty (juce::Identifier (spec (i).id), (double) params.get (slot, i));
 
     const juce::var subset (obj);
     const int index = names.indexOf (name);
@@ -608,7 +608,7 @@ bool PresetStore::effectContains (const juce::String& effect, const juce::String
 }
 
 bool PresetStore::applyEffect (const juce::String& effect, const juce::String& name,
-                               ParamStore& params, juce::var* captureOut) const
+                               ParamStore& params, juce::var* captureOut, int slot) const
 {
     const int index = indexOfEffectPreset (effect, name);
 
@@ -631,7 +631,7 @@ bool PresetStore::applyEffect (const juce::String& effect, const juce::String& n
             continue;
 
         const auto& s = spec (id);
-        params.set (id, juce::jlimit (s.minValue, s.maxValue, (float) (double) property.value));
+        params.set (slot, id, juce::jlimit (s.minValue, s.maxValue, (float) (double) property.value));
     }
 
     return true;
@@ -639,7 +639,7 @@ bool PresetStore::applyEffect (const juce::String& effect, const juce::String& n
 
 void PresetStore::storeEffect (const juce::String& effect, const juce::String& name,
                                const ParamStore& params, const std::vector<int>& paramIds,
-                               const juce::var& capture)
+                               const juce::var& capture, int slot)
 {
     if (effect.isEmpty() || name.isEmpty())
         return;
@@ -647,7 +647,7 @@ void PresetStore::storeEffect (const juce::String& effect, const juce::String& n
     auto* obj = new juce::DynamicObject();
 
     for (int id : paramIds)
-        obj->setProperty (juce::Identifier (spec (id).id), params.get (id));
+        obj->setProperty (juce::Identifier (spec (id).id), params.get (slot, id));
 
     const int index = indexOfEffectPreset (effect, name);
 

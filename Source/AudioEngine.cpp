@@ -172,10 +172,14 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     activeInputMask.store (mask, std::memory_order_relaxed);
     updateInputSlots();
 
-    scratch.setSize (6, maxBlock, false, true, false);
+    scratch.setSize (11, maxBlock, false, true, false);
     scratch.clear();
 
     fx.prepare (rate, maxBlock);
+    micChain.prepare (rate, maxBlock);
+    keysChain.prepare (rate, maxBlock);
+    micPassGain.reset (rate, 0.02);
+    keysPassGain.reset (rate, 0.02);
     instrument.prepare (rate, maxBlock);
     stems.prepare (rate, maxBlock);
 
@@ -209,6 +213,38 @@ void AudioEngine::audioDeviceStopped()
     outPeakR.store (0.0f);
 }
 
+// A lane through its strip's board. With pedals loaded the lane folds to
+// mono into the chain and comes back stereo; with the board empty the lane
+// passes in stereo, shaped only by the strip's input and live-out rows.
+void AudioEngine::throughBoard (FxChain& chain, bool active, juce::SmoothedValue<float>& passGain,
+                                int slot, const float* inL, const float* inR,
+                                float* outL, float* outR,
+                                float* busIn, float* tmpL, float* tmpR, int n) noexcept
+{
+    if (active)
+    {
+        for (int i = 0; i < n; ++i)
+            busIn[i] = 0.5f * (inL[i] + inR[i]);
+
+        chain.process (busIn, tmpL, tmpR, n);
+        juce::FloatVectorOperations::add (outL, tmpL, n);
+        juce::FloatVectorOperations::add (outR, tmpR, n);
+        return;
+    }
+
+    const bool muted = params.getBool (slot, pInMute);
+    passGain.setTargetValue (muted ? 0.0f
+                                   : juce::Decibels::decibelsToGain (params.get (slot, pInGain), -60.0f)
+                                       * juce::Decibels::decibelsToGain (params.get (slot, pLiveOut), -60.0f));
+
+    for (int i = 0; i < n; ++i)
+    {
+        const float g = passGain.getNextValue();
+        outL[i] += inL[i] * g;
+        outR[i] += inR[i] * g;
+    }
+}
+
 static void updatePeak (std::atomic<float>& slot, const float* data, int n, float decay) noexcept
 {
     float peak = 0.0f;
@@ -238,6 +274,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     float* mixL    = scratch.getWritePointer (3);
     float* mixR    = scratch.getWritePointer (4);
     float* vocalIn = scratch.getWritePointer (5);
+    float* laneL   = scratch.getWritePointer (6);
+    float* laneR   = scratch.getWritePointer (7);
+    float* busIn   = scratch.getWritePointer (8);
+    float* tmpL    = scratch.getWritePointer (9);
+    float* tmpR    = scratch.getWritePointer (10);
 
     const int bassIn = bassSlot.load (std::memory_order_relaxed);
     const int micIn = micSlot.load (std::memory_order_relaxed);
@@ -266,7 +307,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         {
             const float target = juce::Decibels::decibelsToGain (params.get (pInstLevel), -60.0f);
             instrumentGain += 0.25f * (target - instrumentGain);
-            instrument.process (events, midiCount, liveL, liveR, n, instrumentGain);
+
+            juce::FloatVectorOperations::clear (laneL, n);
+            juce::FloatVectorOperations::clear (laneR, n);
+            instrument.process (events, midiCount, laneL, laneR, n, instrumentGain);
+            throughBoard (keysChain, keysChainActive.load (std::memory_order_relaxed), keysPassGain,
+                          2, laneL, laneR, liveL, liveR, busIn, tmpL, tmpR, n);
         }
 
         // --- mic lanes: the assigned mic channel, summed in as performance.
@@ -279,7 +325,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             juce::FloatVectorOperations::clear (vocalIn, n);
 
         updatePeak (vocalPeak, vocalIn, n, decay);
-        vocal.process (vocalIn, fx.getCarrier(), liveL, liveR, n);
+
+        juce::FloatVectorOperations::clear (laneL, n);
+        juce::FloatVectorOperations::clear (laneR, n);
+        vocal.process (vocalIn, fx.getCarrier(), laneL, laneR, n);
+        throughBoard (micChain, micChainActive.load (std::memory_order_relaxed), micPassGain,
+                      1, laneL, laneR, liveL, liveR, busIn, tmpL, tmpR, n);
 
         // --- playback lane ---
         juce::FloatVectorOperations::clear (mixL, n);

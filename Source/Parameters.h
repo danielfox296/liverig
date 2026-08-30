@@ -9,9 +9,11 @@ namespace rig
 // Every user-facing value lives in one flat table of atomics. The UI writes,
 // the audio thread reads (relaxed) — no locks, no allocation, no messaging.
 //
-// Ids in the run from pInGain to pLiveOut describe one channel's rig and get
-// a copy per channel slot; ids outside that run (stems, track, master) are
-// the rig's own and exist once. New ids must join the right run.
+// Ids in the run from pInGain to pRevMix, plus pLiveOut, describe one
+// channel's pedalboard and get a copy per channel slot. Everything else —
+// stems, track, master, and the singleton lane engines (MIDI, keys, the mic
+// lanes) — exists once, whatever strip its row sits on. New ids must join
+// the right family.
 enum ParamId
 {
     pStemGain0, pStemGain1, pStemGain2, pStemGain3,
@@ -109,10 +111,11 @@ const ParamSpec& spec (int paramId) noexcept;
 int paramIndexForId (juce::StringRef id) noexcept;
 
 // A channel-scoped parameter has one value per channel slot; anything else
-// (stems, track, master) has a single value shared by the whole rig.
+// (stems, track, master, the singleton lanes) has a single value shared by
+// the whole rig.
 constexpr bool isChannelParam (int paramId) noexcept
 {
-    return paramId >= pInGain && paramId <= pLiveOut;
+    return (paramId >= pInGain && paramId <= pRevMix) || paramId == pLiveOut;
 }
 
 class ParamStore
@@ -150,6 +153,28 @@ private:
 
     std::atomic<float> values[(size_t) NumParams * (size_t) maxChannels];
     static_assert (std::atomic<float>::is_always_lock_free, "need lock-free float atomics");
+};
+
+// The UI's window onto the store: one shared view whose slot follows the
+// selected channel, so every row edits whichever strip is up. Global ids
+// land on their single cell whatever the slot says.
+class SlotParams
+{
+public:
+    explicit SlotParams (ParamStore& s) noexcept : store (s) {}
+
+    void setChannel (int channelSlot) noexcept { slot.store (channelSlot, std::memory_order_relaxed); }
+    int channel() const noexcept { return slot.load (std::memory_order_relaxed); }
+
+    float get (int p) const noexcept     { return store.get (channel(), p); }
+    bool  getBool (int p) const noexcept { return store.getBool (channel(), p); }
+    void  set (int p, float v) noexcept  { store.set (channel(), p, v); }
+
+    ParamStore& owner() noexcept { return store; }
+
+private:
+    ParamStore& store;
+    std::atomic<int> slot { 0 };
 };
 
 // One channel's window onto the store: the same calls the engine has always

@@ -47,6 +47,7 @@ void SettingsStore::load (ParamStore& params)
             bassLoadout = obj->getProperty ("bassLoadout").toString();
             micLoadout = obj->getProperty ("micLoadout").toString();
             keysLoadout = obj->getProperty ("keysLoadout").toString();
+            extraChannels = obj->getProperty ("extraChannels").toString();
         }
         else
         {
@@ -55,6 +56,27 @@ void SettingsStore::load (ParamStore& params)
                           "phaser,chorus,delay,tape,reverb";
             micLoadout = "vocal,vocoder";
             keysLoadout = "midi";
+        }
+
+        // The loadout's sequence is the board's wiring now. A file whose
+        // wiring still lives in the old whole-chain order string hands that
+        // sequence to the bass loadout; stages the order knows come first,
+        // in its order, and anything else keeps its place after them.
+        if (chainOrder.isNotEmpty())
+        {
+            auto loaded = juce::StringArray::fromTokens (bassLoadout, ",", "");
+            loaded.trim();
+            juce::StringArray reordered;
+
+            for (const auto& key : juce::StringArray::fromTokens (chainOrder, ",", ""))
+                if (loaded.contains (key.trim()))
+                    reordered.add (key.trim());
+
+            for (const auto& key : loaded)
+                if (! reordered.contains (key))
+                    reordered.add (key);
+
+            bassLoadout = reordered.joinIntoString (",");
         }
         tunePlugin = obj->getProperty ("tunePlugin").toString();
         tunePluginState = obj->getProperty ("tunePluginState").toString();
@@ -84,6 +106,7 @@ void SettingsStore::save (const ParamStore& params) const
     root->setProperty ("bassLoadout", bassLoadout);
     root->setProperty ("micLoadout", micLoadout);
     root->setProperty ("keysLoadout", keysLoadout);
+    root->setProperty ("extraChannels", extraChannels);
     root->setProperty ("tunePlugin", tunePlugin);
     root->setProperty ("tunePluginState", tunePluginState);
     root->setProperty ("vocoderPlugin", vocoderPlugin);
