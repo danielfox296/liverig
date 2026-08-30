@@ -42,7 +42,9 @@ public:
         numMovableStages   // 14 stages, 4 bits each — well inside the order word
     };
 
-    explicit FxChain (ParamStore& p) : params (p) {}
+    // The chain is one channel's pedalboard: it reads that channel's copies
+    // of the knobs and no one else's. Slot 0 is the rig as it has always been.
+    explicit FxChain (ParamStore& p, int channelSlot = 0) : params (p, channelSlot) {}
 
     void prepare (double sampleRate, int maxBlockSize);
     void reset() noexcept;
@@ -108,7 +110,7 @@ private:
     void processDelay (float* data, int numSamples) noexcept;
     void processTape (float* data, int numSamples) noexcept;
 
-    ParamStore& params;
+    ChannelParams params;
 
     double sr = 48000.0;
     int maxBlock = 512;

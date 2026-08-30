@@ -67,6 +67,11 @@ int main (int argc, char* argv[])
     {
         rig::ParamStore params;
         rig::SettingsStore settings;
+        settings.channelList = "bass,mic,keys";   // stage the full rail the snapshots document
+        settings.bassLoadout = "comp,eq,filter,boost,drive,amp,cab,octave,sub,synth,"
+                               "phaser,chorus,delay,tape,reverb";
+        settings.micLoadout = "vocal,vocoder";
+        settings.keysLoadout = "midi";
         rig::AudioEngine engine (params);          // deliberately not opened
         rig::MainComponent main (params, engine, settings);   // sizes itself
 
@@ -186,6 +191,23 @@ int main (int argc, char* argv[])
             main.paintEntireComponent (g, true);
         }
         writePng (tuner, outDir.getChildFile ("tuner.png"));
+    }
+
+    {
+        // A fresh rig: no settings file yet, so the rail is one bass strip,
+        // the master, and the + — the state a new player meets.
+        rig::ParamStore freshParams;
+        rig::SettingsStore freshSettings;
+        rig::AudioEngine freshEngine (freshParams);
+        rig::MainComponent fresh (freshParams, freshEngine, freshSettings);
+
+        juce::Image shot (juce::Image::ARGB, fresh.getWidth(), fresh.getHeight(), true);
+        {
+            juce::Graphics g (shot);
+            fresh.paintEntireComponent (g, true);
+        }
+        writePng (shot, outDir.getChildFile ("fresh.png"));
+        problems += countBlankButtons (fresh, "the fresh window");
     }
 
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);

@@ -4553,6 +4553,62 @@ static void testInstrumentHosting (const juce::String& wanted, double sr, int bl
 }
 
 //==============================================================================
+//==============================================================================
+// The parameter store's channel slots: copies are independent, globals are one
+// value everywhere, the one-argument view is channel 0, and the settings shape
+// still reads in an old build's flat form.
+static void testChannelParams()
+{
+    std::printf ("\nChannel parameter store\n");
+
+    ParamStore store;
+
+    store.set (2, pCompThresh, -30.0f);
+    report ("channel copies are independent",
+            store.get (2, pCompThresh) == -30.0f
+              && store.get (0, pCompThresh) == spec (pCompThresh).defaultValue
+              && store.get (7, pCompThresh) == spec (pCompThresh).defaultValue,
+            "slot 2 moved alone");
+
+    store.set (pDriveAmount, 20.0f);
+    report ("legacy access is channel 0",
+            store.get (0, pDriveAmount) == 20.0f && store.get (pDriveAmount) == 20.0f,
+            "one-argument get/set land on slot 0");
+
+    store.set (5, pTrackGain, -6.0f);
+    report ("globals are one value",
+            store.get (0, pTrackGain) == -6.0f && store.get (3, pTrackGain) == -6.0f,
+            "track gain shared across slots");
+
+    store.set (3, pRevMix, 0.8f);
+    const auto saved = store.toVar();
+
+    ParamStore loaded;
+    loaded.fromVar (saved);
+    report ("slots survive the settings round trip",
+            loaded.get (2, pCompThresh) == -30.0f
+              && loaded.get (3, pRevMix) == 0.8f
+              && loaded.get (0, pDriveAmount) == 20.0f
+              && loaded.get (0, pTrackGain) == -6.0f
+              && loaded.get (1, pCompThresh) == spec (pCompThresh).defaultValue,
+            "channels 2 and 3 and the globals came back");
+
+    const bool flatShape = saved.getDynamicObject() != nullptr
+                            && saved.getDynamicObject()->hasProperty ("inGain")
+                            && saved.getDynamicObject()->hasProperty ("compThr");
+    report ("file keeps the old flat shape", flatShape,
+            "channel 0 doubles as the legacy view");
+
+    auto* old = new juce::DynamicObject();
+    old->setProperty ("compThr", -24.0);
+    ParamStore migrated;
+    migrated.fromVar (juce::var (old));
+    report ("an old settings file loads as channel 0",
+            migrated.get (0, pCompThresh) == -24.0f
+              && migrated.get (1, pCompThresh) == spec (pCompThresh).defaultValue,
+            "flat value landed on slot 0 only");
+}
+
 int main (int argc, char* argv[])
 {
     // The scan spawns this same binary as its disposable per-plugin worker.
@@ -4594,6 +4650,7 @@ int main (int argc, char* argv[])
     testReverb (48000.0, 64);
     testReverb (44100.0, 32);
     testMasterLimiter (48000.0);
+    testChannelParams();
     testStemDucker (48000.0);
     testParametricEq (48000.0, 64);
     testStageOrder (48000.0, 64);

@@ -194,30 +194,87 @@ ParamStore::ParamStore()
 void ParamStore::resetToDefaults() noexcept
 {
     for (int i = 0; i < NumParams; ++i)
-        set (i, specs[(size_t) i].defaultValue);
+        for (int c = 0; c < maxChannels; ++c)
+            set (c, i, specs[(size_t) i].defaultValue);
 }
 
 juce::var ParamStore::toVar() const
 {
+    // The flat top level is channel 0 plus the globals — the shape the
+    // settings file has always had, so an older build still reads it.
     auto* obj = new juce::DynamicObject();
 
     for (int i = 0; i < NumParams; ++i)
-        obj->setProperty (juce::Identifier (specs[(size_t) i].id), get (i));
+        obj->setProperty (juce::Identifier (specs[(size_t) i].id), get (0, i));
 
+    // Channels beyond the first ride alongside: one dense object per slot
+    // that has left its defaults, void for slots still untouched.
+    juce::Array<juce::var> extra;
+
+    for (int c = 1; c < maxChannels; ++c)
+    {
+        bool used = false;
+
+        for (int i = 0; i < NumParams && ! used; ++i)
+            used = isChannelParam (i) && get (c, i) != specs[(size_t) i].defaultValue;
+
+        if (! used)
+        {
+            extra.add (juce::var());
+            continue;
+        }
+
+        auto* co = new juce::DynamicObject();
+
+        for (int i = 0; i < NumParams; ++i)
+            if (isChannelParam (i))
+                co->setProperty (juce::Identifier (specs[(size_t) i].id), get (c, i));
+
+        extra.add (juce::var (co));
+    }
+
+    obj->setProperty ("channels", extra);
     return juce::var (obj);
 }
 
 void ParamStore::fromVar (const juce::var& v)
 {
-    if (auto* obj = v.getDynamicObject())
-    {
-        for (int i = 0; i < NumParams; ++i)
-        {
-            const auto& s = specs[(size_t) i];
-            const juce::Identifier key (s.id);
+    auto* obj = v.getDynamicObject();
 
-            if (obj->hasProperty (key))
-                set (i, juce::jlimit (s.minValue, s.maxValue, (float) (double) obj->getProperty (key)));
+    if (obj == nullptr)
+        return;
+
+    for (int i = 0; i < NumParams; ++i)
+    {
+        const auto& s = specs[(size_t) i];
+        const juce::Identifier key (s.id);
+
+        if (obj->hasProperty (key))
+            set (0, i, juce::jlimit (s.minValue, s.maxValue, (float) (double) obj->getProperty (key)));
+    }
+
+    // A file from before channels simply has no such array, and slots
+    // beyond the first stay at their defaults.
+    if (auto* extra = obj->getProperty ("channels").getArray())
+    {
+        for (int c = 1; c < maxChannels; ++c)
+        {
+            auto* co = c - 1 < extra->size() ? (*extra)[c - 1].getDynamicObject() : nullptr;
+
+            if (co == nullptr)
+                continue;
+
+            for (int i = 0; i < NumParams; ++i)
+            {
+                if (! isChannelParam (i))
+                    continue;
+
+                const auto& s = specs[(size_t) i];
+                const juce::Identifier key (s.id);
+
+                if (co->hasProperty (key))
+                    set (c, i, juce::jlimit (s.minValue, s.maxValue, (float) (double) co->getProperty (key)));
+            }
         }
     }
 }

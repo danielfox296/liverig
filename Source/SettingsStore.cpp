@@ -33,6 +33,29 @@ void SettingsStore::load (ParamStore& params)
         ampModel = obj->getProperty ("ampModel").toString();
         bassInput = (int) obj->getProperty ("bassInput");
         micInput = (int) obj->getProperty ("micInput");
+        bassName = obj->getProperty ("bassName").toString();
+        micName = obj->getProperty ("micName").toString();
+        keysName = obj->getProperty ("keysName").toString();
+
+        const auto storedChannels = obj->getProperty ("channelList").toString();
+        channelList = storedChannels.isNotEmpty() ? storedChannels
+                    : instrument.isNotEmpty()     ? "bass,mic,keys"
+                                                  : "bass,mic";
+
+        if (obj->hasProperty ("bassLoadout"))
+        {
+            bassLoadout = obj->getProperty ("bassLoadout").toString();
+            micLoadout = obj->getProperty ("micLoadout").toString();
+            keysLoadout = obj->getProperty ("keysLoadout").toString();
+        }
+        else
+        {
+            // A file from before loadouts showed every row; keep showing them.
+            bassLoadout = "comp,eq,filter,boost,drive,amp,cab,octave,sub,synth,"
+                          "phaser,chorus,delay,tape,reverb";
+            micLoadout = "vocal,vocoder";
+            keysLoadout = "midi";
+        }
         tunePlugin = obj->getProperty ("tunePlugin").toString();
         tunePluginState = obj->getProperty ("tunePluginState").toString();
         vocoderPlugin = obj->getProperty ("vocoderPlugin").toString();
@@ -54,6 +77,13 @@ void SettingsStore::save (const ParamStore& params) const
     root->setProperty ("ampModel", ampModel);
     root->setProperty ("bassInput", bassInput);
     root->setProperty ("micInput", micInput);
+    root->setProperty ("bassName", bassName);
+    root->setProperty ("micName", micName);
+    root->setProperty ("keysName", keysName);
+    root->setProperty ("channelList", channelList);
+    root->setProperty ("bassLoadout", bassLoadout);
+    root->setProperty ("micLoadout", micLoadout);
+    root->setProperty ("keysLoadout", keysLoadout);
     root->setProperty ("tunePlugin", tunePlugin);
     root->setProperty ("tunePluginState", tunePluginState);
     root->setProperty ("vocoderPlugin", vocoderPlugin);

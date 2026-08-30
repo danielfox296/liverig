@@ -117,17 +117,19 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     // The engine already runs; tell it which channels the lanes live on.
     engine.setInputRoles (settings.bassInput, settings.micInput);
 
-    for (auto* b : { &menuButton, &transportButton, &loopButton,
+    for (auto* b : { &menuButton, &loopButton,
                      &deviceButton, &savePresetButton, &deletePresetButton })
     {
         b->setWantsKeyboardFocus (false);
         addAndMakeVisible (b);
     }
 
+    transportButton.setWantsKeyboardFocus (false);
+    addAndMakeVisible (transportButton);
     transportButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3f9d4a));
     loopButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd87b3a));
 
-    // The file actions live behind the menu; the top row belongs to the song.
+    // The file actions live behind the menu, and the menu lives with the songs it acts on.
     menuButton.onClick = [this]
     {
         juce::PopupMenu menu;
@@ -139,21 +141,6 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     deviceButton.onClick = [this] { showDeviceSettings(); };
     transportButton.onClick = [this] { engine.getStemPlayer().togglePlay(); };
     loopButton.onClick = [this] { loopTapped(); };
-
-    // The song's own volume, under the transport it belongs to.
-    trackSlider.setSliderStyle (juce::Slider::LinearHorizontal);
-    trackSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-    trackSlider.setRange (-60.0, 12.0, 0.1);
-    trackSlider.setDoubleClickReturnValue (true, 0.0);
-    trackSlider.setSliderSnapsToMousePosition (true);
-    trackSlider.setValue ((double) params.get (pTrackGain), juce::dontSendNotification);
-    trackSlider.onValueChange = [this] { params.set (pTrackGain, (float) trackSlider.getValue()); };
-    addAndMakeVisible (trackSlider);
-
-    trackLabel.setText ("Track", juce::dontSendNotification);
-    trackLabel.setFont (rigFont (11.0f));
-    trackLabel.setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
-    addAndMakeVisible (trackLabel);
 
     songsHeader.setText ("SONGS", juce::dontSendNotification);
     stemsHeader.setText ("STEMS", juce::dontSendNotification);
@@ -168,20 +155,6 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     songLabel.setFont (rigFont (15.0f, true));
     songLabel.setText ("no song loaded", juce::dontSendNotification);
     addAndMakeVisible (songLabel);
-
-    statusLabel.setFont (rigFont (12.0f));
-    statusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff8b8e97));
-    addAndMakeVisible (statusLabel);
-
-    latencyLabel.setFont (rigFont (12.0f));
-    latencyLabel.setJustificationType (juce::Justification::centredRight);
-    latencyLabel.setColour (juce::Label::textColourId, juce::Colour (0xff8b8e97));
-    addAndMakeVisible (latencyLabel);
-
-    grLabel.setFont (rigFont (11.0f, true));
-    grLabel.setJustificationType (juce::Justification::centredRight);
-    grLabel.setColour (juce::Label::textColourId, juce::Colour (0xffd87b3a));
-    addAndMakeVisible (grLabel);
 
     songList.setRowHeight (28);
     songList.setColour (juce::ListBox::backgroundColourId, juce::Colour (0xff17181c));
@@ -198,9 +171,13 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     for (int i = 0; i < StemPlayer::numStems; ++i)
         addAndMakeVisible (stemStrips.add (new StemStrip (params,
-                                                          juce::String (StemPlayer::stemNames[i]),
+                                                          juce::String (StemPlayer::stemNames[i]).toUpperCase(),
                                                           pStemGain0 + i,
                                                           pStemMute0 + i)));
+
+    // The whole song's volume stands at the end of the stem row — the mix
+    // board's TOTAL fader, not a rider under the transport.
+    addAndMakeVisible (stemStrips.add (new StemStrip (params, "TOTAL", pTrackGain, -1)));
 
     fxDefs = {
         { "input",  -1,                false, "",       "Input",      pInMute,   { pInGain } },
@@ -252,28 +229,39 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
             panel->onDragEnd = [this, panel] { dropFxRow (panel); };
         }
 
+        if (isLoadable (def))
+        {
+            panel->onContextMenu = [this, panel]
+            {
+                const int i = panels.indexOf (panel);
+
+                if (! juce::isPositiveAndBelow (i, (int) fxDefs.size()))
+                    return;
+
+                juce::PopupMenu m;
+                m.addItem ("Remove " + fxDefs[(size_t) i].name,
+                           [this, key = fxDefs[(size_t) i].key] { removeFxFromChannel (key); });
+                m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (panel));
+            };
+        }
+
         fxHolder.addAndMakeVisible (panel);
     }
 
     renumberFxTitles();
     pushOrderToChain();
 
-    // The rail: one strip per channel that exists today. Tapping a strip
-    // scopes the chain list and editor below to that channel.
-    struct RailDef { const char* key; const char* name; LevelMeter* meter; };
-    const RailDef railDefs[] = { { "bass",   "Bass",   &inputMeter },
-                                 { "mic",    "Mic",    &vocalMeter },
-                                 { "keys",   "Keys",   nullptr },
-                                 { "master", "Master", &masterMeter } };
+    // The rail: strips come from the settings' channel list, and the player
+    // grows or shrinks it by hand. The + at the end offers what can be added.
+    addChannelButton.setWantsKeyboardFocus (false);
+    addChannelButton.onClick = [this] { showAddChannelMenu(); };
+    addAndMakeVisible (addChannelButton);
 
-    for (const auto& rd : railDefs)
-    {
-        auto* strip = channelStrips.add (new ChannelStrip (rd.key, rd.name, rd.meter));
-        strip->onSelect = [this, key = juce::String (rd.key)] { selectChannel (key); };
-        addAndMakeVisible (strip);
-    }
+    rebuildChannelRail();
 
-    refreshStripSelection();
+    addFxButton.setWantsKeyboardFocus (false);
+    addFxButton.onClick = [this] { showAddFxMenu(); };
+    fxHolder.addAndMakeVisible (addFxButton);
 
     fxViewport.setViewedComponent (&fxHolder, false);
     fxViewport.setScrollBarsShown (true, false);
@@ -436,6 +424,12 @@ MainComponent::~MainComponent()
 void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (0xff101114));
+
+    // The songs section sits in its own card.
+    g.setColour (juce::Colour (0xff17181c));
+    g.fillRoundedRectangle (songsBox.toFloat(), 6.0f);
+    g.setColour (juce::Colour (0xff26272d));
+    g.drawRoundedRectangle (songsBox.toFloat().reduced (0.5f), 6.0f, 1.0f);
 }
 
 void MainComponent::resized()
@@ -444,56 +438,53 @@ void MainComponent::resized()
 
     auto b = getLocalBounds().reduced (10);
 
-    auto top = b.removeFromTop (44);
-    menuButton.setBounds (top.removeFromLeft (44).reduced (0, 6));
-    top.removeFromLeft (10);
-    grLabel.setBounds (top.removeFromRight (86));
-    top.removeFromRight (10);
-    songLabel.setBounds (top);
-
-    b.removeFromTop (8);
-
     if (jobStripShowing)
     {
         jobStrip.setBounds (b.removeFromTop (32));
         b.removeFromTop (8);
     }
 
-    auto footer = b.removeFromBottom (30);
-    deviceButton.setBounds (footer.removeFromLeft (132).reduced (0, 2));
-    footer.removeFromLeft (10);
-    latencyLabel.setBounds (footer.removeFromRight (250));
-    statusLabel.setBounds (footer);
-
-    b.removeFromBottom (8);
-
     auto left = b.removeFromLeft (300);
 
-    songsHeader.setBounds (left.removeFromTop (18));
-    left.removeFromTop (4);
+    deviceButton.setBounds (left.removeFromTop (26).removeFromLeft (132));
+    left.removeFromTop (8);
 
-    // The transport is the loaded song's: it lives with the setlist.
-    auto transportRow = left.removeFromTop (28);
-    transportButton.setBounds (transportRow.removeFromLeft (74).reduced (0, 1));
-    transportRow.removeFromLeft (6);
-    loopButton.setBounds (transportRow.removeFromLeft (92).reduced (0, 1));
-    left.removeFromTop (5);
-    auto trackRow = left.removeFromTop (22);
-    trackLabel.setBounds (trackRow.removeFromLeft (40));
-    trackSlider.setBounds (trackRow);
-    left.removeFromTop (6);
-    songList.setBounds (left.removeFromTop (juce::jmin (168, left.getHeight() / 3)));
-    left.removeFromTop (12);
-    stemsHeader.setBounds (left.removeFromTop (18));
-    left.removeFromTop (4);
+    // The stems keep a short, fixed footprint at the bottom; the songs card
+    // above them takes every row the window can spare for the setlist.
+    auto stemsArea = left.removeFromBottom (212);
 
-    const int stripWidth = juce::jmin (58, (left.getWidth() - 3 * 6) / 4);
+    stemsHeader.setBounds (stemsArea.removeFromTop (18));
+    stemsArea.removeFromTop (4);
+
+    const int stripWidth = juce::jmin (58, (stemsArea.getWidth() - (stemStrips.size() - 1) * 6)
+                                             / juce::jmax (1, stemStrips.size()));
 
     for (auto* strip : stemStrips)
     {
-        strip->setBounds (left.removeFromLeft (stripWidth));
-        left.removeFromLeft (6);
+        strip->setBounds (stemsArea.removeFromLeft (stripWidth));
+        stemsArea.removeFromLeft (6);
     }
+
+    left.removeFromBottom (12);
+    songsBox = left;
+
+    auto box = songsBox.reduced (10);
+
+    auto songsHead = box.removeFromTop (26);
+    menuButton.setBounds (songsHead.removeFromRight (36).reduced (0, 1));
+    songsHead.removeFromRight (8);
+    songsHeader.setBounds (songsHead);
+    box.removeFromTop (4);
+    songLabel.setBounds (box.removeFromTop (22));
+    box.removeFromTop (6);
+
+    // The transport is the loaded song's: it lives with the setlist.
+    auto transportRow = box.removeFromTop (28);
+    transportButton.setBounds (transportRow.removeFromLeft (44).reduced (0, 1));
+    transportRow.removeFromLeft (6);
+    loopButton.setBounds (transportRow.removeFromLeft (92).reduced (0, 1));
+    box.removeFromTop (8);
+    songList.setBounds (box);
 
     b.removeFromLeft (10);
 
@@ -501,14 +492,17 @@ void MainComponent::resized()
     // because a preset is one channel's, not the whole window's.
     auto rail = b.removeFromTop (ChannelStrip::preferredHeight);
     const int stripGap = 8;
-    const int stripWidth2 = (rail.getWidth() - stripGap * (channelStrips.size() - 1))
-                              / juce::jmax (1, channelStrips.size());
+    const int plusWidth = 36;
+    const int count = juce::jmax (1, channelStrips.size());
+    const int stripWidth2 = juce::jmin (166, (rail.getWidth() - plusWidth - stripGap * count) / count);
 
     for (auto* strip : channelStrips)
     {
         strip->setBounds (rail.removeFromLeft (stripWidth2));
         rail.removeFromLeft (stripGap);
     }
+
+    addChannelButton.setBounds (rail.removeFromLeft (plusWidth).reduced (0, 12));
 
     b.removeFromTop (8);
 
@@ -625,7 +619,14 @@ void MainComponent::layoutFxPanels()
         ++slot;
     }
 
-    fxHolder.setSize (width, visible.size() * pitch);
+    // The board ends with the offer of more, when the catalog has more.
+    const bool offerAdd = ! availableFxIndices().isEmpty();
+    addFxButton.setVisible (offerAdd);
+
+    if (offerAdd)
+        addFxButton.setBounds (0, slot * pitch, width, FxPanel::headerHeight);
+
+    fxHolder.setSize (width, (visible.size() + (offerAdd ? 1 : 0)) * pitch);
 }
 
 // Which strip a chain row belongs to. Input, the movable stages, reverb and
@@ -648,18 +649,317 @@ juce::String MainComponent::channelOfKey (const juce::String& key)
 juce::Array<int> MainComponent::visibleFxIndices() const
 {
     juce::Array<int> visible;
+    auto loaded = juce::StringArray::fromTokens (loadoutFor (selectedChannel), ",", "");
+    loaded.trim();
 
     for (int i = 0; i < (int) fxDefs.size(); ++i)
-        if (channelOfKey (fxDefs[(size_t) i].key) == selectedChannel)
-            visible.add (i);
+    {
+        const auto& def = fxDefs[(size_t) i];
+
+        if (channelOfKey (def.key) != selectedChannel)
+            continue;
+
+        if (isLoadable (def) && ! loaded.contains (def.key))
+            continue;
+
+        visible.add (i);
+    }
 
     return visible;
+}
+
+juce::String MainComponent::loadoutFor (const juce::String& channel) const
+{
+    return channel == "bass" ? settings.bassLoadout
+         : channel == "mic"  ? settings.micLoadout
+         : channel == "keys" ? settings.keysLoadout
+                             : juce::String();
+}
+
+juce::String& MainComponent::loadoutRef (const juce::String& channel)
+{
+    static juce::String none;   // the master loads nothing; writes here go nowhere
+
+    return channel == "bass" ? settings.bassLoadout
+         : channel == "mic"  ? settings.micLoadout
+         : channel == "keys" ? settings.keysLoadout
+                             : none;
+}
+
+juce::Array<int> MainComponent::availableFxIndices() const
+{
+    juce::Array<int> out;
+    auto loaded = juce::StringArray::fromTokens (loadoutFor (selectedChannel), ",", "");
+    loaded.trim();
+
+    for (int i = 0; i < (int) fxDefs.size(); ++i)
+    {
+        const auto& def = fxDefs[(size_t) i];
+
+        if (channelOfKey (def.key) == selectedChannel && isLoadable (def)
+             && ! loaded.contains (def.key))
+            out.add (i);
+    }
+
+    return out;
+}
+
+void MainComponent::showAddFxMenu()
+{
+    juce::PopupMenu m;
+
+    for (int index : availableFxIndices())
+        m.addItem (fxDefs[(size_t) index].name,
+                   [this, key = fxDefs[(size_t) index].key] { addFxToChannel (key); });
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&addFxButton));
+}
+
+// A pedal joins the board engaged — adding it is the gesture that says play.
+void MainComponent::addFxToChannel (const juce::String& key)
+{
+    auto list = juce::StringArray::fromTokens (loadoutFor (selectedChannel), ",", "");
+    list.trim();
+    list.removeEmptyStrings();
+
+    if (! list.contains (key))
+        list.add (key);
+
+    loadoutRef (selectedChannel) = list.joinIntoString (",");
+
+    for (int i = 0; i < (int) fxDefs.size(); ++i)
+    {
+        if (fxDefs[(size_t) i].key != key)
+            continue;
+
+        if (fxDefs[(size_t) i].onParam >= 0)
+            params.set (fxDefs[(size_t) i].onParam, 1.0f);
+
+        panels[i]->refresh();
+        layoutFxPanels();
+        selectFx (i);
+        break;
+    }
+
+    saveSettings();
+}
+
+// Off the board and off in the engine — a hidden pedal must not sound. Its
+// knobs keep their values for a return.
+void MainComponent::removeFxFromChannel (const juce::String& key)
+{
+    const auto channel = channelOfKey (key);
+
+    auto list = juce::StringArray::fromTokens (loadoutFor (channel), ",", "");
+    list.trim();
+    list.removeString (key);
+    loadoutRef (channel) = list.joinIntoString (",");
+
+    for (int i = 0; i < (int) fxDefs.size(); ++i)
+    {
+        if (fxDefs[(size_t) i].key != key)
+            continue;
+
+        if (fxDefs[(size_t) i].onParam >= 0)
+            params.set (fxDefs[(size_t) i].onParam, 0.0f);
+
+        panels[i]->refresh();
+
+        if (selectedFx == i)
+            selectFx (-1);
+
+        break;
+    }
+
+    layoutFxPanels();
+    saveSettings();
+}
+
+// After a preset lands, any stage it switched on must stand on the board —
+// a sounding pedal that is not visible would be a lie. Never removes.
+void MainComponent::syncLoadoutFromParams (const juce::String& channel)
+{
+    auto list = juce::StringArray::fromTokens (loadoutFor (channel), ",", "");
+    list.trim();
+    list.removeEmptyStrings();
+    bool grown = false;
+
+    for (const auto& def : fxDefs)
+    {
+        if (channelOfKey (def.key) != channel || ! isLoadable (def) || def.onParam < 0)
+            continue;
+
+        if (params.getBool (def.onParam) && ! list.contains (def.key))
+        {
+            list.add (def.key);
+            grown = true;
+        }
+    }
+
+    if (grown)
+    {
+        loadoutRef (channel) = list.joinIntoString (",");
+        layoutFxPanels();
+        saveSettings();
+    }
 }
 
 void MainComponent::refreshStripSelection()
 {
     for (auto* strip : channelStrips)
         strip->setSelected (strip->getComponentID() == selectedChannel);
+}
+
+// The rail rebuilt from the settings' channel list: known keys become strips
+// in order, unknown ones are dropped so the list self-heals, and the master
+// sum always stands at the end, unremovable.
+void MainComponent::rebuildChannelRail()
+{
+    channelStrips.clear();
+    masterStrip = nullptr;
+
+    struct RailDef { const char* key; const char* name; LevelMeter* meter; juce::String* savedName; };
+    const RailDef defs[] = { { "bass", "Bass",  &inputMeter, &settings.bassName },
+                             { "mic",  "Vocal", &vocalMeter, &settings.micName },
+                             { "keys", "Keys",  nullptr,     &settings.keysName } };
+
+    auto wanted = juce::StringArray::fromTokens (settings.channelList, ",", "");
+    wanted.trim();
+    wanted.removeEmptyStrings();
+    wanted.removeDuplicates (false);
+
+    for (const auto& key : wanted)
+    {
+        for (const auto& rd : defs)
+        {
+            if (key != rd.key)
+                continue;
+
+            auto* strip = channelStrips.add (new ChannelStrip (rd.key, rd.name, rd.meter));
+            strip->onSelect = [this, key] { selectChannel (key); };
+            addAndMakeVisible (strip);
+
+            if (rd.savedName->isNotEmpty())
+                strip->setChannelName (*rd.savedName);
+
+            strip->onRename = [this, saved = rd.savedName] (const juce::String& newName)
+            {
+                *saved = newName;
+                saveSettings();
+                refreshPresetList();   // the preset placeholder wears the channel's name
+            };
+
+            strip->onContextMenu = [this, key, strip]
+            {
+                juce::PopupMenu m;
+                m.addItem ("Remove " + strip->getName() + "...",
+                           [this, key, name = strip->getName()]
+                {
+                    juce::AlertWindow::showOkCancelBox (
+                        juce::MessageBoxIconType::QuestionIcon,
+                        "Remove " + name + "?",
+                        "The strip leaves the rail and its sound stops. "
+                        "Its knobs stay saved for a return.",
+                        "Remove", "Keep", this,
+                        juce::ModalCallbackFunction::create ([this, key] (int choice)
+                        {
+                            if (choice == 1)
+                                removeChannel (key);
+                        }));
+                });
+
+                m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (strip));
+            };
+        }
+    }
+
+    masterStrip = channelStrips.add (new ChannelStrip ("master", "Master", &masterMeter));
+    masterStrip->onSelect = [this] { selectChannel ("master"); };
+    addAndMakeVisible (masterStrip);
+
+    // The selection must point at a strip that exists.
+    bool selectedExists = false;
+
+    for (auto* strip : channelStrips)
+        selectedExists = selectedExists || strip->getComponentID() == selectedChannel;
+
+    if (! selectedExists)
+        selectedChannel = channelStrips.getFirst()->getComponentID();
+
+    refreshStripSelection();
+}
+
+// What the + can offer: one strip per kind the engine truly runs today.
+// More kinds join the menu as their engines arrive.
+void MainComponent::showAddChannelMenu()
+{
+    juce::StringArray present;
+
+    for (auto* strip : channelStrips)
+        present.add (strip->getComponentID());
+
+    struct Kind { const char* key; const char* label; };
+    const Kind kinds[] = { { "bass", "Bass" }, { "mic", "Vocal" }, { "keys", "Keys" } };
+
+    juce::PopupMenu m;
+
+    for (const auto& kind : kinds)
+        m.addItem (kind.label, ! present.contains (kind.key), false,
+                   [this, key = juce::String (kind.key)] { addChannel (key); });
+
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (addChannelButton));
+}
+
+void MainComponent::addChannel (const juce::String& key)
+{
+    auto list = juce::StringArray::fromTokens (settings.channelList, ",", "");
+    list.trim();
+    list.removeEmptyStrings();
+
+    if (! list.contains (key))
+        list.add (key);
+
+    settings.channelList = list.joinIntoString (",");
+
+    rebuildChannelRail();
+    selectChannel (key);
+    saveSettings();
+    resized();
+}
+
+// The strip leaves the rail and its noise-makers go quiet: a hidden channel
+// that kept sounding would be a lie. The knob values stay saved for a return.
+void MainComponent::removeChannel (const juce::String& key)
+{
+    if (key == "bass")
+        params.set (pInMute, 1.0f);
+
+    if (key == "mic")
+    {
+        params.set (pVocalOn, 0.0f);
+        params.set (pVocoderOn, 0.0f);
+    }
+
+    if (key == "keys")
+    {
+        params.set (pMidiOn, 0.0f);
+        params.set (pInstOn, 0.0f);
+    }
+
+    const bool removingSelected = selectedChannel == key;
+
+    auto list = juce::StringArray::fromTokens (settings.channelList, ",", "");
+    list.removeString (key);
+    settings.channelList = list.joinIntoString (",");
+
+    rebuildChannelRail();
+
+    if (removingSelected)
+        selectChannel (channelStrips.getFirst()->getComponentID());
+
+    refreshAllControls();   // the ON switches the removal flipped
+    saveSettings();
+    resized();
 }
 
 void MainComponent::selectChannel (const juce::String& channelKey)
@@ -693,6 +993,7 @@ void MainComponent::selectFx (int index)
         {
             selectedChannel = channel;
             refreshStripSelection();
+            refreshPresetList();
             layoutFxPanels();
         }
     }
@@ -1433,6 +1734,7 @@ void MainComponent::applySelectedPreset()
         // the other channels both come back empty and these are no-ops.
         applyChainOrderLive (presets.getChainOrder (key));
         applyAmpCapture (presets.getAmpCapture (key));
+        syncLoadoutFromParams (selectedChannel);
         refreshAllControls();
     }
 }
@@ -1957,12 +2259,13 @@ void MainComponent::timerCallback()
 
     // Working limiter = the sum would have clipped by this much.
     const float gr = engine.getLimiterReductionDb();
-    grLabel.setText (gr > 0.2f ? "LIM -" + juce::String (gr, 1) + " dB" : juce::String(),
-                     juce::dontSendNotification);
+    if (masterStrip != nullptr)
+        masterStrip->setDetail (gr > 0.2f ? "LIM -" + juce::String (gr, 1) + " dB"
+                                          : juce::String());
 
     const bool playing = player.isPlaying();
     transportButton.setToggleState (playing, juce::dontSendNotification);
-    transportButton.setButtonText (playing ? "STOP" : "PLAY");
+    transportButton.setGlyph (playing ? IconButton::Glyph::stop : IconButton::Glyph::play);
     refreshLoopButton();
 
     for (int i = 0; i < StemPlayer::numStems; ++i)
@@ -1975,24 +2278,6 @@ void MainComponent::timerCallback()
             stemStrips[i]->setPresent (present);
         }
     }
-
-    const double rate = engine.getSampleRate();
-    const int block = engine.getBufferSize();
-
-    if (rate > 0.0)
-        statusLabel.setText (juce::String (rate / 1000.0, 1) + " kHz    "
-                                + juce::String (block) + " samples    "
-                                + juce::String (block * 1000.0 / rate, 2) + " ms/block",
-                             juce::dontSendNotification);
-    else
-        statusLabel.setText ("no audio device", juce::dontSendNotification);
-
-    const float ioMs = engine.getIoLatencyMs();
-    const float fxMs = engine.getFxLatencyMs();
-
-    latencyLabel.setText ("Latency  " + juce::String (ioMs, 1) + " ms I/O  +  "
-                            + juce::String (fxMs, 1) + " ms FX",
-                          juce::dontSendNotification);
 
     if (++saveCounter >= 90)   // every three seconds, if anything moved
     {

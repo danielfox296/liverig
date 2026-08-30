@@ -71,6 +71,19 @@ private:
     void loopTapped();
     void refreshLoopButton();
 
+    void rebuildChannelRail();
+    void showAddChannelMenu();
+    void addChannel (const juce::String& key);
+    void removeChannel (const juce::String& key);
+
+    juce::String loadoutFor (const juce::String& channel) const;
+    juce::String& loadoutRef (const juce::String& channel);
+    juce::Array<int> availableFxIndices() const;
+    void showAddFxMenu();
+    void addFxToChannel (const juce::String& key);
+    void removeFxFromChannel (const juce::String& key);
+    void syncLoadoutFromParams (const juce::String& channel);
+
     void refreshPresetList (const juce::String& selectName = {});
     juce::String presetKeyFor (const juce::String& displayName) const;
     juce::String channelDisplayName() const;
@@ -100,11 +113,10 @@ private:
     PresetStore presets;
 
     juce::TextButton menuButton { juce::CharPointer_UTF8 ("\xe2\x89\xa1") };   // the file menu
-    juce::TextButton transportButton { "PLAY" };
+    IconButton transportButton;   // play / stop, drawn rather than written
     juce::TextButton loopButton { "LOOP IN" };
     juce::TextButton deviceButton { "Audio device..." };
-    juce::Label songLabel, statusLabel, latencyLabel, stemsHeader, songsHeader, grLabel, trackLabel;
-    juce::Slider trackSlider;
+    juce::Label songLabel, stemsHeader, songsHeader;
 
     LevelMeter masterMeter { 2 };
     LevelMeter inputMeter { 1 };
@@ -114,10 +126,13 @@ private:
     juce::ListBox songList { "songs", this };
     juce::StringArray songNames;
     juce::File loadedFolder;
+    juce::Rectangle<int> songsBox;   // the painted card behind the songs section
 
     juce::ComboBox presetBox;
     juce::TextButton savePresetButton { "Save" };
     juce::TextButton deletePresetButton { "Delete" };
+    juce::TextButton addChannelButton { "+" };   // grows the rail
+    juce::TextButton addFxButton { "ADD EFFECT..." };   // grows the board
 
     // What each chain stage exposes: a stable key for persistence, the
     // engine's stage id (movable rows only), preset scope, display name, ON
@@ -132,6 +147,15 @@ private:
         int onParam;
         std::vector<int> ids;
     };
+
+    // What the player can put on and take off a board. Input, live out and
+    // master are the strip's anatomy and always show; everything else is a
+    // pedal that exists only when loaded.
+    static bool isLoadable (const FxDef& def)
+    {
+        return def.movable || def.key == "reverb" || def.key == "vocal"
+                           || def.key == "vocoder" || def.key == "midi";
+    }
 
     // The Amp stage's capture picker, shown above its faders in the editor:
     // every imported capture in one box, plus import and clear.
@@ -270,6 +294,7 @@ private:
 
     juce::OwnedArray<StemStrip> stemStrips;
     juce::OwnedArray<ChannelStrip> channelStrips;
+    ChannelStrip* masterStrip = nullptr;   // owned by channelStrips; wears the limiter readout
     juce::String selectedChannel { "bass" };
     juce::Viewport fxViewport;
     juce::Component fxHolder;

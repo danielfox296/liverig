@@ -8,6 +8,10 @@ namespace rig
 
 // Every user-facing value lives in one flat table of atomics. The UI writes,
 // the audio thread reads (relaxed) — no locks, no allocation, no messaging.
+//
+// Ids in the run from pInGain to pLiveOut describe one channel's rig and get
+// a copy per channel slot; ids outside that run (stems, track, master) are
+// the rig's own and exist once. New ids must join the right run.
 enum ParamId
 {
     pStemGain0, pStemGain1, pStemGain2, pStemGain3,
@@ -104,14 +108,31 @@ const ParamSpec& spec (int paramId) noexcept;
 // -1 if no parameter has that string id.
 int paramIndexForId (juce::StringRef id) noexcept;
 
+// A channel-scoped parameter has one value per channel slot; anything else
+// (stems, track, master) has a single value shared by the whole rig.
+constexpr bool isChannelParam (int paramId) noexcept
+{
+    return paramId >= pInGain && paramId <= pLiveOut;
+}
+
 class ParamStore
 {
 public:
+    // Channel slots are a fixed pool so the audio thread never meets an
+    // allocation; slots the user has not claimed yet sit at defaults.
+    static constexpr int maxChannels = 8;
+
     ParamStore();
 
-    float get (int p) const noexcept        { return values[(size_t) p].load (std::memory_order_relaxed); }
-    bool  getBool (int p) const noexcept    { return get (p) > 0.5f; }
-    void  set (int p, float v) noexcept     { values[(size_t) p].store (v, std::memory_order_relaxed); }
+    float get (int channel, int p) const noexcept   { return values[cell (channel, p)].load (std::memory_order_relaxed); }
+    bool  getBool (int channel, int p) const noexcept { return get (channel, p) > 0.5f; }
+    void  set (int channel, int p, float v) noexcept  { values[cell (channel, p)].store (v, std::memory_order_relaxed); }
+
+    // The first channel is the rig as it has always been: callers that do
+    // not yet speak channels read and write it.
+    float get (int p) const noexcept        { return get (0, p); }
+    bool  getBool (int p) const noexcept    { return get (0, p) > 0.5f; }
+    void  set (int p, float v) noexcept     { set (0, p, v); }
 
     void resetToDefaults() noexcept;
 
@@ -119,8 +140,35 @@ public:
     void fromVar (const juce::var& v);
 
 private:
-    std::atomic<float> values[(size_t) NumParams];
+    // A global id collapses onto its first cell, whatever channel is asked.
+    static size_t cell (int channel, int p) noexcept
+    {
+        const int c = isChannelParam (p) ? channel : 0;
+        jassert (juce::isPositiveAndBelow (c, maxChannels) && juce::isPositiveAndBelow (p, (int) NumParams));
+        return (size_t) p * (size_t) maxChannels + (size_t) c;
+    }
+
+    std::atomic<float> values[(size_t) NumParams * (size_t) maxChannels];
     static_assert (std::atomic<float>::is_always_lock_free, "need lock-free float atomics");
+};
+
+// One channel's window onto the store: the same calls the engine has always
+// made, bound to one slot. A processor built around this needs no idea that
+// other channels exist.
+class ChannelParams
+{
+public:
+    ChannelParams (ParamStore& s, int channelSlot) noexcept : store (s), slot (channelSlot) {}
+
+    float get (int p) const noexcept     { return store.get (slot, p); }
+    bool  getBool (int p) const noexcept { return store.getBool (slot, p); }
+    void  set (int p, float v) noexcept  { store.set (slot, p, v); }
+
+    int channel() const noexcept { return slot; }
+
+private:
+    ParamStore& store;
+    int slot;
 };
 
 } // namespace rig

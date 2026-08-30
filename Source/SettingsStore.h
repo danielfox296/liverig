@@ -30,6 +30,19 @@ public:
     int bassInput = 0;
     int micInput = 0;
 
+    // What the player calls each live channel; empty keeps the built-in name.
+    juce::String bassName, micName, keysName;
+
+    // The channels on the rail, comma-separated keys in order. A fresh rig
+    // starts with just the bass; a settings file from before channels
+    // migrates to the strips its values imply.
+    juce::String channelList = "bass";
+
+    // What each channel has loaded on its board, comma-separated stage keys.
+    // A fresh board is empty — pedals arrive on purpose. A file from before
+    // loadouts migrates with everything it showed still showing.
+    juce::String bassLoadout, micLoadout, keysLoadout;
+
     // The hosted-plugin roles: plugin name and its state blob, recalled on
     // launch the way the instrument is. The autotune's key and style live in
     // tunePluginState; the vocoder's voicing in vocoderPluginState.

@@ -386,7 +386,7 @@ public:
         : params (p), gainId (gainParam), muteId (muteParam)
     {
         name.setText (stemName, juce::dontSendNotification);
-        name.setFont (rigFont (13.0f, true));
+        name.setFont (rigFont (11.0f, true));
         name.setJustificationType (juce::Justification::centred);
         addAndMakeVisible (name);
 
@@ -406,13 +406,18 @@ public:
         gain.onValueChange = [this] { params.set (gainId, (float) gain.getValue()); };
         addAndMakeVisible (gain);
 
-        mute.setButtonText ("MUTE");
-        mute.setWantsKeyboardFocus (false);
-        mute.setClickingTogglesState (true);
-        mute.setToggleState (params.getBool (muteId), juce::dontSendNotification);
-        mute.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffe4483c));
-        mute.onClick = [this] { params.set (muteId, mute.getToggleState() ? 1.0f : 0.0f); };
-        addAndMakeVisible (mute);
+        // A negative mute id means the strip has no mute — the TOTAL fader
+        // sums the stems and only turns down.
+        if (muteId >= 0)
+        {
+            mute.setButtonText ("MUTE");
+            mute.setWantsKeyboardFocus (false);
+            mute.setClickingTogglesState (true);
+            mute.setToggleState (params.getBool (muteId), juce::dontSendNotification);
+            mute.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffe4483c));
+            mute.onClick = [this] { params.set (muteId, mute.getToggleState() ? 1.0f : 0.0f); };
+            addAndMakeVisible (mute);
+        }
     }
 
     void setPresent (bool isPresent)
@@ -426,7 +431,9 @@ public:
     {
         gain.setValue ((double) params.get (gainId), juce::dontSendNotification);
         gain.updateText();
-        mute.setToggleState (params.getBool (muteId), juce::dontSendNotification);
+
+        if (muteId >= 0)
+            mute.setToggleState (params.getBool (muteId), juce::dontSendNotification);
     }
 
     void paint (juce::Graphics& g) override
@@ -439,9 +446,15 @@ public:
     {
         auto b = getLocalBounds().reduced (5, 8);
 
-        name.setBounds (b.removeFromTop (18));
+        name.setBounds (b.removeFromTop (18).expanded (4, 0));   // caps need the full strip width
         status.setBounds (b.removeFromTop (14));
-        mute.setBounds (b.removeFromBottom (24));
+
+        // The mute row is reserved even on a strip without the button, so
+        // every fader in the row runs the same length.
+        auto muteRow = b.removeFromBottom (24);
+        if (muteId >= 0)
+            mute.setBounds (muteRow);
+
         b.removeFromBottom (8);
         gain.setBounds (b.reduced (1, 4));
     }
@@ -499,6 +512,7 @@ public:
     }
 
     std::function<void()> onSelect;
+    std::function<void()> onContextMenu;   // right-click: remove and friends
     std::function<void (const juce::MouseEvent&)> onDragMove;
     std::function<void()> onDragEnd;
 
@@ -543,7 +557,7 @@ public:
             onDragMove (e);
     }
 
-    void mouseUp (const juce::MouseEvent&) override
+    void mouseUp (const juce::MouseEvent& e) override
     {
         if (dragging)
         {
@@ -551,6 +565,11 @@ public:
 
             if (onDragEnd != nullptr)
                 onDragEnd();
+        }
+        else if (e.mods.isPopupMenu())
+        {
+            if (onContextMenu != nullptr)
+                onContextMenu();
         }
         else if (onSelect != nullptr)
         {
@@ -614,6 +633,58 @@ private:
 };
 
 //==============================================================================
+// The transport's face: a drawn glyph instead of a word. A triangle offers
+// play; while the song runs, a square offers the stop that rewinds.
+class IconButton : public juce::Button
+{
+public:
+    enum class Glyph { play, stop };
+
+    IconButton() : juce::Button ({}) {}
+
+    void setGlyph (Glyph g)
+    {
+        if (glyph != g)
+        {
+            glyph = g;
+            repaint();
+        }
+    }
+
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override
+    {
+        getLookAndFeel().drawButtonBackground (g, *this,
+            findColour (getToggleState() ? juce::TextButton::buttonOnColourId
+                                         : juce::TextButton::buttonColourId),
+            highlighted, down);
+
+        g.setColour (findColour (getToggleState() ? juce::TextButton::textColourOnId
+                                                  : juce::TextButton::textColourOffId));
+
+        const auto centre = getLocalBounds().toFloat().getCentre();
+        const float s = juce::jmin (getWidth(), getHeight()) * 0.42f;
+
+        if (glyph == Glyph::play)
+        {
+            juce::Path p;
+            p.addTriangle (centre.x - s * 0.5f, centre.y - s * 0.62f,
+                           centre.x - s * 0.5f, centre.y + s * 0.62f,
+                           centre.x + s * 0.72f, centre.y);
+            g.fillPath (p);
+        }
+        else
+        {
+            g.fillRect (juce::Rectangle<float> (s, s).withCentre (centre));
+        }
+    }
+
+private:
+    Glyph glyph = Glyph::play;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IconButton)
+};
+
+//==============================================================================
 // One channel on the rail: a name, its meter, and selection. Tapping a strip
 // scopes the chain list and the editor to that channel — the first visible
 // step of the channel rig, over the lanes that exist today.
@@ -627,18 +698,73 @@ public:
         : meter (meterToShow)
     {
         setComponentID (channelKey);
-        setName (nameText);   // the display name; the id stays the key
 
-        name.setText (nameText.toUpperCase(), juce::dontSendNotification);
         name.setFont (rigFont (13.0f, true));
-        name.setInterceptsMouseClicks (false, false);
+        name.setInterceptsMouseClicks (false, true);   // clicks fall through; the editor still works
         addAndMakeVisible (name);
+        setChannelName (nameText);
+
+        name.onTextChange = [this]
+        {
+            const auto typed = name.getText().trim();
+
+            if (typed.isEmpty())
+            {
+                setChannelName (getName());   // an erased name comes back
+                return;
+            }
+
+            setChannelName (typed);
+
+            if (onRename != nullptr)
+                onRename (typed);
+        };
+
+        detail.setFont (rigFont (11.0f, true));
+        detail.setJustificationType (juce::Justification::centredRight);
+        detail.setColour (juce::Label::textColourId, juce::Colour (0xffd87b3a));
+        detail.setInterceptsMouseClicks (false, false);
+        addAndMakeVisible (detail);
 
         if (meter != nullptr)
             addAndMakeVisible (*meter);
     }
 
     std::function<void()> onSelect;
+
+    // Right-click: the strip's own menu (remove, one day more). Only strips
+    // given the callback offer one — the master sum stays.
+    std::function<void()> onContextMenu;
+
+    // Double-click retypes what the channel really is. Only strips given
+    // onRename open the editor — the master sum keeps its name.
+    std::function<void (const juce::String&)> onRename;
+
+    void setChannelName (const juce::String& newName)
+    {
+        setName (newName);   // the display name; the id stays the key
+        name.setText (newName.toUpperCase(), juce::dontSendNotification);
+    }
+
+    void mouseDoubleClick (const juce::MouseEvent&) override
+    {
+        if (onRename != nullptr)
+            name.showEditor();
+    }
+
+    // A live readout on the name row — the master strip wears the limiter's.
+    // The name only cedes row space while there is a readout to show.
+    void setDetail (const juce::String& text)
+    {
+        if (detail.getText() != text)
+        {
+            const bool had = detail.getText().isNotEmpty();
+            detail.setText (text, juce::dontSendNotification);
+
+            if (had != text.isNotEmpty())
+                resized();
+        }
+    }
 
     void setSelected (bool shouldBeSelected)
     {
@@ -651,7 +777,18 @@ public:
 
     void mouseUp (const juce::MouseEvent& e) override
     {
-        if (onSelect != nullptr && getLocalBounds().contains (e.getPosition()))
+        if (! getLocalBounds().contains (e.getPosition()))
+            return;
+
+        if (e.mods.isPopupMenu())
+        {
+            if (onContextMenu != nullptr)
+                onContextMenu();
+
+            return;
+        }
+
+        if (onSelect != nullptr)
             onSelect();
     }
 
@@ -667,7 +804,9 @@ public:
     void resized() override
     {
         auto b = getLocalBounds().reduced (10, 7);
-        name.setBounds (b.removeFromTop (18));
+        auto nameRow = b.removeFromTop (18);
+        detail.setBounds (nameRow.removeFromRight (detail.getText().isNotEmpty() ? 76 : 0));
+        name.setBounds (nameRow);
         b.removeFromTop (5);
 
         if (meter != nullptr)
@@ -676,7 +815,7 @@ public:
 
 private:
     LevelMeter* meter = nullptr;   // not owned
-    juce::Label name;
+    juce::Label name, detail;
     bool selected = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChannelStrip)
