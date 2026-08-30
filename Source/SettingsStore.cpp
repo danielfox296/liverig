@@ -28,6 +28,7 @@ void SettingsStore::load (ParamStore& params)
         expandedPanels = obj->getProperty ("expandedPanels").toString();
         instrument = obj->getProperty ("instrument").toString();
         instrumentState = obj->getProperty ("instrumentState").toString();
+        instrumentVoice = obj->getProperty ("instrumentVoice").toString();
         chainOrder = obj->getProperty ("chainOrder").toString();
         tuner = obj->getProperty ("tuner").toString();
         ampModel = obj->getProperty ("ampModel").toString();
@@ -95,6 +96,7 @@ void SettingsStore::save (const ParamStore& params) const
     root->setProperty ("expandedPanels", expandedPanels);
     root->setProperty ("instrument", instrument);
     root->setProperty ("instrumentState", instrumentState);
+    root->setProperty ("instrumentVoice", instrumentVoice);
     root->setProperty ("chainOrder", chainOrder);
     root->setProperty ("tuner", tuner);
     root->setProperty ("ampModel", ampModel);

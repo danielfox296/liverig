@@ -319,9 +319,14 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     {
         pluginWindow.reset();
         engine.getInstrument().unload();
+        settings.instrumentVoice.clear();
         refreshInstrumentControls();
         saveSettings();
     };
+
+    instrumentControls.voiceBox.onChange = [this] { applySelectedVoice(); };
+    instrumentControls.saveVoice.onClick = [this] { saveCurrentVoice(); };
+    instrumentControls.deleteVoice.onClick = [this] { deleteSelectedVoice(); };
 
     instrumentControls.open.onClick = [this] { openPluginWindow(); };
 
@@ -331,10 +336,13 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
         refreshInstrumentControls();
     };
 
-    refreshInstrumentControls();
-
+    // Restore first: the picker, the buttons and the voice line all describe
+    // a loaded instrument, and describing one that has not arrived yet is how
+    // the row came back empty over a sound that was already playing.
     if (settings.instrument.isNotEmpty())
         engine.getInstrument().restore (settings.instrument, settings.instrumentState);
+
+    refreshInstrumentControls();
 
     autotuneControls.open.onClick = [this]
     {
@@ -528,6 +536,17 @@ void MainComponent::resized()
     editorTabs.setBounds (b);
 
     layoutFxPanels();
+}
+
+bool MainComponent::loadInstrumentForSnapshot (const juce::String& name)
+{
+    juce::String error;
+
+    if (! engine.getInstrument().load (name, error))
+        return false;
+
+    refreshInstrumentControls();
+    return true;
 }
 
 void MainComponent::selectFxForSnapshot()
@@ -1335,7 +1354,12 @@ void MainComponent::selectFx (int index)
         }
         else if (def.key == "midi")
         {
+            // The voice line exists only while an instrument does, and the
+            // row is a line shorter without it.
             extra = &instrumentControls;
+            extraHeight = engine.getInstrument().isLoaded()
+                            ? InstrumentControls::preferredHeight
+                            : InstrumentControls::rowHeight;
         }
         else if (def.key == "eq")
         {
@@ -2291,6 +2315,137 @@ void MainComponent::refreshInstrumentControls()
     box.setSelectedId (selected, juce::dontSendNotification);
     instrumentControls.clear.setEnabled (host.isLoaded());
     instrumentControls.open.setEnabled (host.isLoaded());
+
+    instrumentControls.setVoiceRowVisible (host.isLoaded());
+    refreshVoiceList (settings.instrumentVoice);
+
+    // An instrument arriving or leaving changes how tall the row stands, so
+    // the editor is laid out again when it is the one on screen.
+    if (selectedFx >= 0 && fxDefs[(size_t) selectedFx].key == "midi")
+        selectFx (selectedFx);
+}
+
+// The voices the loaded instrument actually offers, read fresh: a preset
+// saved in the plugin's own window a minute ago should be in this list.
+void MainComponent::refreshVoiceList (const juce::String& selectName)
+{
+    auto& host = engine.getInstrument();
+    auto& box = instrumentControls.voiceBox;
+
+    voiceList = host.getVoices();
+
+    box.clear (juce::dontSendNotification);
+    box.setTextWhenNothingSelected (voiceList.isEmpty() ? "No voices yet" : "Voice...");
+
+    int selected = 0;
+
+    for (int i = 0; i < voiceList.size(); ++i)
+    {
+        box.addItem (voiceList[i].name, i + 1);
+
+        if (selectName.isNotEmpty() && voiceList[i].name == selectName)
+            selected = i + 1;
+    }
+
+    box.setSelectedId (selected, juce::dontSendNotification);
+
+    // Delete belongs to voices this rig wrote; a preset the player saved in
+    // Logic or the plugin shipped is not the rig's to throw away, so the
+    // button is absent rather than dead.
+    const int index = selected - 1;
+    instrumentControls.deleteVoice.setVisible (host.isLoaded()
+                                                 && juce::isPositiveAndBelow (index, voiceList.size())
+                                                 && voiceList[index].removable);
+}
+
+void MainComponent::applySelectedVoice()
+{
+    const int index = instrumentControls.voiceBox.getSelectedId() - 1;
+
+    if (! juce::isPositiveAndBelow (index, voiceList.size()))
+        return;
+
+    const auto voice = voiceList[index];
+    juce::String error;
+
+    if (! engine.getInstrument().setVoice (voice, error))
+    {
+        songPanel.showFailure ("Could not load the voice " + voice.name + ".\n\n" + error);
+        return;
+    }
+
+    settings.instrumentVoice = voice.name;
+    instrumentControls.deleteVoice.setVisible (voice.removable);
+    saveSettings();
+}
+
+// Saving is how a sound dialled up in the plugin's own window becomes a name
+// the rig can recall: the instrument's whole state, written as the preset
+// file every AU host understands.
+void MainComponent::saveCurrentVoice()
+{
+    if (! engine.getInstrument().isLoaded())
+        return;
+
+    auto* window = new juce::AlertWindow ("Save voice",
+                                          "Name this sound as the rig should list it.",
+                                          juce::MessageBoxIconType::NoIcon, this);
+
+    window->addTextEditor ("name", settings.instrumentVoice, "Name");
+    window->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+
+    window->enterModalState (true, juce::ModalCallbackFunction::create (
+        [this, window] (int choice)
+        {
+            const auto name = window->getTextEditorContents ("name").trim();
+            std::unique_ptr<juce::AlertWindow> owned (window);
+
+            if (choice != 1 || name.isEmpty())
+                return;
+
+            juce::String error;
+
+            if (! engine.getInstrument().saveVoice (name, error))
+            {
+                songPanel.showFailure ("Could not save the voice.\n\n" + error);
+                return;
+            }
+
+            settings.instrumentVoice = name;
+            refreshVoiceList (name);
+            saveSettings();
+        }), false);
+}
+
+void MainComponent::deleteSelectedVoice()
+{
+    const int index = instrumentControls.voiceBox.getSelectedId() - 1;
+
+    if (! juce::isPositiveAndBelow (index, voiceList.size()) || ! voiceList[index].removable)
+        return;
+
+    const auto voice = voiceList[index];
+
+    juce::AlertWindow::showOkCancelBox (
+        juce::MessageBoxIconType::QuestionIcon,
+        "Delete " + voice.name + "?",
+        "The voice leaves the list and its file goes to the Trash. "
+        "The sound the instrument is making now does not change.",
+        "Delete", "Keep", this,
+        juce::ModalCallbackFunction::create ([this, voice] (int choice)
+        {
+            if (choice != 1)
+                return;
+
+            voice.file.moveToTrash();
+
+            if (settings.instrumentVoice == voice.name)
+                settings.instrumentVoice.clear();
+
+            refreshVoiceList (settings.instrumentVoice);
+            saveSettings();
+        }));
 }
 
 void MainComponent::openPluginWindow()

@@ -132,6 +132,12 @@ int main (int argc, char* argv[])
         }
 
         // An effect selected, to check the editor panel lays its controls out.
+        // Apple's own sampler stands in for whatever the player loads: the
+        // keys row is only its full self with an instrument on it, and the
+        // voice line under the picker is the half worth checking.
+        if (! main.loadInstrumentForSnapshot ("DLSMusicDevice"))
+            std::printf ("  DLSMusicDevice would not load — keys row shot without one\n");
+
         main.selectFxForSnapshot();
 
         juce::Image expanded (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);

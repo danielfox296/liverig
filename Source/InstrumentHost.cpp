@@ -450,13 +450,179 @@ void InstrumentHost::restore (const juce::String& name, const juce::String& stat
     juce::MemoryBlock block;
 
     if (block.fromBase64Encoding (stateBase64))
-        owned->setStateInformation (block.getData(), (int) block.getSize());
+        withPluginParked ([&block] (juce::AudioPluginInstance& p)
+                          { p.setStateInformation (block.getData(), (int) block.getSize()); });
+}
+
+void InstrumentHost::withPluginParked (const std::function<void (juce::AudioPluginInstance&)>& work)
+{
+    auto* plugin = owned.get();
+
+    if (plugin == nullptr)
+        return;
+
+    auto* wasLive = live.load (std::memory_order_seq_cst);
+    live.store (nullptr, std::memory_order_seq_cst);
+
+    // A callback already inside processBlock finishes with the instrument it
+    // still holds; one that has not started yet reads the null and passes.
+    // The wait is bounded — a stalled device must not freeze the window.
+    for (int i = 0; i < 400 && inProcess.load (std::memory_order_seq_cst); ++i)
+        juce::Thread::sleep (1);
+
+    work (*plugin);
+
+    if (wasLive != nullptr)
+        live.store (plugin, std::memory_order_seq_cst);
+}
+
+//==============================================================================
+// Where macOS keeps Audio Unit presets: <root>/<manufacturer>/<plugin>/. The
+// manufacturer folder is the plugin's idea of its own name and rarely the
+// string the description carries, so the plugin folder is matched by name
+// and the level above it simply walked.
+static void collectPresetFiles (const juce::File& root, const juce::String& pluginName,
+                                juce::Array<juce::File>& out)
+{
+    if (! root.isDirectory())
+        return;
+
+    for (const auto& maker : juce::RangedDirectoryIterator (root, false, "*", juce::File::findDirectories))
+        for (const auto& plug : juce::RangedDirectoryIterator (maker.getFile(), false, "*",
+                                                               juce::File::findDirectories))
+            if (plug.getFile().getFileName().equalsIgnoreCase (pluginName))
+                plug.getFile().findChildFiles (out, juce::File::findFiles, true, "*.aupreset");
+}
+
+juce::File InstrumentHost::voicesDir() const
+{
+    const auto root = voicesRootOverride != juce::File()
+                        ? voicesRootOverride
+                        : juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                             .getChildFile ("Application Support")
+                             .getChildFile ("LiveRig")
+                             .getChildFile ("Voices");
+
+    return root.getChildFile (juce::File::createLegalFileName (loadedName));
+}
+
+juce::Array<InstrumentHost::Voice> InstrumentHost::getVoices() const
+{
+    juce::Array<Voice> voices;
+
+    if (owned == nullptr)
+        return voices;
+
+    // The plugin's own presets, when it has more than the one placeholder
+    // slot every AU reports. A list of one is not a choice.
+    if (owned->getNumPrograms() > 1)
+        for (int i = 0; i < owned->getNumPrograms(); ++i)
+            voices.add ({ owned->getProgramName (i), i, {}, false });
+
+    juce::Array<juce::File> files;
+
+    for (const auto& root : { juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+                                 .getChildFile ("Library/Audio/Presets"),
+                              juce::File ("/Library/Audio/Presets") })
+        collectPresetFiles (root, loadedName, files);
+
+    for (const auto& f : files)
+        voices.add ({ f.getFileNameWithoutExtension(), -1, f, false });
+
+    // The rig's own, last and removable: what the player saved from here.
+    juce::Array<juce::File> mine;
+    voicesDir().findChildFiles (mine, juce::File::findFiles, false, "*.aupreset");
+
+    for (const auto& f : mine)
+        voices.add ({ f.getFileNameWithoutExtension(), -1, f, true });
+
+    return voices;
+}
+
+bool InstrumentHost::setVoice (const Voice& voice, juce::String& error)
+{
+    if (owned == nullptr)
+    {
+        error = "no instrument loaded";
+        return false;
+    }
+
+    if (voice.program >= 0)
+    {
+        withPluginParked ([&voice] (juce::AudioPluginInstance& p)
+                          { p.setCurrentProgram (voice.program); });
+        return true;
+    }
+
+    juce::MemoryBlock block;
+
+    if (! voice.file.loadFileAsData (block) || block.getSize() == 0)
+    {
+        error = "could not read " + voice.file.getFileName();
+        return false;
+    }
+
+    // An .aupreset is the same class-info property list a plugin hands over
+    // as its state, which is why it can go straight back in.
+    withPluginParked ([&block] (juce::AudioPluginInstance& p)
+                      { p.setStateInformation (block.getData(), (int) block.getSize()); });
+    return true;
+}
+
+bool InstrumentHost::saveVoice (const juce::String& name, juce::String& error)
+{
+    if (owned == nullptr)
+    {
+        error = "no instrument loaded";
+        return false;
+    }
+
+    const auto clean = juce::File::createLegalFileName (name.trim());
+
+    if (clean.isEmpty())
+    {
+        error = "a voice needs a name";
+        return false;
+    }
+
+    const auto dir = voicesDir();
+
+    if (! dir.createDirectory())
+    {
+        error = "could not make " + dir.getFullPathName();
+        return false;
+    }
+
+    juce::MemoryBlock block;
+    owned->getStateInformation (block);
+
+    const auto file = dir.getChildFile (clean + ".aupreset");
+
+    if (! file.replaceWithData (block.getData(), block.getSize()))
+    {
+        error = "could not write " + file.getFileName();
+        return false;
+    }
+
+    return true;
 }
 
 void InstrumentHost::process (const NoteEvent* events, int numEvents,
                               float* left, float* right, int numSamples, float gain) noexcept
 {
-    auto* plugin = live.load (std::memory_order_acquire);
+    // Claim the plugin before reading the pointer, so a message thread that
+    // parks it either sees this callback and waits, or is seen by it and
+    // hands over a null. Sequential consistency is what makes those two
+    // orderings agree; one fence a block is nothing.
+    inProcess.store (true, std::memory_order_seq_cst);
+
+    struct Release
+    {
+        std::atomic<bool>& flag;
+        ~Release() { flag.store (false, std::memory_order_seq_cst); }
+    } release { inProcess };
+
+    auto* plugin = live.load (std::memory_order_seq_cst);
 
     if (plugin == nullptr || numSamples > scratch.getNumSamples())
         return;
