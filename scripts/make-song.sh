@@ -5,7 +5,7 @@
 # Splits an audio file into Demucs 4-stem parts and lays them out the way
 # LiveRig expects:
 #
-#   /Users/fox296/LiveRig/Songs/<song-name>/{drums,bass,other,vocals}.wav
+#   $HOME/LiveRig/Songs/<song-name>/{drums,bass,other,vocals}.wav
 #
 # Prints that folder path on stdout when it finishes; progress goes to stderr,
 # so `open "$(make-song.sh track.mp3 'Sway')"` works.
@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-RIG_ROOT="/Users/fox296/LiveRig"
+RIG_ROOT="$HOME/LiveRig"
 SONGS_DIR="$RIG_ROOT/Songs"
 VENV_DIR="$RIG_ROOT/venv"
 MODEL="htdemucs"
@@ -28,7 +28,7 @@ if [ "$#" -ne 2 ]; then
 usage: make-song.sh <input-audio> <song-name>
 
   <input-audio>  the mixed file to split (mp3, wav, m4a, flac...)
-  <song-name>    folder name to create under /Users/fox296/LiveRig/Songs
+  <song-name>    folder name to create under ~/LiveRig/Songs
 
 example:
   ./make-song.sh ~/Downloads/suno-take-3.mp3 "Fly Me To The Moon"

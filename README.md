@@ -104,7 +104,7 @@ All parameters, the last song, the audio device choice and which effects are
 open are saved to `~/Library/Application Support/LiveRig/settings.json` and
 restored on launch. Both kinds of preset live beside it in `presets.json`.
 
-Songs live in `/Users/fox296/LiveRig/Songs/<song name>/`, four WAVs named
+Songs live in `~/LiveRig/Songs/<song name>/`, four WAVs named
 `drums`, `bass`, `other`, `vocals`. Anything with that shape loads, so you can
 drop stems in by hand if you have them from somewhere else.
 
@@ -536,13 +536,13 @@ The CMake workaround becomes a no-op once that directory is gone.
 
 ## Under the hood: the splitter
 
-The app installs Demucs into `/Users/fox296/LiveRig/venv` and calls it there,
+The app installs Demucs into `~/LiveRig/venv` and calls it there,
 so nothing is added to your system Python. If you would rather do it by hand:
 
 ```bash
-python3 -m venv /Users/fox296/LiveRig/venv
-/Users/fox296/LiveRig/venv/bin/pip install --upgrade pip
-/Users/fox296/LiveRig/venv/bin/pip install demucs numpy
+python3 -m venv ~/LiveRig/venv
+~/LiveRig/venv/bin/pip install --upgrade pip
+~/LiveRig/venv/bin/pip install demucs numpy
 ```
 
 `numpy` is listed explicitly because demucs 4.1.0 imports it but forgot to

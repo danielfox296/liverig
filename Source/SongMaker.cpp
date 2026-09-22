@@ -14,14 +14,23 @@ SongMaker::~SongMaker()
     stopThread (4000);
 }
 
+// ~/LiveRig for whoever is logged in: the song library and the splitter live
+// side by side in the player's own home, so a copy of the app handed to
+// another Mac finds its feet without being told whose it was.
+static juce::File rigRoot()
+{
+    return juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+              .getChildFile ("LiveRig");
+}
+
 juce::File SongMaker::songsDir()
 {
-    return juce::File ("/Users/fox296/LiveRig/Songs");
+    return rigRoot().getChildFile ("Songs");
 }
 
 juce::File SongMaker::venvDir()
 {
-    return juce::File ("/Users/fox296/LiveRig/venv");
+    return rigRoot().getChildFile ("venv");
 }
 
 juce::File SongMaker::demucsExecutable()

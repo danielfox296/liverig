@@ -6,7 +6,7 @@
 # through make-song.sh. The song name is the filename minus its extension
 # and minus junk suffixes like "(Official Audio)" or "[Lyric Video]".
 #
-# Songs that already have all four stems under /Users/fox296/LiveRig/Songs
+# Songs that already have all four stems under ~/LiveRig/Songs
 # are skipped, so the batch can be interrupted and re-run, and new files
 # dropped into the folder are picked up by the next run.
 #
@@ -17,7 +17,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MAKE_SONG="$SCRIPT_DIR/make-song.sh"
-SONGS_DIR="/Users/fox296/LiveRig/Songs"
+SONGS_DIR="$HOME/LiveRig/Songs"
 SRC_DIR="${1:-$HOME/Downloads/YoutubeToMp3}"
 
 say() { printf '%s\n' "$*" >&2; }
