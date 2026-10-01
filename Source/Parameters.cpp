@@ -188,6 +188,23 @@ int paramIndexForId (juce::StringRef id) noexcept
     return -1;
 }
 
+int channelSlotForKey (const juce::String& channelKey) noexcept
+{
+    if (channelKey == "bass")   return 0;
+    if (channelKey == "mic")    return 1;
+    if (channelKey == "keys")   return 2;
+
+    if (channelKey.startsWith ("ch"))
+    {
+        const int slot = channelKey.substring (2).getIntValue() - 1;
+
+        if (slot >= 3 && slot < ParamStore::maxChannels)
+            return slot;
+    }
+
+    return -1;
+}
+
 ParamStore::ParamStore()
 {
     resetToDefaults();

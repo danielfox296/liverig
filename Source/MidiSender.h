@@ -27,6 +27,10 @@ public:
     MidiSender();
     ~MidiSender() override;
 
+    // The port's name, as every other program — and this one's own input
+    // list — sees it.
+    static constexpr const char* portName = "LiveRig";
+
     // --- message thread ---
     bool open();
     void close();

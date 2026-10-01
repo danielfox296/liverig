@@ -119,6 +119,11 @@ constexpr bool isChannelParam (int paramId) noexcept
              || paramId == pLiveOut || paramId == pLiveMute;
 }
 
+// Which knob copies a channel key names: the first three strips carry the
+// legacy names, generic channels wear their slot in their key ("ch4" is
+// slot 3). -1 if the key is no channel's.
+int channelSlotForKey (const juce::String& channelKey) noexcept;
+
 class ParamStore
 {
 public:

@@ -5,6 +5,7 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 
 #include "EffectSlot.h"
+#include "FootControl.h"
 #include "FxChain.h"
 #include "InstrumentHost.h"
 #include "MidiSender.h"
@@ -30,6 +31,7 @@ public:
 
     juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
     MidiSender& getMidi() noexcept                        { return midi; }
+    FootEngine& getFoot() noexcept                        { return foot; }
     InstrumentHost& getInstrument() noexcept              { return instrument; }
 
     StemPlayer& getStemPlayer() noexcept                  { return stems; }
@@ -75,10 +77,9 @@ public:
     EffectSlot& getTuneSlot() noexcept                    { return tuneSlot; }
     EffectSlot& getVocoderSlot() noexcept                 { return vocoderSlot; }
 
-    // Every connected MIDI input feeds the rig; Program Change picks the mic
-    // lane the way a foot controller would: 0 both off, 1 autotune, 2
-    // vocoder. Called again periodically so a controller plugged in
-    // mid-session joins.
+    // Every connected MIDI input feeds the rig: what a foot controller sends
+    // goes to the foot map, what a keyboard plays goes to the keys. Called
+    // again periodically so a controller plugged in mid-session joins.
     void enableAllMidiInputs();
 
     double getSampleRate() const noexcept   { return currentRate.load (std::memory_order_relaxed); }
@@ -190,6 +191,9 @@ private:
     // The tracker as a note source. FxChain produces the events; carrying
     // them to a port is the engine's job, not the chain's.
     MidiSender midi;
+
+    // What is under the player's foot, and what each thing there does.
+    FootEngine foot { params };
 
     // An AU instrument played by the same notes, summed into the live lane
     // so it counts as part of the performance rather than as backing.

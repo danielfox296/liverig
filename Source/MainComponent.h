@@ -8,6 +8,7 @@
 #include "SettingsStore.h"
 #include "SongMaker.h"
 #include "ui/EqView.h"
+#include "ui/FootView.h"
 #include "ui/MidiStatusView.h"
 #include "ui/SongMakerPanel.h"
 #include "ui/TunerView.h"
@@ -18,7 +19,8 @@ namespace rig
 
 class MainComponent : public juce::Component,
                       private juce::Timer,
-                      private juce::ListBoxModel
+                      private juce::ListBoxModel,
+                      private juce::AsyncUpdater
 {
 public:
     MainComponent (ParamStore& params, AudioEngine& engine, SettingsStore& settings);
@@ -39,6 +41,9 @@ public:
     void selectVocoderForSnapshot();
     void selectKeysForSnapshot();
     void showTunerForSnapshot();
+    void showFootForSnapshot();
+    int checkFootFunctionsForSnapshot();
+    int exerciseFootForSnapshot();
     void showJobStripForSnapshot();
 
     // What the instrument picker actually offers — an empty box was the bug.
@@ -46,6 +51,7 @@ public:
 
 private:
     void timerCallback() override;
+    void handleAsyncUpdate() override;
 
     int getNumRows() override;
     void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override;
@@ -64,6 +70,7 @@ private:
     void selectChannel (const juce::String& channelKey);
     void refreshStripSelection();
     juce::Array<int> visibleFxIndices() const;
+    juce::Array<int> visibleFxIndicesFor (const juce::String& channelKey) const;
     static juce::String channelOfKey (const juce::String& key);
     static int slotOf (const juce::String& channelKey);
     void renumberFxTitles();
@@ -96,13 +103,25 @@ private:
 
     void refreshPresetList (const juce::String& selectName = {});
     juce::String presetKeyFor (const juce::String& displayName) const;
+    juce::String presetKeyFor (const juce::String& channelKey, const juce::String& displayName) const;
+    juce::StringArray presetNamesFor (const juce::String& channelKey) const;
     juce::String channelDisplayName() const;
+    juce::String channelDisplayNameFor (const juce::String& channelKey) const;
     juce::Array<int> channelParamIds() const;
     juce::Array<int> applicableParamIds() const;
+    juce::Array<int> applicableParamIdsFor (const juce::String& channelKey) const;
     void applySelectedPreset();
+    bool recallPreset (const juce::String& channelKey, const juce::String& displayName);
     void saveCurrentPreset();
     void deleteSelectedPreset();
     void refreshAllControls();
+
+    // The foot tab's two questions for the window — what can the rig do,
+    // and what is that called — and the commands a foot sends back.
+    void buildFootMenu (juce::PopupMenu& menu, const FootView::Chooser& choose) const;
+    juce::String describeFootAction (const juce::String& action) const;
+    juce::String footParamName (int paramId) const;
+    void runFootCommand (const juce::String& command);
 
     void chooseAmpCapture();
     void refreshAmpControls();
@@ -343,6 +362,7 @@ private:
     std::vector<FxDef> fxDefs;
     FxEditor fxEditor { uiParams, presets };
     TunerView tunerView;
+    FootView footView { params, engine.getFoot() };
     juce::TabbedComponent editorTabs { juce::TabbedButtonBar::TabsAtTop };
     int selectedFx = -1;
 
@@ -362,6 +382,7 @@ private:
     int saveCounter = 0;
     int pendingLoopIn = -1;
     int lastMicLanes = -1;
+    juce::uint32 lastFootSerial = 0;
     int midiInputRefresh = 0;
     int lastSlotFailures = 0;
 

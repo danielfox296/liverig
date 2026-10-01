@@ -91,6 +91,36 @@ public:
             return;
         }
 
+        // The same fader with two caps: a range, lit between its ends.
+        if (style == juce::Slider::TwoValueHorizontal)
+        {
+            const float centreY = (float) y + (float) height * 0.5f;
+            const float trackHeight = 6.0f;
+
+            const juce::Rectangle<float> track ((float) x, centreY - trackHeight * 0.5f,
+                                                (float) width, trackHeight);
+            g.setColour (juce::Colour (0xff2a2c33));
+            g.fillRoundedRectangle (track, trackHeight * 0.5f);
+
+            g.setColour (juce::Colour (0xffd87b3a));
+            g.fillRoundedRectangle (track.withLeft (minSliderPos).withRight (maxSliderPos), trackHeight * 0.5f);
+
+            const float thumbWidth = 11.0f;
+            const float thumbHeight = juce::jmin (22.0f, (float) height - 2.0f);
+
+            for (const float pos : { minSliderPos, maxSliderPos })
+            {
+                g.setColour (juce::Colour (0xffe8e8ea));
+                g.fillRoundedRectangle ({ pos - thumbWidth * 0.5f, centreY - thumbHeight * 0.5f,
+                                          thumbWidth, thumbHeight }, 3.0f);
+                g.setColour (juce::Colour (0xff101114));
+                g.drawLine (pos, centreY - thumbHeight * 0.5f + 5.0f,
+                            pos, centreY + thumbHeight * 0.5f - 5.0f, 1.0f);
+            }
+
+            return;
+        }
+
         if (style != juce::Slider::LinearVertical)
         {
             LookAndFeel_V4::drawLinearSlider (g, x, y, width, height, sliderPos,

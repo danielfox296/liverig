@@ -86,6 +86,8 @@ Everything happens in the window. There is nothing to run in a terminal.
   100 ms. Big note name, cents needle with a green in-tune zone, and a
   string row for reference — the BASS/GUITAR switch picks which strings are
   drawn, and is remembered. Tap any effect row to come back to the editor.
+  **FOOT** is where a foot controller is taught what to do — see
+  [The foot controller](#the-foot-controller).
 - **Master** is the last row: one gain over the whole mix — stems and live
   summed — feeding an always-on safety limiter. When the limiter is working,
   an orange **LIM** readout appears beside the master meter with the dB it is
@@ -102,7 +104,8 @@ jumps straight there. Everything double-clicks back to its default.
 
 All parameters, the last song, the audio device choice and which effects are
 open are saved to `~/Library/Application Support/LiveRig/settings.json` and
-restored on launch. Both kinds of preset live beside it in `presets.json`.
+restored on launch. Both kinds of preset live beside it in `presets.json`,
+and the foot controller's map in `foot.json`.
 
 Songs live in `~/LiveRig/Songs/<song name>/`, four WAVs named
 `drums`, `bass`, `other`, `vocals`. Anything with that shape loads, so you can
@@ -323,9 +326,101 @@ MIDI-gated even with an external carrier. All of that was measured, not
 read, and your own saved state always wins over it.
 
 The lanes are MIDI-mapped out of the box: **Program Change 0/1/2** from any
-connected controller is silence / autotune / vocoder — foot-controller
-shaped, nothing to configure, controllers plugged in mid-session picked up
-within seconds. Both switches can also be stacked by hand in the UI.
+connected controller is silence / autotune / vocoder — nothing to configure,
+controllers plugged in mid-session picked up within seconds. That mapping is
+no longer wired in; it is the layout the FOOT tab starts with, and it can be
+changed there like any other. Both switches can also be stacked by hand in
+the UI.
+
+### The foot controller
+
+The **FOOT** tab maps whatever is under your foot to whatever the rig can
+do, in two layers that can each be swapped without touching the other.
+
+**Controls** are the things under the foot, by name. **ADD A FOOT
+CONTROL...**, then step on it: the rig captures what it sent instead of
+obeying it, and a card appears. A card shows the name (double-click to
+retype it), what the control sends, and a lamp that lights when it is
+stepped on. Three things arrive from a foot controller and each is its own
+kind of control:
+
+- a **program change** — a preset button. It fires once; there is no "off".
+- a **controller that is 127 or 0** — a switch. *Latching* is a switch that
+  keeps its own light (each press alternates lit and dark); *Momentary* is
+  down while held. Learning guesses which from what it heard, and the menu on
+  the card corrects it.
+- a **controller that sweeps** — an *Expression* pedal.
+
+MIDI Start, Stop and Continue can be learned too.
+
+**Jobs** are what a control does. The **+** on a card opens the rig as a
+menu — every strip on the rail, every pedal on its board, each pedal's
+switch and each of its knobs, a strip's presets, the song's transport, loop
+tap and stems, the master, MIDI panic. A control can carry as many jobs as
+you give it, so one preset button can set a whole scene: drive on, chorus
+off, delay mix to 0.25. What a job's control looks like depends on what it
+moves:
+
+- a **switch** (an effect's ON, a mute) takes *Follows it* (on while the
+  pedal is lit, held, or past half way — the one that keeps the pedal's
+  light and the rig in agreement), *Turns on*, *Turns off*, or *Flips*;
+- a **knob** takes a fader with two caps: where it sits with the pedal up
+  and where with it down, and the pedal sweeps between. Right-click a row
+  for **Swap ends**. From a preset button the fader has one cap — the value
+  the press sends it to;
+- a **command** (play/stop, loop tap, recall a preset, panic) just happens
+  on the press.
+
+Right-click a job to remove it; right-click a card to remove the control or
+**Learn again**.
+
+**Layouts** are named sets of jobs — the box at the top of the tab. The
+controls stay; what they do changes. **Copy** starts a new layout from the
+one in force, typing a new name renames it, and *Switch foot layout* is
+itself a job, so one switch can change what all the others mean.
+
+That is the interchangeable part. A different song or a different gig is a
+different layout over the same controls. A different controller — or the
+same one reprogrammed, or moved to another MIDI channel — is **Learn again**
+on each card, and every layout still does what it did.
+
+**Listening to** narrows the tab to one MIDI input; *Any controller* hears
+them all. **Last heard** shows the most recent thing any controller sent,
+obeyed or not — the first thing to look at when a pedal seems dead.
+
+When the foot switches on a pedal that is not on its strip's board, the
+pedal joins the board, the same way a preset's pedals do.
+
+#### The Ground Control
+
+The Digital Music Corp Ground Control (1998) is a 5-pin MIDI device: its
+**MIDI Out** goes to the interface's **MIDI In**, and it needs its own power
+adaptor — the phantom power it can take over the MIDI cable comes from a GCX
+switcher or a 7-pin box, never from an audio interface. What it sends, from
+its manual:
+
+- **Preset buttons** send program changes, one per "device" it has been told
+  about, each on that device's MIDI channel. It drops repeats: pressing the
+  preset you are already on sends nothing, and neither does a new preset
+  that asks for the same program. So presets are scenes (*Turns on* / *Turns
+  off* / a value), not toggles — *Flips* on a preset button will skip
+  presses.
+- In **Bank4** preset mode the upper row (5–9 and 0) becomes six
+  **instant-access** buttons, each of which can be set in its Setup mode to
+  send a controller as 127 / 0 with its LED following. Those are *Latching*
+  switches here, and *Follows it* keeps the LED honest.
+- **Two expression inputs** take ordinary passive guitar volume pedals,
+  enabled and calibrated in Setup mode, and send any controller 0–120.
+  Which controller is stored per preset, so a pedal can change what it
+  sends when the preset changes. Keep them on a controller: it can also
+  send pitch bend or aftertouch, and those are not learned as foot controls
+  (pitch bend goes to the keys).
+- A button can also be set to **sequencer start/stop**, which arrives as
+  MIDI Start and Stop.
+
+Its display counts programs from 1 unless told otherwise ("STARTS AT 01"),
+so its preset 21 arrives here as program change 20. The cards show what is
+on the wire.
 
 ### Hosted plugins
 
@@ -600,8 +695,18 @@ Measured on the separated bass of a real Suno track: notes sounding in 28% of
 the first minute, 94% of those frames tracked confidently, and the octave
 landed within 30 cents in 41 of 42 half-second windows.
 
+`rig_tests --foot` runs the foot map alone, in under a second: a lit switch
+that the rig follows, a held one, a pedal's sweep and its one press on the
+way up, a preset button setting a scene across channels, layouts trading
+jobs, learning that captures instead of obeying, and a map file that
+survives being saved, damaged or missing.
+
 `rig_uishot <dir>` renders the window to PNGs offscreen, so layout can be
-checked without a person having to look at a running app.
+checked without a person having to look at a running app. It also proves
+that every function the foot menu offers is one the engine can carry out,
+and walks the FOOT tab the way a player would — learn, give jobs, press,
+learn again, copy and switch layouts, remove — without a mouse, a pedal, or
+a write to the real `foot.json`.
 
 ---
 

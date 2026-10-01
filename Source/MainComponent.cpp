@@ -278,7 +278,21 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     editorTabs.setOutline (0);
     editorTabs.addTab ("EFFECT", juce::Colour (0xff101114), &fxEditor, false);
     editorTabs.addTab ("TUNER", juce::Colour (0xff101114), &tunerView, false);
+    editorTabs.addTab ("FOOT", juce::Colour (0xff101114), &footView, false);
     addAndMakeVisible (editorTabs);
+
+    // The foot tab asks the window what the rig can do and what to call it;
+    // the map it edits is kept beside the settings. Commands from a foot
+    // arrive on the MIDI thread and are carried out here, on this one.
+    footView.buildFunctionMenu = [this] (juce::PopupMenu& menu, const FootView::Chooser& choose)
+    {
+        buildFootMenu (menu, choose);
+    };
+    footView.describeAction = [this] (const juce::String& action) { return describeFootAction (action); };
+    footView.onEdited = [this] { engine.getFoot().getMap().saveTo (FootMap::getFile()); };
+    footView.hiddenDevices.add (MidiSender::portName);
+    footView.reload();   // the rail exists now, so the jobs can be named
+    engine.getFoot().setCommandNotifier ([this] { triggerAsyncUpdate(); });
     fxEditor.clear();
 
     tunerView.setBassMode (settings.tuner != "guitar");
@@ -428,6 +442,8 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
 MainComponent::~MainComponent()
 {
+    engine.getFoot().setCommandNotifier (nullptr);
+    cancelPendingUpdate();
     stopTimer();
 }
 
@@ -616,6 +632,189 @@ void MainComponent::showTunerForSnapshot()
     tunerView.update (55.3f, 1.0f, 0.2f);   // a slightly sharp low A
 }
 
+// The foot tab with a Ground Control's worth of things on it: a preset
+// button, a lit instant-access switch and a volume pedal, mid-press.
+void MainComponent::showFootForSnapshot()
+{
+    FootMap map;
+
+    const auto control = [&map] (const char* name, FootTrigger::Type type, int channel, int number,
+                                 FootControl::Kind kind)
+    {
+        FootControl c;
+        c.id = map.freshControlId();
+        c.name = name;
+        c.trigger = { type, channel, number };
+        c.kind = kind;
+        map.controls.push_back (c);
+        return c.id;
+    };
+
+    const auto verse = control ("Verse", FootTrigger::program, 1, 0, FootControl::preset);
+    const auto dirt = control ("Dirt", FootTrigger::controller, 16, 80, FootControl::latch);
+    const auto wah = control ("Volume pedal", FootTrigger::controller, 1, 7, FootControl::sweep);
+    const auto go = control ("Start", FootTrigger::start, 0, 0, FootControl::preset);
+
+    FootLayout layout;
+    layout.name = "Set one";
+    layout.jobs = {
+        { verse, "bass/odOn",    FootJob::off,    0.0f, 1.0f },
+        { verse, "bass/chOn",    FootJob::on,     0.0f, 1.0f },
+        { verse, "bass/dlMix",   FootJob::follow, 0.25f, 0.25f },
+        { dirt,  "bass/odOn",    FootJob::follow, 0.0f, 1.0f },
+        { wah,   "bass/dlMix",   FootJob::follow, 0.1f, 0.6f },
+        { wah,   "mic/vocoderLvl", FootJob::follow, 0.0f, -24.0f },
+        { go,    "do/play",      FootJob::follow, 0.0f, 1.0f },
+    };
+
+    map.layouts = { layout, { "Set two", {} } };
+    map.active = layout.name;
+
+    engine.getFoot().setMap (map);
+    footView.reload();
+    engine.getFoot().handleMidi ("Scarlett 4i4 USB", juce::MidiMessage::controllerEvent (1, 7, 90));
+    engine.getFoot().handleMidi ("Scarlett 4i4 USB", juce::MidiMessage::controllerEvent (16, 80, 127));
+    footView.tick();
+    editorTabs.setCurrentTabIndex (2);
+}
+
+// Every function the foot menu offers must be one the engine can carry out
+// and the tab can name; a menu item that does nothing is a dead switch on
+// stage. Returns how many are not.
+int MainComponent::checkFootFunctionsForSnapshot()
+{
+    juce::StringArray actions;
+    juce::PopupMenu menu;
+    buildFootMenu (menu, [&actions] (const juce::String& action) { actions.add (action); });
+
+    for (juce::PopupMenu::MenuItemIterator it (menu, true); it.next();)
+        if (auto& item = it.getItem(); item.action != nullptr && item.subMenu == nullptr)
+            item.action();
+
+    int problems = actions.isEmpty() ? 1 : 0;
+
+    for (const auto& action : actions)
+    {
+        FootParamTarget target;
+        const bool runs = isFootCommand (action) || parseFootParamAction (action, target);
+
+        if (! runs || describeFootAction (action) == action)
+        {
+            std::printf ("  DEAD FOOT FUNCTION %s\n", action.toRawUTF8());
+            ++problems;
+        }
+    }
+
+    std::printf ("  foot menu offers %d functions\n", actions.size());
+    return problems;
+}
+
+// The foot tab used the way a player would use it, with no mouse and no
+// hardware: learn a switch, give it jobs, press it, turn it into a pedal,
+// learn it again as something else, copy the layout, switch layouts by
+// foot, take it all away. Nothing is written to the real map file. Returns
+// how many things did not happen.
+int MainComponent::exerciseFootForSnapshot()
+{
+    auto& foot = engine.getFoot();
+    const auto cc = [] (int ch, int n, int v) { return juce::MidiMessage::controllerEvent (ch, n, v); };
+
+    int problems = 0, kept = 0;
+    const auto expect = [&problems] (bool ok, const char* what)
+    {
+        if (! ok)
+        {
+            std::printf ("  FOOT TAB: %s\n", what);
+            ++problems;
+        }
+    };
+
+    auto keeper = std::move (footView.onEdited);
+    footView.onEdited = [&kept] { ++kept; };
+
+    foot.setMap (FootMap::factory());
+    footView.reload();
+    const auto& map = footView.getMap();
+
+    footView.learnTapped ({});
+    foot.handleMidi ("box", cc (16, 80, 127), 0);
+    footView.tick();
+    expect (map.controls.size() == 4 && map.controls.back().kind == FootControl::latch
+              && map.controls.back().name == "Switch 80" && ! foot.isLearning(),
+            "a learned switch did not become a card");
+
+    footView.learnTapped ({});
+    foot.handleMidi ("box", cc (16, 80, 0), 0);
+    footView.tick();
+    expect (map.controls.size() == 4, "the same wire learned twice made a second card");
+
+    const auto id = map.controls.back().id;
+    const int base = (int) map.activeLayout()->jobs.size();
+
+    params.set (pDriveOn, 0.0f);
+    footView.addJob (id, "bass/odOn");
+    foot.handleMidi ("box", cc (16, 80, 127));
+    expect (params.getBool (pDriveOn), "a new switch job did not follow the press");
+
+    footView.setVerb (base, FootJob::off);
+    foot.handleMidi ("box", cc (16, 80, 0));
+    expect (! params.getBool (pDriveOn), "Turns off did not turn off");
+
+    footView.setKind (id, FootControl::sweep);
+    footView.addJob (id, "bass/dlMix");
+    foot.handleMidi ("box", cc (16, 80, 127));
+    expect (params.get (pDelayMix) == spec (pDelayMix).maxValue, "a new knob job did not sweep its whole travel");
+
+    footView.setRange (base + 1, 0.2f, 0.4f);
+    footView.swapEnds (base + 1);
+    foot.handleMidi ("box", cc (16, 80, 0));
+    expect (std::abs (params.get (pDelayMix) - 0.4f) < 1.0e-5f, "swapped ends did not swap");
+
+    footView.learnTapped (id);
+    foot.handleMidi ("box", juce::MidiMessage::programChange (1, 5), 0);
+    footView.tick();
+    expect (map.controls.size() == 4 && map.controls.back().trigger.type == FootTrigger::program
+              && map.controls.back().kind == FootControl::preset
+              && (int) map.activeLayout()->jobs.size() == base + 2,
+            "learning a control again lost it or its jobs");
+
+    footView.addJob (id, "do/layout:Default 2");
+    footView.copyLayout();
+    expect (map.layouts.size() == 2 && map.active == "Default 2"
+              && foot.getActiveLayout() == "Default 2"
+              && map.activeLayout()->jobs.size() == map.layouts.front().jobs.size(),
+            "copying a layout did not copy it");
+
+    footView.removeJob (base);
+    expect (map.layouts.front().jobs.size() == map.activeLayout()->jobs.size() + 1,
+            "removing a job reached into another layout");
+
+    runFootCommand ("do/layout:Default");
+    expect (map.active == "Default" && foot.getActiveLayout() == "Default", "a foot could not switch layouts");
+
+    foot.handleMidi ("box", juce::MidiMessage::programChange (1, 5));
+    handleAsyncUpdate();
+    expect (map.active == "Default 2", "the switch-layout job did not carry through");
+
+    footView.deleteLayout ("Default 2");
+    expect (map.layouts.size() == 1 && map.active == "Default"
+              && (int) map.activeLayout()->jobs.size() == base + 2,
+            "deleting a layout left it, or left a job pointing at it");
+
+    footView.renameControl (id, "Chorus scene");
+    footView.removeControl (id);
+    expect (map.controls.size() == 3 && (int) map.activeLayout()->jobs.size() == base,
+            "removing a control left its jobs behind");
+
+    expect (kept > 0 && juce::JSON::toString (foot.getMap().toVar(), false)
+                          == juce::JSON::toString (map.toVar(), false),
+            "the engine and the tab disagree about the map");
+
+    footView.onEdited = std::move (keeper);
+    std::printf ("  foot tab exercised: %d edits kept\n", kept);
+    return problems;
+}
+
 void MainComponent::showJobStripForSnapshot()
 {
     jobStripShowing = true;
@@ -686,6 +885,11 @@ juce::String MainComponent::channelOfKey (const juce::String& key)
 // the tail. The master strip shows only its own row.
 juce::Array<int> MainComponent::visibleFxIndices() const
 {
+    return visibleFxIndicesFor (selectedChannel);
+}
+
+juce::Array<int> MainComponent::visibleFxIndicesFor (const juce::String& channelKey) const
+{
     juce::Array<int> visible;
 
     auto indexOfKey = [this] (const juce::String& key) -> int
@@ -697,19 +901,19 @@ juce::Array<int> MainComponent::visibleFxIndices() const
         return -1;
     };
 
-    if (selectedChannel == "master")
+    if (channelKey == "master")
     {
         visible.add (indexOfKey ("master"));
         return visible;
     }
 
-    auto loaded = juce::StringArray::fromTokens (loadoutFor (selectedChannel), ",", "");
+    auto loaded = juce::StringArray::fromTokens (loadoutFor (channelKey), ",", "");
     loaded.trim();
 
     visible.add (indexOfKey ("input"));
 
     for (const auto* laneKey : { "vocal", "vocoder", "midi", "keys" })
-        if (channelOfKey (laneKey) == selectedChannel && loaded.contains (laneKey))
+        if (channelOfKey (laneKey) == channelKey && loaded.contains (laneKey))
             visible.add (indexOfKey (laneKey));
 
     for (const auto& key : loaded)
@@ -2032,17 +2236,43 @@ void MainComponent::showDeviceSettings()
 // a "channel:" prefix the bar never shows.
 juce::String MainComponent::presetKeyFor (const juce::String& displayName) const
 {
-    return selectedChannel == "bass" ? displayName
-                                     : selectedChannel + ":" + displayName;
+    return presetKeyFor (selectedChannel, displayName);
+}
+
+juce::String MainComponent::presetKeyFor (const juce::String& channelKey, const juce::String& displayName) const
+{
+    return channelKey == "bass" ? displayName
+                                : channelKey + ":" + displayName;
+}
+
+// A channel's presets, by the names its bar shows.
+juce::StringArray MainComponent::presetNamesFor (const juce::String& channelKey) const
+{
+    juce::StringArray display;
+
+    for (const auto& stored : presets.getNames())
+    {
+        if (channelKey == "bass" && ! stored.contains (":"))
+            display.add (stored);
+        else if (stored.startsWith (channelKey + ":"))
+            display.add (stored.fromFirstOccurrenceOf (":", false, false));
+    }
+
+    return display;
 }
 
 juce::String MainComponent::channelDisplayName() const
 {
+    return channelDisplayNameFor (selectedChannel);
+}
+
+juce::String MainComponent::channelDisplayNameFor (const juce::String& channelKey) const
+{
     for (auto* strip : channelStrips)
-        if (strip->getComponentID() == selectedChannel)
+        if (strip->getComponentID() == channelKey)
             return strip->getName();
 
-    return selectedChannel;
+    return channelKey;
 }
 
 // Everything a preset could set on this strip — the anatomy plus every
@@ -2051,16 +2281,21 @@ juce::String MainComponent::channelDisplayName() const
 // pass then pulls the switched-on ones aboard.
 juce::Array<int> MainComponent::applicableParamIds() const
 {
+    return applicableParamIdsFor (selectedChannel);
+}
+
+juce::Array<int> MainComponent::applicableParamIdsFor (const juce::String& channelKey) const
+{
     juce::Array<int> ids;
 
     for (const auto& def : fxDefs)
     {
         const bool lane = isLane (def.key);
-        const bool applies = selectedChannel == "master"
+        const bool applies = channelKey == "master"
                                ? def.key == "master"
                                : def.key == "input" || def.key == "out"
                                    || (isLoadable (def)
-                                        && (! lane || channelOfKey (def.key) == selectedChannel));
+                                        && (! lane || channelOfKey (def.key) == channelKey));
 
         if (! applies)
             continue;
@@ -2109,15 +2344,7 @@ void MainComponent::refreshPresetList (const juce::String& selectName)
     presetBox.clear (juce::dontSendNotification);
     presetBox.setTextWhenNothingSelected (channelDisplayName() + " preset");
 
-    juce::StringArray display;
-
-    for (const auto& stored : presets.getNames())
-    {
-        if (selectedChannel == "bass" && ! stored.contains (":"))
-            display.add (stored);
-        else if (stored.startsWith (selectedChannel + ":"))
-            display.add (stored.fromFirstOccurrenceOf (":", false, false));
-    }
+    const auto display = presetNamesFor (selectedChannel);
 
     for (int i = 0; i < display.size(); ++i)
         presetBox.addItem (display[i], i + 1);
@@ -2132,18 +2359,25 @@ void MainComponent::refreshPresetList (const juce::String& selectName)
 
 void MainComponent::applySelectedPreset()
 {
-    const auto key = presetKeyFor (presetBox.getText());
+    recallPreset (selectedChannel, presetBox.getText());
+}
 
-    if (presets.apply (key, params, applicableParamIds(), slotOf (selectedChannel)))
-    {
-        // Pull aboard anything the preset switched on, then let its saved
-        // sequence wire the board. The amp capture only ever rides bass
-        // presets; elsewhere it comes back void and is a no-op.
-        syncLoadoutFromParams (selectedChannel);
-        applyPresetOrder (selectedChannel, presets.getChainOrder (key));
-        applyAmpCapture (presets.getAmpCapture (key));
-        refreshAllControls();
-    }
+// One channel's preset by name — from its bar, or from a foot.
+bool MainComponent::recallPreset (const juce::String& channelKey, const juce::String& displayName)
+{
+    const auto key = presetKeyFor (channelKey, displayName);
+
+    if (! presets.apply (key, params, applicableParamIdsFor (channelKey), slotOf (channelKey)))
+        return false;
+
+    // Pull aboard anything the preset switched on, then let its saved
+    // sequence wire the board. The amp capture only ever rides bass
+    // presets; elsewhere it comes back void and is a no-op.
+    syncLoadoutFromParams (channelKey);
+    applyPresetOrder (channelKey, presets.getChainOrder (key));
+    applyAmpCapture (presets.getAmpCapture (key));
+    refreshAllControls();
+    return true;
 }
 
 void MainComponent::saveCurrentPreset()
@@ -2184,6 +2418,192 @@ void MainComponent::refreshAllControls()
 
     for (auto* strip : stemStrips)
         strip->refresh();
+}
+
+//==============================================================================
+// What a foot can be given to do. The menu is the rig as it stands: the
+// strips on the rail, the pedals on each board, the song, and the other
+// foot layouts — nothing that is not there.
+juce::String MainComponent::footParamName (int paramId) const
+{
+    const juce::String label (spec (paramId).label);
+
+    // The EQ's fifteen knobs are five bands of the same three names.
+    if (paramId >= pEq1Freq && paramId <= pEq5Q)
+        return "Band " + juce::String ((paramId - pEq1Freq) / 3 + 1) + " " + label.toLowerCase();
+
+    return label;
+}
+
+void MainComponent::buildFootMenu (juce::PopupMenu& menu, const FootView::Chooser& choose) const
+{
+    const auto item = [&choose] (juce::PopupMenu& m, const juce::String& text, const juce::String& action)
+    {
+        m.addItem (text, [choose, action] { choose (action); });
+    };
+
+    const auto isMute = [] (int p) { return p == pInMute || p == pLiveMute || p == pMasterMute; };
+
+    for (auto* strip : channelStrips)
+    {
+        const auto key = strip->getComponentID();
+        juce::PopupMenu channel;
+
+        if (key == "master")
+        {
+            item (channel, "Mute", "rig/masterMute");
+            item (channel, "Gain", "rig/masterGain");
+            menu.addSubMenu (strip->getName(), channel);
+            continue;
+        }
+
+        juce::PopupMenu recall;
+
+        for (const auto& name : presetNamesFor (key))
+            item (recall, name, "do/preset:" + key + ":" + name);
+
+        if (recall.getNumItems() > 0)
+            channel.addSubMenu ("Recall preset", recall);
+
+        for (int index : visibleFxIndicesFor (key))
+        {
+            const auto& def = fxDefs[(size_t) index];
+            juce::PopupMenu fx;
+
+            if (def.onParam >= 0)
+                item (fx, isMute (def.onParam) ? "Mute" : "On / off", key + "/" + spec (def.onParam).id);
+
+            for (int id : def.ids)
+                item (fx, footParamName (id), key + "/" + spec (id).id);
+
+            channel.addSubMenu (def.name, fx);
+        }
+
+        menu.addSubMenu (strip->getName(), channel);
+    }
+
+    juce::PopupMenu song;
+    item (song, "Play / stop", "do/play");
+    item (song, "Loop tap", "do/loop");
+    item (song, "Track level", "rig/trackGain");
+
+    for (int i = 0; i < StemPlayer::numStems; ++i)
+    {
+        const auto stem = juce::String (StemPlayer::stemNames[i]);
+        const auto name = stem.substring (0, 1).toUpperCase() + stem.substring (1);
+        item (song, name + " mute", "rig/stem" + juce::String (i) + "Mute");
+        item (song, name + " level", "rig/stem" + juce::String (i) + "Gain");
+    }
+
+    menu.addSubMenu ("Song", song);
+    item (menu, "MIDI panic", "do/panic");
+
+    const auto layouts = footView.getLayoutNames();
+
+    if (layouts.size() > 1)
+    {
+        juce::PopupMenu switchTo;
+
+        for (const auto& name : layouts)
+            item (switchTo, name, "do/layout:" + name);
+
+        menu.addSubMenu ("Switch foot layout", switchTo);
+    }
+}
+
+juce::String MainComponent::describeFootAction (const juce::String& action) const
+{
+    static const juce::String dot (juce::CharPointer_UTF8 (" \xc2\xb7 "));
+
+    if (action == "do/play")    return "Song" + dot + "Play / stop";
+    if (action == "do/loop")    return "Song" + dot + "Loop tap";
+    if (action == "do/panic")   return "MIDI panic";
+
+    if (action.startsWith ("do/layout:"))
+        return "Foot layout" + dot + action.fromFirstOccurrenceOf (":", false, false);
+
+    if (action.startsWith ("do/preset:"))
+    {
+        const auto rest = action.fromFirstOccurrenceOf (":", false, false);
+        return channelDisplayNameFor (rest.upToFirstOccurrenceOf (":", false, false))
+                 + dot + "Preset" + dot + rest.fromFirstOccurrenceOf (":", false, false);
+    }
+
+    FootParamTarget target;
+
+    if (! parseFootParamAction (action, target))
+        return action;
+
+    const int p = target.param;
+    const auto channelKey = action.upToFirstOccurrenceOf ("/", false, false);
+
+    if (channelKey == "rig")
+    {
+        if (p == pMasterMute)   return "Master" + dot + "Mute";
+        if (p == pMasterGain)   return "Master" + dot + "Gain";
+        if (p == pTrackGain)    return "Song" + dot + "Track level";
+
+        for (int i = 0; i < StemPlayer::numStems; ++i)
+        {
+            const auto stem = juce::String (StemPlayer::stemNames[i]);
+            const auto name = stem.substring (0, 1).toUpperCase() + stem.substring (1);
+
+            if (p == pStemMute0 + i)    return "Song" + dot + name + " mute";
+            if (p == pStemGain0 + i)    return "Song" + dot + name + " level";
+        }
+
+        return footParamName (p);
+    }
+
+    const auto channelName = channelDisplayNameFor (channelKey);
+
+    for (const auto& def : fxDefs)
+    {
+        if (def.onParam == p)
+            return channelName + dot + def.name
+                     + (p == pInMute || p == pLiveMute ? " mute" : "");
+
+        if (std::find (def.ids.begin(), def.ids.end(), p) != def.ids.end())
+            return channelName + dot + def.name + dot + footParamName (p);
+    }
+
+    return channelName + dot + footParamName (p);
+}
+
+void MainComponent::runFootCommand (const juce::String& command)
+{
+    if (command == "do/play")
+    {
+        engine.getStemPlayer().togglePlay();
+    }
+    else if (command == "do/loop")
+    {
+        loopTapped();
+    }
+    else if (command == "do/panic")
+    {
+        engine.getMidi().panic();
+    }
+    else if (command.startsWith ("do/layout:"))
+    {
+        footView.selectLayout (command.fromFirstOccurrenceOf (":", false, false));
+    }
+    else if (command.startsWith ("do/preset:"))
+    {
+        const auto rest = command.fromFirstOccurrenceOf (":", false, false);
+        const auto channelKey = rest.upToFirstOccurrenceOf (":", false, false);
+        const auto name = rest.fromFirstOccurrenceOf (":", false, false);
+
+        // The bar should name what is now playing, if it is this strip's.
+        if (recallPreset (channelKey, name) && channelKey == selectedChannel)
+            refreshPresetList (name);
+    }
+}
+
+void MainComponent::handleAsyncUpdate()
+{
+    for (const auto& command : engine.getFoot().takeCommands())
+        runFootCommand (command);
 }
 
 //==============================================================================
@@ -2630,6 +3050,22 @@ void MainComponent::timerCallback()
     if (micLanes != lastMicLanes)
     {
         lastMicLanes = micLanes;
+        refreshAllControls();
+    }
+
+    // Anything else a foot moved: a pedal it switched on must stand on its
+    // board — a sounding pedal that is not visible would be a lie — and
+    // every row and fader shows where things are now.
+    footView.tick();
+
+    if (const auto footSerial = engine.getFoot().getChangeSerial(); footSerial != lastFootSerial)
+    {
+        lastFootSerial = footSerial;
+
+        for (auto* strip : channelStrips)
+            if (strip->getComponentID() != "master")
+                syncLoadoutFromParams (strip->getComponentID());
+
         refreshAllControls();
     }
 

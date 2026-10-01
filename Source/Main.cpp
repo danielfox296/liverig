@@ -31,6 +31,7 @@ public:
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
         settings.load (params);
+        engine.getFoot().setMap (FootMap::loadFrom (FootMap::getFile()));
 
         std::unique_ptr<juce::XmlElement> deviceState;
 
@@ -67,6 +68,13 @@ public:
             else
                 say ("device: NONE OPEN%s%s\n", error.isEmpty() ? "" : " — ",
                      error.toRawUTF8());
+
+            {
+                const auto foot = engine.getFoot().getMap();
+                say ("foot: %d controls | layout \"%s\" of %d | listening to %s\n",
+                     (int) foot.controls.size(), foot.active.toRawUTF8(), (int) foot.layouts.size(),
+                     foot.device.isEmpty() ? "any controller" : foot.device.toRawUTF8());
+            }
 
             say ("mic path: %s\n", engine.getActiveInputCount() >= 2
                                        ? "input 2 available"

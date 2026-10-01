@@ -52,22 +52,15 @@ void AudioEngine::enableAllMidiInputs()
 
 void AudioEngine::handleIncomingMidiMessage (juce::MidiInput* source, const juce::MidiMessage& message)
 {
-    // The mic lanes, foot-controller shaped: Program Change 0 is silence,
-    // 1 sings through the autotune, 2 makes the bass sing. Values land
-    // straight in the parameter store, which is atomic — no thread
-    // gymnastics. Stacking both lanes stays a hands-on-the-screen choice.
-    if (message.isProgramChange())
-    {
-        switch (message.getProgramChangeNumber())
-        {
-            case 0: params.set (pVocalOn, 0.0f); params.set (pVocoderOn, 0.0f); break;
-            case 1: params.set (pVocalOn, 1.0f); params.set (pVocoderOn, 0.0f); break;
-            case 2: params.set (pVocalOn, 0.0f); params.set (pVocoderOn, 1.0f); break;
-            default: break;
-        }
+    // Presses, switches and sweeps belong to the foot map, which decides
+    // what they mean. Switches and knobs land straight in the parameter
+    // store, which is atomic — no thread gymnastics. The rig's own port
+    // comes back around as an input, and what the tracker says there — its
+    // expression, a panic's all-notes-off — is nobody's foot.
+    const auto from = source != nullptr ? source->getName() : juce::String();
 
+    if (from != MidiSender::portName && foot.handleMidi (from, message))
         return;
-    }
 
     // Played notes head for the instrument. This runs on the MIDI thread:
     // the lock guards only the chosen-device id, never the audio path.

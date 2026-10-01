@@ -28,7 +28,7 @@ bool MidiSender::open()
         if (attempt > 0)
             juce::Thread::sleep (150);
 
-        output = juce::MidiOutput::createNewDevice ("LiveRig");
+        output = juce::MidiOutput::createNewDevice (portName);
     }
 
     if (output == nullptr)

@@ -203,6 +203,19 @@ int main (int argc, char* argv[])
             main.paintEntireComponent (g, true);
         }
         writePng (tuner, outDir.getChildFile ("tuner.png"));
+
+        // The foot tab: controls, their jobs, and the last thing heard.
+        main.showFootForSnapshot();
+
+        juce::Image foot (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
+        {
+            juce::Graphics g (foot);
+            main.paintEntireComponent (g, true);
+        }
+        writePng (foot, outDir.getChildFile ("foot.png"));
+        problems += countBlankButtons (main, "the foot tab");
+        problems += main.checkFootFunctionsForSnapshot();
+        problems += main.exerciseFootForSnapshot();
     }
 
     {

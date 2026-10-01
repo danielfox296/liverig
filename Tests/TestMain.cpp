@@ -16,6 +16,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include "EffectSlot.h"
+#include "FootControl.h"
 #include "FxChain.h"
 #include "InstrumentHost.h"
 #include "PresetStore.h"
@@ -4722,6 +4723,293 @@ static void testChannelParams()
             "flat value landed on slot 0 only");
 }
 
+//==============================================================================
+// The foot map: what a controller sends becomes a named control, and the
+// layout in force says what each control does. Everything here is the wire
+// behaviour of a 1998 Ground Control — program changes for presets, 0/127
+// controllers for its lit instant-access buttons, a volume pedal as a sweep
+// — plus the momentary switch other boxes have.
+static FootControl footControl (const char* id, FootTrigger::Type type, int channel, int number,
+                                FootControl::Kind kind)
+{
+    FootControl c;
+    c.id = id;
+    c.name = id;
+    c.trigger = { type, channel, number };
+    c.kind = kind;
+    return c;
+}
+
+static void testFootControl()
+{
+    std::printf ("\nFoot control\n");
+
+    const auto pc = [] (int ch, int n) { return juce::MidiMessage::programChange (ch, n); };
+    const auto cc = [] (int ch, int n, int v) { return juce::MidiMessage::controllerEvent (ch, n, v); };
+
+    {
+        ParamStore params;
+        FootEngine foot (params);
+
+        foot.handleMidi ("any", pc (1, 1));
+        const bool tune = params.getBool (pVocalOn) && ! params.getBool (pVocoderOn);
+        foot.handleMidi ("any", pc (7, 2));
+        const bool voc = ! params.getBool (pVocalOn) && params.getBool (pVocoderOn);
+        foot.handleMidi ("any", pc (1, 0));
+        const bool none = ! params.getBool (pVocalOn) && ! params.getBool (pVocoderOn);
+
+        report ("out of the box, programs 0/1/2 still pick the mic lane", tune && voc && none,
+                "the old hardwired mapping, now a layout");
+    }
+
+    FootMap map;
+    map.controls = {
+        footControl ("ia1",   FootTrigger::controller, 16, 80, FootControl::latch),
+        footControl ("ia2",   FootTrigger::controller, 16, 81, FootControl::latch),
+        footControl ("hold",  FootTrigger::controller,  0, 64, FootControl::momentary),
+        footControl ("exp",   FootTrigger::controller,  1,  7, FootControl::sweep),
+        footControl ("p20",   FootTrigger::program,     1, 20, FootControl::preset),
+        footControl ("go",    FootTrigger::start,       0,  0, FootControl::preset),
+    };
+
+    FootLayout a;
+    a.name = "A";
+    a.jobs = {
+        { "ia1",  "bass/odOn",      FootJob::follow, 0.0f, 1.0f },
+        { "ia2",  "bass/chOn",      FootJob::flip,   0.0f, 1.0f },
+        { "hold", "bass/bstOn",     FootJob::follow, 0.0f, 1.0f },
+        { "hold", "bass/phOn",      FootJob::flip,   0.0f, 1.0f },
+        { "hold", "bass/odLevel",   FootJob::follow, -6.0f, 3.0f },
+        { "exp",  "bass/dlMix",     FootJob::follow, 0.1f, 0.6f },
+        { "exp",  "bass/rvMix",     FootJob::follow, 0.8f, 0.2f },
+        { "exp",  "bass/octInt",    FootJob::follow, -12.0f, 12.0f },
+        { "exp",  "bass/compThr",   FootJob::follow, -200.0f, 50.0f },
+        { "exp",  "do/loop",        FootJob::follow, 0.0f, 1.0f },
+        { "p20",  "bass/odOn",      FootJob::on,     0.0f, 1.0f },
+        { "p20",  "bass/chOn",      FootJob::off,    0.0f, 1.0f },
+        { "p20",  "bass/odDrive",   FootJob::follow, 0.0f, 20.0f },
+        { "p20",  "ch4/compOn",     FootJob::on,     0.0f, 1.0f },
+        { "p20",  "bass/nonsense",  FootJob::on,     0.0f, 1.0f },
+        { "p20",  "nowhere/odOn",   FootJob::on,     0.0f, 1.0f },
+        { "go",   "do/play",        FootJob::follow, 0.0f, 1.0f },
+    };
+
+    FootLayout b;
+    b.name = "B";
+    b.jobs = { { "ia1", "bass/dlOn", FootJob::follow, 0.0f, 1.0f } };
+
+    map.layouts = { a, b };
+    map.active = "A";
+
+    ParamStore params;
+    FootEngine foot (params);
+    foot.setMap (map);
+
+    {
+        foot.handleMidi ("gc", cc (16, 80, 127));
+        const bool lit = params.getBool (pDriveOn);
+        params.set (pDriveOn, 0.0f);                 // a hand on the screen disagrees
+        foot.handleMidi ("gc", cc (16, 80, 0));
+        const bool dark = ! params.getBool (pDriveOn);
+        foot.handleMidi ("gc", cc (16, 80, 127));
+        report ("a latching switch on Follow matches the pedal's own light",
+                lit && dark && params.getBool (pDriveOn),
+                "127 is on and 0 is off, whatever the screen did in between");
+
+        foot.handleMidi ("gc", cc (1, 80, 0));
+        report ("a control on channel 16 ignores channel 1", params.getBool (pDriveOn),
+                "same controller number, wrong channel");
+    }
+
+    {
+        foot.handleMidi ("gc", cc (16, 81, 127));
+        const bool first = params.getBool (pChoOn);
+        foot.handleMidi ("gc", cc (16, 81, 0));
+        report ("Flip on a latching switch turns on every press", first && ! params.getBool (pChoOn),
+                "lit and dark are both presses");
+    }
+
+    {
+        foot.handleMidi ("gc", cc (3, 64, 127));
+        const bool held = params.getBool (pBoostOn) && params.getBool (pPhaserOn)
+                            && params.get (pDriveLevel) == 3.0f;
+        foot.handleMidi ("gc", cc (3, 64, 0));
+        const bool released = ! params.getBool (pBoostOn) && params.getBool (pPhaserOn)
+                                && params.get (pDriveLevel) == -6.0f;
+        foot.handleMidi ("gc", cc (3, 64, 127));
+        report ("a momentary switch follows while held and flips only on the way down",
+                held && released && ! params.getBool (pPhaserOn),
+                "boost on while down; phaser toggles per press; level steps hi and back to lo");
+    }
+
+    {
+        const int before = foot.takeCommands().size();
+        foot.handleMidi ("gc", cc (1, 7, 0));
+        const float heel = params.get (pDelayMix);
+        const bool heelRest = params.get (pRevMix) == 0.8f && params.get (pOctInterval) == -12.0f
+                                && params.get (pCompThresh) == spec (pCompThresh).minValue;
+        foot.handleMidi ("gc", cc (1, 7, 40));
+        foot.handleMidi ("gc", cc (1, 7, 66));
+        const float mid = params.get (pOctInterval);
+        foot.handleMidi ("gc", cc (1, 7, 100));
+        foot.handleMidi ("gc", cc (1, 7, 127));
+        const float toe = params.get (pDelayMix);
+
+        report ("an expression pedal sweeps a knob between its two ends",
+                std::abs (heel - 0.1f) < 1.0e-5f && std::abs (toe - 0.6f) < 1.0e-5f,
+                juce::String (heel, 3) + " at the heel, " + juce::String (toe, 3) + " at the toe");
+        report ("a sweep runs backwards, snaps to steps and stays inside the knob",
+                heelRest && std::abs (params.get (pRevMix) - 0.2f) < 1.0e-5f
+                  && mid == std::round (mid) && params.get (pOctInterval) == 12.0f
+                  && params.get (pCompThresh) == spec (pCompThresh).maxValue,
+                "reverb falls as the pedal rises; the octave lands on whole semitones");
+        report ("a sweep presses once, on the way up through the middle",
+                before == 0 && foot.takeCommands().size() == 1,
+                "five messages, one loop tap");
+    }
+
+    {
+        params.set (pDriveOn, 0.0f);
+        params.set (pChoOn, 1.0f);
+        const auto serial = foot.getChangeSerial();
+        foot.handleMidi ("gc", pc (1, 20));
+        const bool scene = params.getBool (pDriveOn) && ! params.getBool (pChoOn)
+                             && params.get (pDriveAmount) == 20.0f
+                             && params.getBool (3, pCompOn) && ! params.getBool (0, pCompOn);
+        const bool noticed = foot.getChangeSerial() != serial;
+        const auto settled = foot.getChangeSerial();
+        foot.handleMidi ("gc", pc (1, 20));
+        report ("one preset button sets a whole scene, on the right channels",
+                scene && noticed && foot.getChangeSerial() == settled,
+                "drive on, chorus off, drive amount 20, channel 4's comp, and nothing for names the rig lacks");
+    }
+
+    {
+        int woken = 0;
+        foot.setCommandNotifier ([&woken] { ++woken; });
+        foot.handleMidi ("gc", juce::MidiMessage::midiStart());
+        const auto taken = foot.takeCommands();
+        foot.setCommandNotifier (nullptr);
+        report ("a command waits for the window and wakes it",
+                woken == 1 && taken.size() == 1 && taken[0] == "do/play" && foot.takeCommands().isEmpty(),
+                "MIDI Start queued do/play");
+    }
+
+    {
+        foot.setActiveLayout ("B");
+        params.set (pDriveOn, 0.0f);
+        foot.handleMidi ("gc", cc (16, 80, 127));
+        const bool swapped = params.getBool (pDelayOn) && ! params.getBool (pDriveOn);
+        foot.setActiveLayout ("no such layout");
+        const bool stayed = foot.getActiveLayout() == "B";
+        foot.setActiveLayout ("A");
+        report ("another layout gives the same switch another job", swapped && stayed,
+                "delay instead of drive; an unknown layout name changes nothing");
+    }
+
+    {
+        auto scoped = map;
+        scoped.device = "Scarlett 4i4 USB";
+        foot.setMap (scoped);
+        params.set (pDriveOn, 0.0f);
+        foot.handleMidi ("MPK mini", cc (16, 80, 127));
+        const bool ignored = ! params.getBool (pDriveOn);
+        const bool shown = foot.getLastHeard().device == "MPK mini" && foot.getLastHeard().controls.isEmpty();
+        foot.handleMidi ("Scarlett 4i4 USB", cc (16, 80, 127));
+        report ("with a device chosen, only that box is obeyed",
+                ignored && shown && params.getBool (pDriveOn)
+                  && foot.getLastHeard().controls.contains ("ia1"),
+                "the stranger is still shown as heard");
+        foot.setMap (map);
+    }
+
+    {
+        // Learning: the press is captured, not obeyed.
+        params.set (pDriveOn, 0.0f);
+        foot.beginLearn();
+        foot.handleMidi ("gc", pc (1, 20), 1000);
+        FootEngine::Learned got;
+        const bool program = foot.pollLearn (got, 1000) && got.trigger.type == FootTrigger::program
+                               && got.trigger.number == 20 && got.trigger.channel == 1
+                               && got.kind == FootControl::preset && got.device == "gc"
+                               && ! params.getBool (pDriveOn) && ! foot.isLearning();
+
+        foot.beginLearn();
+        foot.handleMidi ("gc", cc (16, 85, 127), 2000);
+        const bool early = foot.pollLearn (got, 2100);
+        const bool latch = foot.pollLearn (got, 2000 + FootEngine::learnSettleMs)
+                             && got.kind == FootControl::latch && got.trigger.number == 85;
+
+        foot.beginLearn();
+        foot.handleMidi ("gc", cc (2, 64, 127), 3000);
+        foot.handleMidi ("gc", cc (2, 64, 0), 3120);
+        const bool momentary = foot.pollLearn (got, 3600) && got.kind == FootControl::momentary;
+
+        foot.beginLearn();
+        foot.handleMidi ("gc", cc (1, 11, 3), 4000);
+        foot.handleMidi ("gc", cc (1, 11, 9), 4020);
+        const bool sweep = foot.pollLearn (got, 4600) && got.kind == FootControl::sweep;
+
+        foot.beginLearn();
+        foot.cancelLearn();
+        foot.handleMidi ("gc", cc (16, 80, 127), 5000);
+
+        report ("learning captures a press instead of obeying it",
+                program && ! early && latch && params.getBool (pDriveOn),
+                "program 20 learned without firing its scene; a cancelled learn obeys again");
+        report ("learning tells a lit switch, a held switch and a pedal apart", momentary && sweep,
+                "one message, a press and release, a run of in-between values");
+    }
+
+    {
+        // A control learned again keeps every job it had.
+        auto relearned = map;
+        relearned.controls[0].trigger = { FootTrigger::controller, 1, 12 };
+        foot.setMap (relearned);
+        params.set (pDriveOn, 0.0f);
+        foot.handleMidi ("gc", cc (16, 80, 127));
+        const bool oldDead = ! params.getBool (pDriveOn);
+        foot.handleMidi ("gc", cc (1, 12, 127));
+        report ("a control learned again keeps what it did", oldDead && params.getBool (pDriveOn),
+                "new wire, same job in every layout");
+        foot.setMap (map);
+    }
+
+    {
+        const auto text = juce::JSON::toString (map.toVar(), false);
+        const auto back = FootMap::fromVar (juce::JSON::parse (text));
+        report ("the map survives its file", juce::JSON::toString (back.toVar(), false) == text,
+                juce::String (text.length()) + " characters, identical on the way back");
+
+        auto messy = map;
+        messy.controls.push_back (footControl ("ia1", FootTrigger::program, 1, 99, FootControl::preset));
+        messy.layouts[0].jobs.push_back ({ "ghost", "bass/odOn", FootJob::on, 0.0f, 1.0f });
+        messy.active = "gone";
+        const auto cleaned = FootMap::fromVar (messy.toVar());
+        const auto empty = FootMap::fromVar (juce::var());
+        report ("a damaged map is trimmed to what can run",
+                cleaned.controls.size() == map.controls.size()
+                  && cleaned.layouts[0].jobs.size() == map.layouts[0].jobs.size()
+                  && cleaned.active == "A"
+                  && empty.layouts.size() == 1 && empty.controls.empty(),
+                "the twin id, the orphan job and the missing layout are gone");
+
+        const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                            .getChildFile ("rig_foot_test");
+        dir.deleteRecursively();
+        const auto file = dir.getChildFile ("foot.json");
+        const bool fresh = FootMap::loadFrom (file).controls.size() == 3;
+        const bool saved = map.saveTo (file)
+                             && juce::JSON::toString (FootMap::loadFrom (file).toVar(), false) == text;
+        file.replaceWithText ("{ not json");
+        const bool fallback = FootMap::loadFrom (file).controls.size() == 3
+                                && file.getSiblingFile ("foot.json.unreadable").existsAsFile();
+        dir.deleteRecursively();
+        report ("no file means the factory map, and a broken one is set aside", fresh && saved && fallback,
+                "foot.json.unreadable kept beside it");
+    }
+}
+
 int main (int argc, char* argv[])
 {
     // The scan spawns this same binary as its disposable per-plugin worker.
@@ -4736,6 +5024,15 @@ int main (int argc, char* argv[])
         runScenario (juce::File (juce::String (argv[2])),
                      juce::File (juce::String (argv[3])));
         return 0;
+    }
+
+    // The foot map on its own: quick enough to run after every edit to it.
+    if (argc == 2 && juce::String (argv[1]) == "--foot")
+    {
+        testFootControl();
+        std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASS" : "FAILURES",
+                     failures, failures == 1 ? "" : "s");
+        return failures == 0 ? 0 : 1;
     }
 
     std::printf ("LiveRig DSP validation\n======================\n");
@@ -4764,6 +5061,7 @@ int main (int argc, char* argv[])
     testReverb (44100.0, 32);
     testMasterLimiter (48000.0);
     testChannelParams();
+    testFootControl();
     testStemDucker (48000.0);
     testParametricEq (48000.0, 64);
     testStageOrder (48000.0, 64);
