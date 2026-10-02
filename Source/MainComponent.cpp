@@ -201,7 +201,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
         { "chorus", FxChain::stChorus, true,  "chorus", "Chorus",     pChoOn,    { pChoRate, pChoDepth, pChoVoices, pChoTone, pChoLows, pChoMix } },
         { "delay",  FxChain::stDelay,  true,  "delay",  "Delay",      pDelayOn,  { pDelayTime, pDelayFeedback, pDelayMix, pDelayHighcut, pDelayModRate, pDelayModDepth, pDelaySat, pDelaySmear } },
         { "tape",   FxChain::stTape,   true,  "tape",   "Tape",       pTapeOn,   { pTapeDrive, pTapeSoften, pTapeBump, pTapeMix } },
-        { "freeze", FxChain::stFreeze, true,  "freeze", "Freeze",     pFreezeOn, { pFreezeHold, pFreezeLevel, pFreezeFadeIn, pFreezeFadeOut, pFreezeMotion } },
+        { "freeze", FxChain::stFreeze, true,  "freeze", "Freeze",     pFreezeOn, { pFreezeLevel, pFreezeFadeIn, pFreezeFadeOut, pFreezeMotion } },
         { "reverb", -1,                false, "reverb", "Reverb",     pRevOn,    { pRevSize, pRevDamp, pRevPre, pRevMod, pRevMix } },
         { "out",    -1,                false, "",       "Live out",   pLiveMute, { pLiveOut } },
         { "master", -1,                false, "",       "Master",     pMasterMute,{ pMasterGain } },
@@ -218,8 +218,12 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
                                || def.onParam == pMasterMute;
 
         auto* panel = panels.add (new FxPanel (uiParams, def.name, def.onParam, def.movable,
-                                               def.key == "midi" ? &midiStatus : nullptr, 90,
+                                               def.key == "midi" ? &midiStatus : nullptr, 84,
                                                muteRow));
+
+        // The freeze's switch is the hold itself, and says so.
+        if (isMomentaryParam (def.onParam))
+            panel->setSwitchText ("HOLD");
 
         // Tapping the selected row again puts its controls away. Either way,
         // the effect tab comes forward — tapping a row means "show me this".
@@ -251,6 +255,8 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
                            [this, key = fxDefs[(size_t) i].key] { removeFxFromChannel (key); });
                 m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (panel));
             };
+
+            panel->setRemovable (true);
         }
 
         fxHolder.addAndMakeVisible (panel);
@@ -544,7 +550,7 @@ void MainComponent::resized()
 
     // The chain list on the left — narrow, since caps titles and the dot
     // grip are all a row carries — and the editor tabs beside it.
-    fxViewport.setBounds (b.removeFromLeft (244));
+    fxViewport.setBounds (b.removeFromLeft (268));
     b.removeFromLeft (8);
     editorTabs.setBounds (b);
 
@@ -720,6 +726,51 @@ int MainComponent::checkFootFunctionsForSnapshot()
 
     std::printf ("  foot menu offers %d functions\n", actions.size());
     return problems;
+}
+
+// Anything that can be taken away must show the way to take it: every pedal
+// row on every strip's board, and every strip but the master. And nothing
+// that cannot leave may wear the button. Returns how many get it wrong.
+int MainComponent::checkRemoveButtonsForSnapshot()
+{
+    int problems = 0, pedals = 0, strips = 0;
+    const auto startedOn = selectedChannel;
+
+    for (auto* strip : channelStrips)
+    {
+        const auto key = strip->getComponentID();
+        const bool canLeave = key != "master";
+
+        if (strip->hasRemoveButton() != canLeave)
+        {
+            std::printf ("  REMOVE BUTTON wrong on the %s strip\n", key.toRawUTF8());
+            ++problems;
+        }
+
+        strips += canLeave ? 1 : 0;
+        selectChannel (key);
+
+        for (int i = 0; i < panels.size(); ++i)
+        {
+            if (! panels[i]->isVisible())
+                continue;
+
+            const bool loadable = isLoadable (fxDefs[(size_t) i]);
+
+            if (panels[i]->hasRemoveButton() != loadable)
+            {
+                std::printf ("  REMOVE BUTTON wrong on %s / %s\n", key.toRawUTF8(),
+                             fxDefs[(size_t) i].key.toRawUTF8());
+                ++problems;
+            }
+
+            pedals += loadable ? 1 : 0;
+        }
+    }
+
+    selectChannel (startedOn);
+    std::printf ("  remove buttons on %d pedals and %d strips\n", pedals, strips);
+    return problems + (pedals == 0 || strips == 0 ? 1 : 0);
 }
 
 // The foot tab used the way a player would use it, with no mouse and no
@@ -1073,6 +1124,8 @@ void MainComponent::showAddFxMenu()
 }
 
 // A pedal joins the board engaged — adding it is the gesture that says play.
+// The exception is a pedal whose ON is itself a gesture: the freeze joins
+// dark, because lit it would be holding whatever happened to be sounding.
 void MainComponent::addFxToChannel (const juce::String& key)
 {
     auto list = juce::StringArray::fromTokens (loadoutFor (selectedChannel), ",", "");
@@ -1089,7 +1142,7 @@ void MainComponent::addFxToChannel (const juce::String& key)
         if (fxDefs[(size_t) i].key != key)
             continue;
 
-        if (fxDefs[(size_t) i].onParam >= 0)
+        if (fxDefs[(size_t) i].onParam >= 0 && ! isMomentaryParam (fxDefs[(size_t) i].onParam))
             uiParams.set (fxDefs[(size_t) i].onParam, 1.0f);
 
         panels[i]->refresh();
@@ -1362,27 +1415,37 @@ void MainComponent::rebuildChannelRail()
         strip->onSelect = [this, key] { selectChannel (key); };
         addAndMakeVisible (strip);
 
-        strip->onContextMenu = [this, key, strip]
+        // Removing a strip always asks first, whichever door it came in by:
+        // the button in the strip's corner, or a right click.
+        strip->onRemove = [this, key, strip]
+        {
+            juce::AlertWindow::showOkCancelBox (
+                juce::MessageBoxIconType::QuestionIcon,
+                "Remove " + strip->getName() + "?",
+                "The strip leaves the rail and its sound stops. "
+                "Its knobs stay saved for a return.",
+                "Remove", "Keep", this,
+                juce::ModalCallbackFunction::create ([this, key] (int choice)
+                {
+                    if (choice == 1)
+                        removeChannel (key);
+                }));
+        };
+
+        strip->onContextMenu = [this, strip]
         {
             juce::PopupMenu m;
             m.addItem ("Remove " + strip->getName() + "...",
-                       [this, key, name = strip->getName()]
+                       [safe = juce::Component::SafePointer<ChannelStrip> (strip)]
             {
-                juce::AlertWindow::showOkCancelBox (
-                    juce::MessageBoxIconType::QuestionIcon,
-                    "Remove " + name + "?",
-                    "The strip leaves the rail and its sound stops. "
-                    "Its knobs stay saved for a return.",
-                    "Remove", "Keep", this,
-                    juce::ModalCallbackFunction::create ([this, key] (int choice)
-                    {
-                        if (choice == 1)
-                            removeChannel (key);
-                    }));
+                if (safe != nullptr && safe->onRemove != nullptr)
+                    safe->onRemove();
             });
 
             m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (strip));
         };
+
+        strip->setRemovable (true);
     }
 
     masterStrip = channelStrips.add (new ChannelStrip ("master", "Master", &masterMeter));
@@ -2494,7 +2557,8 @@ void MainComponent::buildFootMenu (juce::PopupMenu& menu, const FootView::Choose
             juce::PopupMenu fx;
 
             if (def.onParam >= 0)
-                item (fx, isMute (def.onParam) ? "Mute" : "On / off", key + "/" + spec (def.onParam).id);
+                item (fx, isMute (def.onParam) ? "Mute" : isMomentaryParam (def.onParam) ? "Hold" : "On / off",
+                      key + "/" + spec (def.onParam).id);
 
             for (int id : def.ids)
                 item (fx, footParamName (id), key + "/" + spec (id).id);

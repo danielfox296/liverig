@@ -135,7 +135,6 @@ static const ParamSpec specs[] =
     { "tpMix",     "Mix",        0.0f,   1.0f,   1.0f,     0.0f, 0.0f, "",     2, false },
 
     { "frzOn",     "Freeze",     0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
-    { "frzHold",   "Hold",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, offOnChoices },
     { "frzLevel",  "Level",      0.0f,   1.0f,   1.0f,     0.0f, 0.0f, "",     2, false },
     { "frzIn",     "Fade in",    0.0f,1000.0f, 100.0f,   200.0f, 0.0f, " ms",  0, false },
     { "frzOut",    "Fade out",   0.0f,1000.0f, 150.0f,   200.0f, 0.0f, " ms",  0, false },

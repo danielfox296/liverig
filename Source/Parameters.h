@@ -62,9 +62,9 @@ enum ParamId
 
     pTapeOn, pTapeDrive, pTapeSoften, pTapeBump, pTapeMix,
 
-    // Freeze: Hold is the foot, not a setting — down while a switch is held,
-    // and the layer it raises lasts exactly that long.
-    pFreezeOn, pFreezeHold, pFreezeLevel, pFreezeFadeIn, pFreezeFadeOut, pFreezeMotion,
+    // Freeze: its ON is the hold itself — on while a foot holds the sound,
+    // off to let it go. A gesture, not a setting (see isMomentaryParam).
+    pFreezeOn, pFreezeLevel, pFreezeFadeIn, pFreezeFadeOut, pFreezeMotion,
 
     pRevOn, pRevSize, pRevDamp, pRevPre, pRevMod, pRevMix,
 
@@ -127,7 +127,7 @@ constexpr bool isChannelParam (int paramId) noexcept
 // holds it, so it is never written to disk and no preset carries it.
 constexpr bool isMomentaryParam (int paramId) noexcept
 {
-    return paramId == pFreezeHold;
+    return paramId == pFreezeOn;
 }
 
 // Which knob copies a channel key names: the first three strips carry the

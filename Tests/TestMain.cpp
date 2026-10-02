@@ -4672,9 +4672,9 @@ static void testInstrumentHosting (const juce::String& wanted, double sr, int bl
 // value everywhere, the one-argument view is channel 0, and the settings shape
 // still reads in an old build's flat form.
 //==============================================================================
-// The Freeze pedal held the way a foot holds it: Hold goes down at one block
-// and up at another, and the lane comes back whole. presses is a flat list of
-// sample positions — down, up, down, up — and a missing last "up" never lets go.
+// The Freeze pedal held the way a foot holds it: its ON goes on at one block
+// and off at another, and the lane comes back whole. presses is a flat list of
+// sample positions — on, off, on, off — and a missing last "off" never lets go.
 static std::vector<float> renderFreeze (ParamStore& params, const std::vector<float>& in,
                                         double sr, int block, const std::vector<int>& presses,
                                         double* worstMicros = nullptr)
@@ -4694,7 +4694,7 @@ static std::vector<float> renderFreeze (ParamStore& params, const std::vector<fl
             if (i >= at)
                 down = ! down;
 
-        params.set (pFreezeHold, down ? 1.0f : 0.0f);
+        params.set (pFreezeOn, down ? 1.0f : 0.0f);
 
         std::copy (in.begin() + i, in.begin() + i + block, mono.begin());
 
@@ -4713,7 +4713,7 @@ static std::vector<float> renderFreeze (ParamStore& params, const std::vector<fl
             out.push_back (left[(size_t) k]);
     }
 
-    params.set (pFreezeHold, 0.0f);
+    params.set (pFreezeOn, 0.0f);
     return out;
 }
 
@@ -4750,19 +4750,24 @@ static void testFreeze (double sr, int block)
     const auto at = [sr, block] (double seconds) { return ((int) (sr * seconds) / block) * block; };
     const double db = 20.0;
 
-    // Armed but not held, the pedal is a straight wire.
+    // Before a hold and after one has died away, the pedal is a straight wire.
     {
         std::vector<float> note;
-        makeNote (note, sr, 55.0, 1.5, 0.4f);
+        makeNote (note, sr, 55.0, 4.0, 0.4f);
 
-        ParamStore off, armed;
-        armed.set (pFreezeOn, 1.0f);
+        ParamStore never, once;
+        once.set (pFreezeFadeOut, 200.0f);
 
-        const auto plain = renderChain (off, note, sr, block);
-        const auto ready = renderChain (armed, note, sr, block);
+        const auto plain = renderChain (never, note, sr, block);
+        const auto used = renderFreeze (once, note, sr, block, { at (0.5), at (1.5) });
 
-        report ("armed and not held is a straight wire", plain == ready,
-                juce::String ((int) plain.size()) + " samples identical to the pedal being off");
+        const int clear = at (2.0);
+        const bool before = std::equal (plain.begin(), plain.begin() + at (0.5), used.begin());
+        const bool after = std::equal (plain.begin() + clear, plain.end(), used.begin() + clear);
+        const bool between = ! std::equal (plain.begin() + at (0.8), plain.begin() + at (1.4), used.begin() + at (0.8));
+
+        report ("a straight wire before a hold and after it has gone", before && after && between,
+                "sample for sample the same as a board without the pedal, except while it holds");
     }
 
     // A steady tone, held, with the playing stopped: the layer alone has to
@@ -4777,7 +4782,6 @@ static void testFreeze (double sr, int block)
             in[(size_t) i] *= (float) std::exp (-(double) (i - quiet) / (sr * 0.01));
 
         ParamStore params;
-        params.set (pFreezeOn, 1.0f);
         params.set (pFreezeMotion, 0.0f);
 
         const auto out = renderFreeze (params, in, sr, block, { press });
@@ -4817,7 +4821,6 @@ static void testFreeze (double sr, int block)
             in[(size_t) i] *= (float) std::exp (-(double) (i - quiet) / (sr * 0.01));
 
         ParamStore params;
-        params.set (pFreezeOn, 1.0f);
         params.set (pFreezeMotion, 0.0f);
 
         const auto out = renderFreeze (params, in, sr, block, { press });
@@ -4887,7 +4890,6 @@ static void testFreeze (double sr, int block)
         }
 
         ParamStore params;
-        params.set (pFreezeOn, 1.0f);
         params.set (pFreezeMotion, 0.0f);
         params.set (pFreezeFadeOut, 200.0f);
 
@@ -4918,6 +4920,37 @@ static void testFreeze (double sr, int block)
                 "largest step " + juce::String (step, 5) + " vs " + juce::String (natural, 5) + " for the notes alone");
     }
 
+    // The report that found the bug: a second of Fade out set, the pedal
+    // switched off by a stomp, and the hold cut dead. Off is letting go.
+    {
+        std::vector<float> in;
+        makeSine (in, sr, 110.0, 6.0, 0.2f);
+
+        const int quiet = at (1.2), off = at (3.0);
+
+        for (int i = quiet; i < (int) in.size(); ++i)
+            in[(size_t) i] *= (float) std::exp (-(double) (i - quiet) / (sr * 0.01));
+
+        ParamStore params;
+        params.set (pFreezeMotion, 0.0f);
+        params.set (pFreezeLevel, 0.34f);
+        params.set (pFreezeFadeIn, 1000.0f);
+        params.set (pFreezeFadeOut, 1000.0f);
+
+        const auto out = renderFreeze (params, in, sr, block, { at (1.0), off });
+        const auto levelAt = [&] (double secondsAfterOff)
+        {
+            return goertzel (out.data() + off + (int) (sr * (secondsAfterOff - 0.03)), (int) (sr * 0.06), sr, 110.0)
+                     / (0.2 * 0.34);
+        };
+
+        report ("switching the pedal off takes the whole Fade out",
+                std::abs (levelAt (0.25) - 0.75) < 0.05 && std::abs (levelAt (0.5) - 0.5) < 0.05
+                  && std::abs (levelAt (0.75) - 0.25) < 0.05 && levelAt (1.2) < 1.0e-3,
+                "a second set: " + juce::String (levelAt (0.25), 2) + " at 250 ms, " + juce::String (levelAt (0.5), 2)
+                    + " at 500, " + juce::String (levelAt (0.75), 2) + " at 750, gone after");
+    }
+
     // A new press while the last hold is still dying takes the other layer;
     // a third inside the same fade steals one. Neither may click, and the
     // last thing caught is the thing left sounding.
@@ -4940,7 +4973,6 @@ static void testFreeze (double sr, int block)
         }
 
         ParamStore params;
-        params.set (pFreezeOn, 1.0f);
         params.set (pFreezeMotion, 0.0f);
         params.set (pFreezeFadeOut, 1000.0f);
 
@@ -4996,7 +5028,6 @@ static void testFreeze (double sr, int block)
             in[(size_t) i] *= (float) std::exp (-(double) (i - quiet) / (sr * 0.01));
 
         ParamStore params;
-        params.set (pFreezeOn, 1.0f);
         params.set (pFreezeMotion, 1.0f);
 
         const auto moving = renderFreeze (params, in, sr, block, { press });
@@ -5019,18 +5050,18 @@ static void testFreeze (double sr, int block)
                 juce::String (lowWander, 3) + " dB of movement at 55 Hz");
     }
 
-    // Hold is a foot, not a setting: no file and no preset remembers it.
+    // A hold is a foot, not a setting: no file remembers the pedal lit.
     {
         ParamStore store;
-        store.set (pFreezeHold, 1.0f);
-        store.set (2, pFreezeHold, 1.0f);
+        store.set (pFreezeOn, 1.0f);
+        store.set (2, pFreezeOn, 1.0f);
         store.set (pFreezeFadeOut, 640.0f);
 
         ParamStore loaded;
         loaded.fromVar (store.toVar());
 
         report ("a held foot is never written to the settings",
-                ! loaded.getBool (pFreezeHold) && ! loaded.getBool (2, pFreezeHold)
+                ! loaded.getBool (pFreezeOn) && ! loaded.getBool (2, pFreezeOn)
                   && loaded.get (pFreezeFadeOut) == 640.0f,
                 "the fades come back, the hold does not");
     }
@@ -5067,7 +5098,6 @@ static void testFreezeOnRealBass (const juce::File& stem, int block)
     const auto at = [sr, block] (double seconds) { return ((int) (sr * seconds) / block) * block; };
 
     ParamStore params;
-    params.set (pFreezeOn, 1.0f);
     params.set (pFreezeMotion, 0.0f);
     params.set (pFreezeFadeIn, 0.0f);
     params.set (pFreezeFadeOut, 0.0f);
@@ -5512,21 +5542,21 @@ static void testFootControl()
         auto sustain = map;
         sustain.controls.push_back (footControl ("sus", FootTrigger::controller, 1, 64, FootControl::momentary));
         sustain.controls.push_back (footControl ("jack", FootTrigger::controller, 1, 4, FootControl::sweep));
-        sustain.layouts[0].jobs.push_back ({ "sus", "bass/frzHold", FootJob::follow, 0.0f, 1.0f });
-        sustain.layouts[0].jobs.push_back ({ "jack", "ch4/frzHold", FootJob::follow, 0.0f, 1.0f });
+        sustain.layouts[0].jobs.push_back ({ "sus", "bass/frzOn", FootJob::follow, 0.0f, 1.0f });
+        sustain.layouts[0].jobs.push_back ({ "jack", "ch4/frzOn", FootJob::follow, 0.0f, 1.0f });
         foot.setMap (sustain);
 
         foot.handleMidi ("gc", cc (1, 64, 127));
-        const bool down = params.getBool (pFreezeHold);
+        const bool down = params.getBool (pFreezeOn);
         foot.handleMidi ("gc", cc (1, 64, 0));
-        const bool up = ! params.getBool (pFreezeHold);
+        const bool up = ! params.getBool (pFreezeOn);
 
         foot.handleMidi ("gc", cc (1, 4, 120));
-        const bool jackDown = params.getBool (3, pFreezeHold) && ! params.getBool (0, pFreezeHold);
+        const bool jackDown = params.getBool (3, pFreezeOn) && ! params.getBool (0, pFreezeOn);
         foot.handleMidi ("gc", cc (1, 4, 0));
 
         report ("a sustain pedal holds the freeze while it is down",
-                down && up && jackDown && ! params.getBool (3, pFreezeHold),
+                down && up && jackDown && ! params.getBool (3, pFreezeOn),
                 "as a held switch on the bass, as a two-position pedal on channel 4");
         foot.setMap (map);
     }
@@ -5545,13 +5575,12 @@ static void testFootControl()
             footControl ("stop",   FootTrigger::program, 1, 1, FootControl::preset),
             footControl ("toggle", FootTrigger::program, 1, 2, FootControl::preset),
         };
-        latch.layouts = { { "Latch", { { "start",  "bass/frzHold", FootJob::on,   0.0f, 1.0f },
-                                       { "stop",   "bass/frzHold", FootJob::off,  0.0f, 1.0f },
-                                       { "toggle", "bass/frzHold", FootJob::flip, 0.0f, 1.0f } } } };
+        latch.layouts = { { "Latch", { { "start",  "bass/frzOn", FootJob::on,   0.0f, 1.0f },
+                                       { "stop",   "bass/frzOn", FootJob::off,  0.0f, 1.0f },
+                                       { "toggle", "bass/frzOn", FootJob::flip, 0.0f, 1.0f } } } };
         latch.active = "Latch";
 
         ParamStore held;
-        held.set (pFreezeOn, 1.0f);
         held.set (pFreezeMotion, 0.0f);
 
         FootEngine buttons (held);
@@ -5600,7 +5629,7 @@ static void testFootControl()
 
         report ("two buttons latch the freeze, and one on Flips does both",
                 std::abs (started - 1.0) < 0.05 && stopped < 1.0e-3
-                  && std::abs (flipped - 1.0) < 0.05 && flippedOff < 1.0e-3 && ! held.getBool (pFreezeHold),
+                  && std::abs (flipped - 1.0) < 0.05 && flippedOff < 1.0e-3 && ! held.getBool (pFreezeOn),
                 "start holds " + juce::String (started, 2) + " of the note through a second press, stop leaves "
                     + juce::String (stopped, 4) + "; flip holds " + juce::String (flipped, 2) + ", flip again leaves "
                     + juce::String (flippedOff, 4));

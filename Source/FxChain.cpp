@@ -142,7 +142,7 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
 
     juce::SmoothedValue<float>* bypasses[] { &bypComp, &bypEq, &bypFilter, &bypBoost, &bypCab, &bypSub,
                                              &bypDrive, &bypAmp, &bypOct, &bypSynth, &bypPhaser,
-                                             &bypChorus, &bypDelay, &bypTape, &bypReverb, &bypFreeze };
+                                             &bypChorus, &bypDelay, &bypTape, &bypReverb };
     for (auto* b : bypasses)
         b->reset (sr, 0.015);
 
@@ -456,8 +456,7 @@ void FxChain::updateFromParams() noexcept
     if (changed (pTapeBump))
         tapeBump.setLowShelf (sr, 80.0, 4.5 * params.get (pTapeBump));
 
-    // A pedal that is off holds nothing, so taking it off the board lets go.
-    frzHold = params.getBool (pFreezeOn) && params.getBool (pFreezeHold);
+    frzHold = params.getBool (pFreezeOn);
     freeze.setFadeTimes (params.get (pFreezeFadeIn), params.get (pFreezeFadeOut));
     freeze.setMotion (params.get (pFreezeMotion));
     frzLevel.setTargetValue (std::clamp (params.get (pFreezeLevel), 0.0f, 1.0f));
@@ -482,7 +481,6 @@ void FxChain::updateFromParams() noexcept
     bypDelay.setTargetValue  (params.getBool (pDelayOn)  ? 1.0f : 0.0f);
     bypTape.setTargetValue   (params.getBool (pTapeOn)   ? 1.0f : 0.0f);
     bypReverb.setTargetValue (params.getBool (pRevOn)    ? 1.0f : 0.0f);
-    bypFreeze.setTargetValue (params.getBool (pFreezeOn) ? 1.0f : 0.0f);
     bool midiDirty = false;
     midiDirty |= changed (pMidiGate);
     midiDirty |= changed (pMidiHold);
@@ -1049,15 +1047,14 @@ void FxChain::process (float* mono, float* left, float* right, int numSamples) n
                 break;
 
             case stFreeze:
-                runStage (mono, numSamples, bypFreeze, nullptr, [this] (float* d, int n)
-                {
-                    // The live signal goes by untouched; the held layer is
-                    // laid beside it.
-                    freeze.process (d, frzBuf.data(), n, frzHold);
+                // The live signal goes by untouched; the held layer is laid
+                // beside it. No bypass ramp: switching the pedal off is
+                // letting go, and the layer's own fade is the way out.
+                freeze.process (mono, frzBuf.data(), numSamples, frzHold);
 
-                    for (int i = 0; i < n; ++i)
-                        d[i] += frzBuf[(size_t) i] * frzLevel.getNextValue();
-                });
+                for (int i = 0; i < numSamples; ++i)
+                    mono[i] += frzBuf[(size_t) i] * frzLevel.getNextValue();
+
                 break;
 
             default:

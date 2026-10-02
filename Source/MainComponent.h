@@ -44,6 +44,7 @@ public:
     void showTunerForSnapshot();
     void showFootForSnapshot();
     int checkFootFunctionsForSnapshot();
+    int checkRemoveButtonsForSnapshot();
     int exerciseFootForSnapshot();
     void showJobStripForSnapshot();
 

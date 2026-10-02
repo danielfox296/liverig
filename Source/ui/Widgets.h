@@ -537,12 +537,36 @@ public:
         if (extraComponent != nullptr)
             addAndMakeVisible (extraComponent);
 
+        // The way off the board, where it can be seen. It opens the row's
+        // menu rather than acting: this sits beside a switch that gets hit
+        // without looking, and a stray tap must cost nothing.
+        remove.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xc3\x97")));
+        remove.setWantsKeyboardFocus (false);
+        remove.onClick = [this] { if (onContextMenu != nullptr) onContextMenu(); };
+        addChildComponent (remove);
+
         if (draggable)
             setMouseCursor (juce::MouseCursor::DraggingHandCursor);
     }
 
     std::function<void()> onSelect;
-    std::function<void()> onContextMenu;   // right-click: remove and friends
+    std::function<void()> onContextMenu;   // the remove button, or a right click
+
+    // Only a pedal that can leave the board wears the button.
+    void setRemovable (bool canBeRemoved)
+    {
+        if (remove.isVisible() != canBeRemoved)
+        {
+            remove.setVisible (canBeRemoved);
+            resized();
+        }
+    }
+
+    bool hasRemoveButton() const
+    {
+        return remove.isVisible() && ! remove.getBounds().isEmpty()
+                 && const_cast<FxPanel*> (this)->getComponentAt (remove.getBounds().getCentre()) == &remove;
+    }
     std::function<void (const juce::MouseEvent&)> onDragMove;
     std::function<void()> onDragEnd;
 
@@ -561,6 +585,12 @@ public:
     void setTitle (const juce::String& titleText)
     {
         title.setText (titleText.toUpperCase(), juce::dontSendNotification);
+    }
+
+    // For a row whose switch is not a bypass — the freeze's is the hold.
+    void setSwitchText (const juce::String& text)
+    {
+        power.setButtonText (text);
     }
 
     void refresh()
@@ -639,6 +669,12 @@ public:
         if (bypassId >= 0)
             power.setBounds (header.removeFromRight (58));
 
+        if (remove.isVisible())
+        {
+            header.removeFromRight (6);
+            remove.setBounds (header.removeFromRight (22));
+        }
+
         if (extraComponent != nullptr)
         {
             header.removeFromRight (8);
@@ -655,7 +691,7 @@ private:
     bool selected = false;
     bool dragging = false;
     juce::Label title;
-    juce::TextButton power;
+    juce::TextButton power, remove;
     juce::Component* extraComponent = nullptr;
     int extraWidth = 90;
 
@@ -758,6 +794,11 @@ public:
 
         if (meter != nullptr)
             addAndMakeVisible (*meter);
+
+        remove.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xc3\x97")));
+        remove.setWantsKeyboardFocus (false);
+        remove.onClick = [this] { if (onRemove != nullptr) onRemove(); };
+        addChildComponent (remove);
     }
 
     std::function<void()> onSelect;
@@ -765,6 +806,25 @@ public:
     // Right-click: the strip's own menu (remove, one day more). Only strips
     // given the callback offer one — the master sum stays.
     std::function<void()> onContextMenu;
+
+    // Taking the strip off the rail: the button in its corner. Whoever is
+    // given this asks before doing it. Only strips that can leave wear it.
+    std::function<void()> onRemove;
+
+    void setRemovable (bool canBeRemoved)
+    {
+        if (remove.isVisible() != canBeRemoved)
+        {
+            remove.setVisible (canBeRemoved);
+            resized();
+        }
+    }
+
+    bool hasRemoveButton() const
+    {
+        return remove.isVisible() && ! remove.getBounds().isEmpty()
+                 && const_cast<ChannelStrip*> (this)->getComponentAt (remove.getBounds().getCentre()) == &remove;
+    }
 
     // Double-click retypes what the channel really is. Only strips given
     // onRename open the editor — the master sum keeps its name.
@@ -835,6 +895,13 @@ public:
     {
         auto b = getLocalBounds().reduced (10, 7);
         auto nameRow = b.removeFromTop (18);
+
+        if (remove.isVisible())
+        {
+            remove.setBounds (nameRow.removeFromRight (22).expanded (0, 2));
+            nameRow.removeFromRight (4);
+        }
+
         detail.setBounds (nameRow.removeFromRight (detail.getText().isNotEmpty() ? 76 : 0));
         name.setBounds (nameRow);
         b.removeFromTop (5);
@@ -846,6 +913,7 @@ public:
 private:
     LevelMeter* meter = nullptr;   // not owned
     juce::Label name, detail;
+    juce::TextButton remove;
     bool selected = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChannelStrip)

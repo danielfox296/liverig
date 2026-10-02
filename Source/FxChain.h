@@ -235,7 +235,10 @@ private:
 
     // Freeze: a held layer added beside the live signal, never in its way.
     // Where the pedal stands on the board is what it hears — everything
-    // above it is in the frozen sound, everything below colours both.
+    // above it is in the frozen sound, everything below colours both. Its ON
+    // is the hold, and it has no bypass crossfade: off means let go, and the
+    // layer leaves at its own Fade out, not in the 15 ms every other stage
+    // takes.
     SpectralFreeze freeze;
     juce::SmoothedValue<float> frzLevel;
     std::vector<float> frzBuf;
@@ -245,8 +248,7 @@ private:
     juce::SmoothedValue<float> reverbMix;
 
     juce::SmoothedValue<float> bypComp, bypEq, bypFilter, bypBoost, bypDrive, bypAmp, bypOct,
-                               bypSynth, bypPhaser, bypChorus, bypDelay, bypTape, bypReverb, bypCab, bypSub,
-                               bypFreeze;
+                               bypSynth, bypPhaser, bypChorus, bypDelay, bypTape, bypReverb, bypCab, bypSub;
 
     std::vector<float> carrierBuf;
 

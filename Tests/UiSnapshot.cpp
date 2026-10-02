@@ -158,9 +158,8 @@ int main (int argc, char* argv[])
         writePng (eqShot, outDir.getChildFile ("eq-editor.png"));
         problems += countBlankButtons (main, "the EQ editor");
 
-        // The freeze pedal, held: its hold switch, level, fades and motion.
+        // The freeze pedal, held: its level, fades and motion.
         params.set (rig::pFreezeOn, 1.0f);
-        params.set (rig::pFreezeHold, 1.0f);
         main.selectFreezeForSnapshot();
 
         juce::Image freezeShot (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
@@ -170,7 +169,8 @@ int main (int argc, char* argv[])
         }
         writePng (freezeShot, outDir.getChildFile ("freeze.png"));
         problems += countBlankButtons (main, "the freeze editor");
-        params.set (rig::pFreezeHold, 0.0f);
+        problems += main.checkRemoveButtonsForSnapshot();
+        params.set (rig::pFreezeOn, 0.0f);
 
         // The autotune strip: the switch, its three faders, and the status line.
         params.set (rig::pVocalOn, 1.0f);

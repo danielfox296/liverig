@@ -48,6 +48,11 @@ Everything happens in the window. There is nothing to run in a terminal.
   nothing to scroll past. Tap the row again to put them away; with nothing
   selected the panel just says so. Which effect is up is remembered between
   sessions.
+- **The × on a row takes that pedal off the board**, and the × in a
+  channel's corner takes the channel off the rail. Neither acts on the tap
+  alone: the pedal's × opens a one-line menu and the channel's asks first,
+  because both sit where a hurried hand lands mid-song. A pedal taken off
+  goes quiet and keeps its knob settings for when it comes back.
 - **The list is the signal chain**, top to bottom, and the rows with a
   gripper can be **dragged into any order** — put drive before the filter,
   chorus before the octave, whatever the song wants. Input stays at the top,
@@ -140,7 +145,7 @@ any order in the app; Input, Reverb and Live out hold their places.
 | 10 | Chorus | rate, depth, voices, tone, keep lows, mix |
 | 11 | Delay | time, feedback, mix, high cut, mod rate, mod depth, sat |
 | 12 | Tape | drive, soften, bump, mix — tape-machine warmth |
-| — | Freeze | hold, level, fade in, fade out, motion — holds what is sounding while a foot stays down |
+| — | Freeze | level, fade in, fade out, motion — its switch holds what is sounding for as long as it is lit |
 | 13 | Pedal | a hosted AU/VST3 effect as a chain insert — pick it, drag it anywhere |
 | 14 | Reverb | size, damping, mix — Freeverb, mono in / stereo out |
 | 15 | Live out | lane gain |
@@ -200,11 +205,12 @@ Five of the stages are modelled on specific boxes rather than invented:
 chord, put a foot down, and it carries on for as long as the foot stays
 there while you play over the top. Lift the foot and it fades away.
 
-It is a pedal on the board like any other — **ADD EFFECT...**, Freeze — and
-it does nothing until **Hold** goes down. Hold is the thing to give a foot
-(see [The foot controller](#the-foot-controller)); the switch in the editor
-is the same Hold for a finger, which is how to try it with no pedal plugged
-in.
+It goes on the board like any other pedal — **ADD EFFECT...**, Freeze — but
+its switch is not a bypass. It says **HOLD**, and it is the hold: lit, the
+pedal is holding what was sounding when it was lit; dark, it has let go and
+is a straight wire. That one switch is the thing to give a foot (see [The
+foot controller](#the-foot-controller)), and a finger on it is how to try
+the pedal with nothing plugged in. It joins the board dark.
 
 - **Where it stands on the board is what it hears.** Every pedal above it is
   in the held sound, exactly as it sounded at the press; every pedal below
@@ -228,8 +234,10 @@ in.
 - A new press while the last hold is still fading starts a new hold and
   lets the old one finish dying underneath it.
 
-Hold is a gesture, not a setting: it is never saved, and no preset carries
-it. The fades, level and motion are saved like any other knob.
+Letting go is always the Fade out, however it is done — the switch, a foot,
+or taking the pedal off the board. Hold is a gesture, not a setting: it is
+never saved, no preset carries it, and the rig always starts with it dark.
+The fades, level and motion are saved like any other knob.
 
 What is held is not a loop. A loop of a slice has a seam, and on a low note
 the seam pulses. Instead the stage reads the spectrum of the moment, finds
@@ -769,8 +777,9 @@ Measured on the separated bass of a real Suno track: notes sounding in 28% of
 the first minute, 94% of those frames tracked confidently, and the octave
 landed within 30 cents in 41 of 42 half-second windows.
 
-`rig_tests --freeze` runs the freeze alone, at three sample rates: armed and
-not held it must be a straight wire, a held tone must keep its level and
+`rig_tests --freeze` runs the freeze alone, at three sample rates: before a
+hold and after one has died away it must be a straight wire, switching it
+off must take the whole Fade out, a held tone must keep its level and
 pitch with no pulse, a low E must keep the balance of its harmonics, the
 layer must join a still-ringing note in phase, letting go must fade in the
 time set, three presses inside one fade must leave only the last and never
