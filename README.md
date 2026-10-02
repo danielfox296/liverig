@@ -40,6 +40,10 @@ Everything happens in the window. There is nothing to run in a terminal.
   musicians place a downbeat with a key press far better than anyone places
   one with a mouse. The loop survives stop (play runs back into it) and
   clears when you switch songs.
+- The box beside **Audio device...** chooses what the left pane is:
+  **BACKING TRACK** — the setlist, transport and stems — or **LOOP**, the
+  instrument looper. See [The looper](#the-looper). Neither stops for being
+  out of sight.
 - **STEMS**: the four stems as a mixer — fader and mute each. Missing stems are
   greyed out. You will normally pull `bass` down or mute it.
 - **Effects** are a list: each row is a name and an ON toggle you can hit
@@ -381,6 +385,52 @@ no longer wired in; it is the layout the FOOT tab starts with, and it can be
 changed there like any other. Both switches can also be stacked by hand in
 the UI.
 
+### The looper
+
+The looper records one channel of your playing and cycles it under you. It
+is built to be worked by foot, and its length is decided before a note is
+played rather than by how well you can stomp on the last beat:
+
+1. **Tap tempo** — tap the switch in time. Two taps make a tempo; more taps
+   average. A tap after a couple of seconds starts a new count.
+2. **Bars** — tap once per bar: four taps is a four-bar loop. After a pause
+   the next tap starts again from one. Sixteen bars at most, fewer below
+   60 BPM (the loop holds 64 seconds).
+3. **Record** — four clicks, then the take. The click keeps going under the
+   take, the take ends itself after the bars you tapped, and the loop comes
+   straight back with no click.
+
+From there **Record** starts and ends a layer on top (the row reads OVERDUB),
+**Undo** takes the newest layer off and a second press puts it back,
+**Stop / start** parks the loop and comes back in from the top, and
+**Clear** wipes it. Stop during the count-in or the take cancels it. The
+taps are ignored while a loop exists — it keeps the tempo and length it was
+recorded at; Clear first.
+
+**One channel at a time.** Record takes whichever strip is selected on the
+rail at the moment it is pressed — the pane's RECORDS line names it — so a
+bass loop and a vocal layer over it are two presses with a tap on the rail
+between. With the master selected it takes the strip selected before it.
+What is recorded is the strip after its pedals, so the loop keeps the sound
+it was played with while you change the board for the next layer. The
+backing track is never recorded.
+
+**The pane** (LOOP in the left pane's box) says what the looper is doing —
+READY, COUNT IN, RECORDING, PLAYING, OVERDUB, STOPPED, the bar, the beat —
+and lists the six functions with the number of the foot switch that does
+each, big enough to read standing up. The number is the one the switch's
+name ends in ("Button 3" shows 3); a function no switch has yet shows a
+dash. Give switches their jobs in the FOOT tab, under **Loop**. Clicking a
+row does what its switch would. **Loop level** is the loop's own fader, and
+a foot job too.
+
+The loop is placed where you heard it, not where it arrived: a played note
+reaches the looper late by the interface's round trip plus the board's own
+delay, and each sample is written that much earlier. The round trip is the
+figure the interface reports (`LiveRig --diagnose` prints it).
+
+The click goes to the main outputs with everything else.
+
 ### The foot controller
 
 The **FOOT** tab maps whatever is under your foot to whatever the rig can
@@ -405,7 +455,7 @@ MIDI Start, Stop and Continue can be learned too.
 **Jobs** are what a control does. The **+** on a card opens the rig as a
 menu — every strip on the rail, every pedal on its board, each pedal's
 switch and each of its knobs, a strip's presets, the song's transport, loop
-tap and stems, the master, MIDI panic. A control can carry as many jobs as
+tap and stems, the looper, the master, MIDI panic. A control can carry as many jobs as
 you give it, so one preset button can set a whole scene: drive on, chorus
 off, delay mix to 0.25. What a job's control looks like depends on what it
 moves:
@@ -417,8 +467,8 @@ moves:
   and where with it down, and the pedal sweeps between. Right-click a row
   for **Swap ends**. From a preset button the fader has one cap — the value
   the press sends it to;
-- a **command** (play/stop, loop tap, recall a preset, panic) just happens
-  on the press.
+- a **command** (play/stop, loop tap, the looper's switches, recall a
+  preset, panic) just happens on the press.
 
 The **×** at the end of a job takes it off. The **...** on a card is that
 control's own menu: **Learn again**, or remove the control. A right click on

@@ -18,6 +18,7 @@
 #include "EffectSlot.h"
 #include "FootControl.h"
 #include "FxChain.h"
+#include "Looper.h"
 #include "InstrumentHost.h"
 #include "PresetStore.h"
 #include "VocalChannel.h"
@@ -5670,6 +5671,505 @@ static void testFootControl()
     }
 }
 
+//==============================================================================
+// The looper, driven the way the engine drives it: every block it is asked
+// what it wants to hear, then handed that. `hands` is what the player is
+// doing at a moment in time; it reaches the looper `latency` samples late,
+// the way a played note arrives after the interface's round trip.
+struct LoopBench
+{
+    LoopBench (double sampleRate, int blockSize, int latencySamples)
+        : sr (sampleRate), block (blockSize), latency (latencySamples),
+          src ((size_t) blockSize), outL ((size_t) blockSize), outR ((size_t) blockSize)
+    {
+        looper.prepare (sr, block);
+    }
+
+    void run (juce::int64 samples)
+    {
+        for (const auto end = now + samples; now < end; now += block)
+        {
+            wanted = looper.beginBlock();
+
+            for (int i = 0; i < block; ++i)
+                src[(size_t) i] = hands != nullptr ? hands (now + i - latency) : 0.0f;
+
+            std::fill (outL.begin(), outL.end(), 0.0f);
+            std::fill (outR.begin(), outR.end(), 0.0f);
+
+            const auto start = std::chrono::high_resolution_clock::now();
+            looper.process (src.data(), src.data(), outL.data(), outR.data(), block, latency, level);
+
+            if (timing)
+                blockUs.push_back (std::chrono::duration<double, std::micro> (
+                                       std::chrono::high_resolution_clock::now() - start).count());
+
+            out.insert (out.end(), outL.begin(), outL.end());
+        }
+    }
+
+    void runSeconds (double seconds)   { run ((juce::int64) (seconds * sr)); }
+
+    // Largest difference between what came out over a stretch and what was
+    // expected there.
+    double worstError (juce::int64 from, juce::int64 to, const std::function<double (juce::int64)>& expected) const
+    {
+        double worst = 0.0;
+
+        for (auto t = from; t < to; ++t)
+            worst = juce::jmax (worst, std::abs ((double) out[(size_t) t] - expected (t)));
+
+        return worst;
+    }
+
+    double peak (juce::int64 from, juce::int64 to) const
+    {
+        double p = 0.0;
+
+        for (auto t = from; t < to; ++t)
+            p = juce::jmax (p, (double) std::abs (out[(size_t) t]));
+
+        return p;
+    }
+
+    Looper looper;
+    double sr;
+    int block, latency;
+    juce::int64 now = 0;
+    float level = 1.0f;
+    int wanted = -1;
+    bool timing = false;
+    std::vector<double> blockUs;
+    std::function<float (juce::int64)> hands;
+    std::vector<float> src, outL, outR, out;
+};
+
+static void testLooper (double sr, int block)
+{
+    std::printf ("\nLooper  (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    const int latency = (int) (0.011 * sr);   // a believable round trip
+    const auto tone = [sr] (double hz, float amp)
+    {
+        return [sr, hz, amp] (juce::int64 t)
+        {
+            return amp * (float) std::sin (6.283185307179586 * hz * (double) t / sr);
+        };
+    };
+
+    LoopBench bench (sr, block, latency);
+    auto& looper = bench.looper;
+
+    // --- the two taps ---
+    looper.tapTempo (1000);
+    looper.tapTempo (1500);
+    looper.tapTempo (2000);
+    looper.tapTempo (2500);
+    report ("four taps half a second apart", std::abs (looper.getBpm() - 120.0f) < 0.01f,
+            juce::String (looper.getBpm(), 1) + " BPM");
+
+    looper.tapTempo (9000);   // a lone tap after a gap changes nothing yet
+    const bool lone = std::abs (looper.getBpm() - 120.0f) < 0.01f;
+    looper.tapTempo (9625);
+    report ("a new count after a gap", lone && std::abs (looper.getBpm() - 96.0f) < 0.01f,
+            juce::String (looper.getBpm(), 1) + " BPM from two taps 625 ms apart");
+
+    looper.tapTempo (20000);
+    looper.tapTempo (20500);
+
+    for (juce::uint32 t : { 30000u, 30300u, 30600u, 30900u })
+        looper.tapBars (t);
+
+    const int four = looper.getBars();
+    looper.tapBars (40000);
+    looper.tapBars (40400);
+    report ("bars count the taps, start over after a pause", four == 4 && looper.getBars() == 2,
+            juce::String (four) + " then " + juce::String (looper.getBars()));
+
+    looper.tapTempo (50000);
+    looper.tapTempo (51500);   // 40 BPM: six-second bars
+
+    for (int i = 0; i < 20; ++i)
+        looper.tapBars (60000 + (juce::uint32) i * 200);
+
+    report ("bars stop at what the loop can hold", looper.getBars() == Looper::maxBarsAt (40.0f)
+              && Looper::maxBarsAt (60.0f) == 16 && Looper::maxBarsAt (240.0f) == 16,
+            juce::String (looper.getBars()) + " bars at 40 BPM");
+
+    // 120 BPM, two bars.
+    looper.tapTempo (70000);
+    looper.tapTempo (70500);
+    looper.tapBars (80000);
+    looper.tapBars (80300);
+
+    const auto beat = (juce::int64) std::llround (sr * 0.5);
+    const juce::int64 countLen = beat * 4, loopLen = beat * 8;
+    const int edge = (int) (0.02 * sr);   // room around the seam and the ramps
+
+    const auto runUntil = [&bench] (juce::int64 t) { bench.run (t - bench.now); };
+
+    // --- count-in and the first take ---
+    const auto x = tone (97.3, 0.25f);
+    bench.hands = x;
+    bench.runSeconds (0.25);
+    report ("silent, asking for nothing before Record", bench.peak (0, bench.now) == 0.0 && bench.wanted == -1,
+            "state " + juce::String ((int) looper.getState()));
+
+    const auto t0 = bench.now;   // the count-in's first click
+    looper.pressRecord (0);
+    bench.run (block);
+    report ("Record starts the count, asks for its channel",
+            looper.getState() == Looper::State::countIn && bench.wanted == 0, "slot " + juce::String (bench.wanted));
+
+    looper.tapTempo (90000);
+    looper.tapTempo (90300);
+    looper.tapBars (90600);
+    report ("taps are ignored once a take is under way",
+            std::abs (looper.getBpm() - 120.0f) < 0.01f && looper.getBars() == 2, "still 120 BPM, 2 bars");
+
+    const auto T0 = t0 + countLen;   // the downbeat
+    const auto p0 = T0 + loopLen;    // playback's first sample
+
+    runUntil (p0 - block);
+    const bool stillTaking = looper.getState() == Looper::State::recording;
+    runUntil (p0 + block);
+    report ("the take closes itself after its bars", stillTaking && looper.getState() == Looper::State::playing,
+            "state " + juce::String ((int) looper.getState()));
+
+    {
+        // Clicks: an onset is a loud sample after a stretch of silence.
+        std::vector<juce::int64> onsets;
+
+        for (auto t = t0; t < p0; ++t)
+            if (std::abs (bench.out[(size_t) t]) > 0.02f && (onsets.empty() || t - onsets.back() > beat / 2))
+                onsets.push_back (t);
+
+        bool spaced = onsets.size() == 12;
+
+        for (size_t k = 0; spaced && k < onsets.size(); ++k)
+            spaced = std::abs (onsets[k] - (t0 + (juce::int64) k * beat)) <= 2;
+
+        report ("four clicks in, then a click a beat", spaced,
+                juce::String ((int) onsets.size()) + " clicks on the beat");
+    }
+
+    runUntil (p0 + loopLen * 3);
+
+    // Playback is the take, placed where the player heard it: the sample
+    // played on the downbeat is the loop's first, whatever the round trip.
+    {
+        double worst = 0.0;
+
+        for (int cycle = 0; cycle < 3; ++cycle)
+            worst = juce::jmax (worst, bench.worstError (p0 + cycle * loopLen, p0 + (cycle + 1) * loopLen - edge,
+                                                         [&] (juce::int64 t) { return (double) x (T0 + (t - p0) % loopLen); }));
+
+        report ("the loop is what was played, where played", worst < 1.0e-5,
+                "worst error " + juce::String (worst, 7) + ", and no click in playback");
+    }
+
+    {
+        double step = 0.0;
+
+        for (auto t = p0 + loopLen - edge; t < p0 + loopLen + edge; ++t)
+            step = juce::jmax (step, (double) std::abs (bench.out[(size_t) t] - bench.out[(size_t) (t - 1)]));
+
+        report ("the seam does not click", step < 0.012,
+                "largest step " + juce::String (step, 4) + " (a bare jump would be up to 0.5)");
+    }
+
+    // From here the first take is judged against its own clean second pass,
+    // seam and all, and each layer against what the hands were doing.
+    struct Layer
+    {
+        juce::int64 a = 0, b = 0;   // pressed on, pressed off
+        std::function<float (juce::int64)> played;
+    };
+
+    const auto firstTake = [&bench, p0, loopLen] (juce::int64 t)
+    {
+        return (double) bench.out[(size_t) (p0 + loopLen + (t - p0) % loopLen)];
+    };
+
+    // The worst error over one pass of the loop starting at `from`, with
+    // the layers in `on` expected to sound. The ramps at each layer's two
+    // ends — every layer in `known`, sounding or not — are left unjudged.
+    const auto passError = [&] (juce::int64 from, std::vector<const Layer*> known,
+                                std::vector<const Layer*> on, double gain = 1.0)
+    {
+        double worst = 0.0;
+
+        for (auto t = from; t < from + loopLen; ++t)
+        {
+            bool judged = true;
+
+            for (const auto* layer : known)
+            {
+                const auto when = layer->a + (t - layer->a) % loopLen;
+
+                if (when < layer->a + edge || when >= layer->a + loopLen - latency - edge
+                     || (when >= layer->b - edge && when < layer->b + latency + edge))
+                    judged = false;
+            }
+
+            if (! judged)
+                continue;
+
+            double expected = firstTake (t);
+
+            for (const auto* layer : on)
+            {
+                const auto when = layer->a + (t - layer->a) % loopLen;
+
+                if (when < layer->b)
+                    expected += (double) layer->played (when);
+            }
+
+            worst = juce::jmax (worst, std::abs ((double) bench.out[(size_t) t] - gain * expected));
+        }
+
+        return worst;
+    };
+
+    // Record a layer of `seconds` with the given hands on the given slot.
+    const auto layer = [&] (const std::function<float (juce::int64)>& played, int slot, juce::int64 length)
+    {
+        Layer made;
+        made.played = played;
+        bench.hands = played;
+        made.a = bench.now;
+        looper.pressRecord (slot);
+        bench.run (length);
+        made.b = bench.now;
+        looper.pressRecord (slot);
+        bench.hands = nullptr;
+        bench.run (latency + edge);
+        return made;
+    };
+
+    // --- a layer ---
+    bench.run (loopLen / 4);
+    bench.hands = tone (311.0, 0.2f);
+    looper.pressRecord (1);
+    bench.run (block);
+    const bool askedForMic = bench.wanted == 1 && looper.getState() == Looper::State::overdubbing;
+    looper.pressUndo();   // take that scrap back off
+    bench.hands = nullptr;
+    bench.run (edge);
+
+    const Layer y = layer (tone (311.0, 0.2f), 1, loopLen / 2);
+    report ("Record on a playing loop layers that channel",
+            askedForMic && looper.getState() == Looper::State::playing && looper.hasLayer(), "asked for slot 1");
+
+    auto from = bench.now;
+    bench.run (loopLen);
+    report ("the layer lands where it was played", passError (from, { &y }, { &y }) < 1.0e-5,
+            "worst error " + juce::String (passError (from, { &y }, { &y }), 7));
+
+    // --- undo, redo ---
+    looper.pressUndo();
+    bench.run (edge);
+    from = bench.now;
+    bench.run (loopLen);
+    report ("Undo takes the layer away", passError (from, { &y }, {}) < 1.0e-5 && looper.isLayerUndone(),
+            "worst error " + juce::String (passError (from, { &y }, {}), 7));
+
+    looper.pressUndo();
+    bench.run (edge);
+    from = bench.now;
+    bench.run (loopLen);
+    report ("Undo again brings it back", passError (from, { &y }, { &y }) < 1.0e-5 && ! looper.isLayerUndone(),
+            "worst error " + juce::String (passError (from, { &y }, { &y }), 7));
+
+    // --- a second layer keeps the first, and only the second comes off ---
+    const Layer z = layer (tone (523.0, 0.15f), 0, loopLen / 4);
+    from = bench.now;
+    bench.run (loopLen);
+    report ("a second layer sits on the first", passError (from, { &y, &z }, { &y, &z }) < 1.0e-5,
+            "worst error " + juce::String (passError (from, { &y, &z }, { &y, &z }), 7));
+
+    looper.pressUndo();
+    bench.run (edge);
+    from = bench.now;
+    bench.run (loopLen);
+    report ("Undo takes only the newest layer", passError (from, { &y, &z }, { &y }) < 1.0e-5,
+            "worst error " + juce::String (passError (from, { &y, &z }, { &y }), 7));
+
+    // A layer recorded over an undone one replaces it for good.
+    const Layer w = layer (tone (733.0, 0.1f), 0, loopLen / 3);
+    from = bench.now;
+    bench.run (loopLen);
+    report ("a layer over an undone one drops the undone", passError (from, { &y, &z, &w }, { &y, &w }) < 1.0e-5,
+            "worst error " + juce::String (passError (from, { &y, &z, &w }, { &y, &w }), 7));
+
+    // A layer that runs round the loop more than once stacks on itself.
+    looper.pressUndo();
+    bench.run (edge);
+    const Layer twice = layer (tone (211.0, 0.05f), 0, loopLen * 2);
+    from = bench.now;
+    bench.run (loopLen);
+    {
+        // Two passes of the same hands at every position: the second pass
+        // is the first a loop later.
+        Layer second = twice;
+        second.played = [&twice, loopLen] (juce::int64 t) { return twice.played (t + loopLen); };
+        Layer first = twice;
+        first.b = twice.a + loopLen;
+        second.b = twice.a + loopLen;
+
+        // Only the layer's own two ends are ramps; its middle wrap is not.
+        const double error = passError (from, { &y, &twice }, { &y, &first, &second });
+        report ("a layer two loops long stacks on itself", error < 1.0e-5, "worst error " + juce::String (error, 7));
+    }
+
+    looper.pressUndo();
+    bench.run (edge);
+
+    // --- loop level ---
+    bench.level = 0.5f;
+    bench.run (loopLen / 2);
+    from = bench.now;
+    bench.run (loopLen);
+    report ("the loop's level rides the whole loop", passError (from, { &y, &twice }, { &y }, 0.5) < 1.0e-5,
+            "worst error at half gain " + juce::String (passError (from, { &y, &twice }, { &y }, 0.5), 7));
+    bench.level = 1.0f;
+    bench.run (loopLen / 2);
+
+    // --- stop / start ---
+    looper.pressStopStart();
+    bench.run (edge);
+    from = bench.now;
+    bench.runSeconds (0.5);
+    report ("Stop is silence", bench.peak (from, bench.now) == 0.0 && looper.getState() == Looper::State::stopped,
+            "after a 10 ms fade");
+
+    looper.pressStopStart();
+    const auto restartedAt = bench.now;
+    bench.run (loopLen + edge);
+    {
+        // Back in from the top: the first sample out is the loop's first.
+        double worst = 0.0;
+
+        for (auto t = restartedAt + edge; t < restartedAt + loopLen / 8; ++t)
+            worst = juce::jmax (worst, std::abs ((double) bench.out[(size_t) t] - firstTake (p0 + (t - restartedAt))));
+
+        report ("Start comes back in from the top", worst < 1.0e-5 && looper.getState() == Looper::State::playing,
+                "worst error " + juce::String (worst, 7));
+    }
+
+    // --- clear, and a new loop at another tempo with nothing left behind ---
+    looper.pressClear();
+    bench.run (edge);
+    from = bench.now;
+    bench.runSeconds (0.3);
+    report ("Clear is silence and an empty looper",
+            bench.peak (from, bench.now) == 0.0 && looper.getState() == Looper::State::empty
+              && ! looper.hasLayer() && bench.wanted == -1,
+            "state " + juce::String ((int) looper.getState()));
+
+    looper.tapTempo (200000);
+    looper.tapTempo (200625);
+    looper.tapBars (210000);
+
+    {
+        const double beat2 = sr * 0.625;   // not a whole number of samples at 44.1k
+        const auto count2 = (juce::int64) std::llround (beat2 * 4.0), loop2 = count2;
+        const auto x2 = tone (61.7, 0.3f);
+        bench.hands = x2;
+
+        const auto t2 = bench.now;
+        const auto p2 = t2 + count2 + loop2;
+        looper.pressRecord (0);
+        runUntil (p2 + loop2 / 8);
+
+        // Straight into a layer over the short loop, so the buffers the old
+        // loop's layers lived in are in play again.
+        const auto v = tone (440.0, 0.1f);
+        bench.hands = v;
+        const auto va = bench.now;
+        looper.pressRecord (0);
+        bench.run (loop2 / 2);
+        const auto vb = bench.now;
+        looper.pressRecord (0);
+        bench.hands = nullptr;
+        bench.run (latency + edge);
+
+        from = bench.now;
+        bench.run (loop2);
+
+        double worst = 0.0;
+
+        for (auto t = from; t < from + loop2; ++t)
+        {
+            const auto pos = (t - p2) % loop2;
+            const auto when = va + (t - va) % loop2;
+
+            if (pos >= loop2 - edge || when < va + edge || when >= va + loop2 - latency - edge
+                 || (when >= vb - edge && when < vb + latency + edge))
+                continue;
+
+            const double expected = (double) x2 (t2 + count2 + pos) + (when < vb ? (double) v (when) : 0.0);
+            worst = juce::jmax (worst, std::abs ((double) bench.out[(size_t) t] - expected));
+        }
+
+        report ("a new loop carries nothing of the old one", worst < 1.0e-5 && std::abs (looper.getBpm() - 96.0f) < 0.01f,
+                "96 BPM, 1 bar, worst error " + juce::String (worst, 7));
+
+        // --- a take cancelled by Stop leaves nothing ---
+        looper.pressClear();
+        bench.run (edge);
+        looper.pressRecord (0);
+        bench.run (count2 / 2);
+        looper.pressStopStart();
+        bench.run (block);
+        from = bench.now + (juce::int64) (0.08 * sr);   // the last click rings out
+        bench.runSeconds (1.0);
+        report ("Stop during the count-in cancels the take",
+                looper.getState() == Looper::State::empty && bench.peak (from, bench.now) == 0.0,
+                "empty and silent");
+    }
+
+    // --- the longest loop: folding a layer must not cost a block its time ---
+    {
+        LoopBench big (sr, block, latency);
+        big.looper.tapTempo (0);
+        big.looper.tapTempo (1000);   // 60 BPM
+
+        for (int i = 0; i < 16; ++i)
+            big.looper.tapBars (5000 + (juce::uint32) i * 100);
+
+        big.hands = x;
+        big.looper.pressRecord (0);
+        big.runSeconds (4.0 + 64.0 + 1.0);
+
+        big.looper.pressRecord (0);
+        big.runSeconds (2.0);
+        big.looper.pressRecord (0);
+        big.runSeconds (1.0);
+        big.blockUs.clear();
+        big.timing = true;
+
+        // Three layers started in a row: each start folds the one before
+        // across all sixty-four seconds while the loop plays on.
+        for (int i = 0; i < 3; ++i)
+        {
+            big.looper.pressRecord (0);
+            big.runSeconds (1.5);
+            big.looper.pressRecord (0);
+            big.runSeconds (1.5);
+        }
+
+        // One block in a thousand is the machine's, not the looper's.
+        std::sort (big.blockUs.begin(), big.blockUs.end());
+        const double typicalWorst = big.blockUs[(size_t) ((double) big.blockUs.size() * 0.999)];
+        const double budgetUs = 1.0e6 * block / sr;
+
+        report ("folding a 64 s loop stays inside the block", big.looper.getBars() == 16
+                  && big.looper.getState() == Looper::State::playing && typicalWorst < budgetUs * 0.25,
+                juce::String (typicalWorst, 0) + " us a block at worst, of " + juce::String (budgetUs, 0));
+    }
+}
+
 int main (int argc, char* argv[])
 {
     // The scan spawns this same binary as its disposable per-plugin worker.
@@ -5690,6 +6190,16 @@ int main (int argc, char* argv[])
     if (argc == 2 && juce::String (argv[1]) == "--foot")
     {
         testFootControl();
+        std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASS" : "FAILURES",
+                     failures, failures == 1 ? "" : "s");
+        return failures == 0 ? 0 : 1;
+    }
+
+    // The looper on its own, for the same reason.
+    if (argc == 2 && juce::String (argv[1]) == "--looper")
+    {
+        testLooper (48000.0, 64);
+        testLooper (44100.0, 128);
         std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASS" : "FAILURES",
                      failures, failures == 1 ? "" : "s");
         return failures == 0 ? 0 : 1;
@@ -5772,6 +6282,8 @@ int main (int argc, char* argv[])
     testStemPlayer (48000.0, 44100.0, 64);
     testStemPlayer (48000.0, 48000.0, 32);
     testSectionLoop (48000.0, 64);
+    testLooper (48000.0, 64);
+    testLooper (44100.0, 128);
 
     if (argc > 1)
     {

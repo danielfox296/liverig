@@ -30,6 +30,7 @@ void SettingsStore::load (ParamStore& params)
         instrumentState = obj->getProperty ("instrumentState").toString();
         chainOrder = obj->getProperty ("chainOrder").toString();
         tuner = obj->getProperty ("tuner").toString();
+        leftPane = obj->getProperty ("leftPane").toString();
         ampModel = obj->getProperty ("ampModel").toString();
         bassInput = (int) obj->getProperty ("bassInput");
         micInput = (int) obj->getProperty ("micInput");
@@ -127,6 +128,7 @@ void SettingsStore::save (const ParamStore& params) const
     root->setProperty ("instrumentState", instrumentState);
     root->setProperty ("chainOrder", chainOrder);
     root->setProperty ("tuner", tuner);
+    root->setProperty ("leftPane", leftPane);
     root->setProperty ("ampModel", ampModel);
     root->setProperty ("bassInput", bassInput);
     root->setProperty ("micInput", micInput);

@@ -9,6 +9,7 @@
 #include "SongMaker.h"
 #include "ui/EqView.h"
 #include "ui/FootView.h"
+#include "ui/LoopView.h"
 #include "ui/MidiStatusView.h"
 #include "ui/SongMakerPanel.h"
 #include "ui/TunerView.h"
@@ -43,6 +44,8 @@ public:
     void selectKeysForSnapshot();
     void showTunerForSnapshot();
     void showFootForSnapshot();
+    void showLoopForSnapshot();
+    int exerciseLoopForSnapshot (const std::function<void (const char*)>& shoot);
     int checkFootFunctionsForSnapshot();
     int exerciseFootForSnapshot();
     void showJobStripForSnapshot();
@@ -82,6 +85,9 @@ private:
     void dropFxRow (FxPanel* panel);
     void loopTapped();
     void refreshLoopButton();
+    void showLeftPane (bool loop);
+    void refreshLoopPane();
+    juce::String loopChannelKey() const;
 
     void rebuildChannelRail();
     void showAddChannelMenu();
@@ -122,7 +128,8 @@ private:
     void buildFootMenu (juce::PopupMenu& menu, const FootView::Chooser& choose) const;
     juce::String describeFootAction (const juce::String& action) const;
     juce::String footParamName (int paramId) const;
-    void runFootCommand (const juce::String& command);
+    void runFootCommand (const juce::String& command,
+                         juce::uint32 pressedAtMs = juce::Time::getMillisecondCounter());
 
     void chooseAmpCapture();
     void refreshAmpControls();
@@ -162,6 +169,13 @@ private:
     juce::StringArray songNames;
     juce::File loadedFolder;
     juce::Rectangle<int> songsBox;   // the painted card behind the songs section
+
+    // The left pane is one of two things: the backing track — its setlist
+    // and stems — or the looper. The looper itself runs whichever is up.
+    juce::ComboBox paneBox;
+    LoopView loopView { uiParams, engine.getLooper(), engine.getFoot() };
+    bool loopPaneShowing = false;
+    juce::String loopChannel { "bass" };   // the last strip selected that was not the master
 
     juce::ComboBox presetBox;
     juce::TextButton savePresetButton { "Save" };

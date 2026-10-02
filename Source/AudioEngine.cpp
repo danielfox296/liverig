@@ -213,7 +213,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     activeInputMask.store (mask, std::memory_order_relaxed);
     updateInputSlots();
 
-    scratch.setSize (11, maxBlock, false, true, false);
+    scratch.setSize (13, maxBlock, false, true, false);
     scratch.clear();
 
     fx.prepare (rate, maxBlock);
@@ -238,6 +238,11 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
     instrument.prepare (rate, maxBlock);
     stems.prepare (rate, maxBlock);
+
+    looper.prepare (rate, maxBlock);
+    ioRoundTrip.store (device->getInputLatencyInSamples() + device->getOutputLatencyInSamples()
+                         + device->getCurrentBufferSizeSamples(),
+                       std::memory_order_relaxed);
 
     tuneSlot.prepare (rate, maxBlock);
     vocoderSlot.prepare (rate, maxBlock);
@@ -309,7 +314,7 @@ void AudioEngine::renderBoard (FxChain& chain, bool active, juce::SmoothedValue<
 // written so a delay can arrive without serving stale history; at zero
 // delay the fresh sample reads straight back out.
 void AudioEngine::alignedAdd (int slot, int delaySamples, const float* inL, const float* inR,
-                              float* outL, float* outR, int n) noexcept
+                              float* outL, float* outR, int n, float* tapL, float* tapR) noexcept
 {
     const int d = juce::jlimit (0, alignRingSize - 1, delaySamples);
     float* ringL = alignRings.getWritePointer (slot * 2);
@@ -324,6 +329,13 @@ void AudioEngine::alignedAdd (int slot, int delaySamples, const float* inL, cons
         const int read = pos - d >= 0 ? pos - d : pos - d + alignRingSize;
         outL[i] += ringL[read];
         outR[i] += ringR[read];
+
+        // The looper hears the path exactly as it joins the sum.
+        if (tapL != nullptr)
+        {
+            tapL[i] = ringL[read];
+            tapR[i] = ringR[read];
+        }
 
         if (++pos == alignRingSize)
             pos = 0;
@@ -366,6 +378,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     float* busIn   = scratch.getWritePointer (8);
     float* tmpL    = scratch.getWritePointer (9);
     float* tmpR    = scratch.getWritePointer (10);
+    float* tapL    = scratch.getWritePointer (11);
+    float* tapR    = scratch.getWritePointer (12);
 
     const int bassIn = bassSlot.load (std::memory_order_relaxed);
     const int micIn = micSlot.load (std::memory_order_relaxed);
@@ -374,9 +388,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     // slowest of them, so one source through two boards cannot comb. An
     // empty board adds nothing and costs nothing; the lanes stay untouched.
     int alignDelay[ParamStore::maxChannels] {};
+    float slowest = fx.getLatencySamples();
     {
-        float slowest = fx.getLatencySamples();
-
         for (int s = 3; s < ParamStore::maxChannels; ++s)
             if (sourceSlot[(size_t) s].load (std::memory_order_relaxed) >= 0
                  && boardActive[(size_t) s].load (std::memory_order_relaxed))
@@ -396,6 +409,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     {
         const int n = juce::jmin (maxBlock, numSamples - offset);
 
+        // The looper says which strip it wants to hear this block; that
+        // strip's sound is copied aside as it joins the sum.
+        const int loopSource = looper.beginBlock();
+        juce::FloatVectorOperations::clear (tapL, n);
+        juce::FloatVectorOperations::clear (tapR, n);
+
         // --- live lane: instrument on its assigned input channel ---
         if (bassIn < numInputChannels && inputChannelData[bassIn] != nullptr)
             juce::FloatVectorOperations::copy (monoIn, inputChannelData[bassIn] + offset, n);
@@ -407,7 +426,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         fx.process (monoIn, tmpL, tmpR, n);
         juce::FloatVectorOperations::clear (liveL, n);
         juce::FloatVectorOperations::clear (liveR, n);
-        alignedAdd (0, alignDelay[0], tmpL, tmpR, liveL, liveR, n);
+        alignedAdd (0, alignDelay[0], tmpL, tmpR, liveL, liveR, n,
+                    loopSource == 0 ? tapL : nullptr, loopSource == 0 ? tapR : nullptr);
 
         int midiCount = 0;
         const auto* events = fx.getMidiEvents (midiCount);
@@ -448,6 +468,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                          2, laneL, laneR, tmpL, tmpR, busIn, n);
             juce::FloatVectorOperations::add (liveL, tmpL, n);
             juce::FloatVectorOperations::add (liveR, tmpR, n);
+
+            if (loopSource == 2)
+            {
+                juce::FloatVectorOperations::copy (tapL, tmpL, n);
+                juce::FloatVectorOperations::copy (tapR, tmpR, n);
+            }
         }
 
         // --- mic lanes: the assigned mic channel, summed in as performance.
@@ -469,6 +495,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         juce::FloatVectorOperations::add (liveL, tmpL, n);
         juce::FloatVectorOperations::add (liveR, tmpR, n);
 
+        if (loopSource == 1)
+        {
+            juce::FloatVectorOperations::copy (tapL, tmpL, n);
+            juce::FloatVectorOperations::copy (tapR, tmpR, n);
+        }
+
         // --- the generic strips: each claimed jack through its own board,
         // aligned into the sum, metered on the way ---
         for (int s = 3; s < ParamStore::maxChannels; ++s)
@@ -483,7 +515,30 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                          passGains[(size_t) s], s, jack, jack, laneL, laneR, busIn, n);
 
             updatePeak (slotPeaks[(size_t) s], laneL, n, decay);
-            alignedAdd (s, alignDelay[s], laneL, laneR, liveL, liveR, n);
+            alignedAdd (s, alignDelay[s], laneL, laneR, liveL, liveR, n,
+                        loopSource == s ? tapL : nullptr, loopSource == s ? tapR : nullptr);
+        }
+
+        // --- the looper: the loop and its click join the playing. A played
+        // note reaches it late by the interface's round trip plus whatever
+        // its strip's board holds back; the looper writes it that much
+        // earlier, where the player heard it. ---
+        {
+            // The mic's lanes run through hosted plugins that hold the
+            // voice back themselves — a pitch corrector by tens of
+            // milliseconds — ahead of whatever its board adds.
+            const float micLanes = (float) juce::jmax (params.getBool (pVocalOn) ? tuneSlot.getLatencySamples() : 0,
+                                                       params.getBool (pVocoderOn) ? vocoderSlot.getLatencySamples() : 0);
+
+            const float pathLatency = loopSource == 1 ? micLanes + (boardActive[1].load (std::memory_order_relaxed)
+                                                                       ? micChain.getLatencySamples() : 0.0f)
+                                    : loopSource == 2 ? (boardActive[2].load (std::memory_order_relaxed)
+                                                            ? keysChain.getLatencySamples() : 0.0f)
+                                                      : slowest;
+
+            looper.process (tapL, tapR, liveL, liveR, n,
+                            ioRoundTrip.load (std::memory_order_relaxed) + (int) std::lround (pathLatency),
+                            juce::Decibels::decibelsToGain (params.get (pLoopLevel), -60.0f));
         }
 
         // --- playback lane ---

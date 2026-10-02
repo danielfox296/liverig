@@ -8,6 +8,7 @@
 #include "FootControl.h"
 #include "FxChain.h"
 #include "InstrumentHost.h"
+#include "Looper.h"
 #include "MidiSender.h"
 #include "Parameters.h"
 #include "StemPlayer.h"
@@ -35,6 +36,7 @@ public:
     InstrumentHost& getInstrument() noexcept              { return instrument; }
 
     StemPlayer& getStemPlayer() noexcept                  { return stems; }
+    Looper& getLooper() noexcept                          { return looper; }
     FxChain& getFxChain() noexcept                        { return fx; }
 
     // A channel's own pedalboard: slot 0 is the bass chain, 1 the mic
@@ -90,6 +92,10 @@ public:
     // driver's safety offsets, as reported by CoreAudio.
     float getIoLatencyMs() noexcept;
 
+    // How late the looper takes a played note to be before the board's own
+    // delay is added: the interface's input and output latency and one buffer.
+    int getLoopRoundTripSamples() const noexcept { return ioRoundTrip.load (std::memory_order_relaxed); }
+
     float getInputPeak() const noexcept     { return inPeak.load (std::memory_order_relaxed); }
     float getVocalPeak() const noexcept     { return vocalPeak.load (std::memory_order_relaxed); }
 
@@ -136,7 +142,8 @@ private:
                       const float* inL, const float* inR, float* pathL, float* pathR,
                       float* busIn, int n) noexcept;
     void alignedAdd (int slot, int delaySamples, const float* inL, const float* inR,
-                     float* outL, float* outR, int n) noexcept;
+                     float* outL, float* outR, int n,
+                     float* tapL = nullptr, float* tapR = nullptr) noexcept;
     void handleIncomingMidiMessage (juce::MidiInput* source,
                                     const juce::MidiMessage& message) override;
 
@@ -200,6 +207,13 @@ private:
     InstrumentHost instrument;
     float instrumentGain = 1.0f;
 
+    // The instrument looper: one channel's sound in, after its board; the
+    // loop and its click out into the live sum. The round trip is what the
+    // interface costs a played note — in, out and one buffer — so the loop
+    // can put each note back where the player heard it.
+    Looper looper;
+    std::atomic<int> ioRoundTrip { 0 };
+
     // Playback-lane dynamics: the song is limited into the headroom the
     // instrument leaves, so a song never ducks the playing.
     StemDucker ducker;
@@ -209,7 +223,7 @@ private:
     juce::SmoothedValue<float> trackGain, masterGain;
     MasterLimiter limiter;
 
-    juce::AudioBuffer<float> scratch;   // monoIn, liveL/R, mixL/R, vocalIn, laneL/R, busIn, tmpL/R
+    juce::AudioBuffer<float> scratch;   // monoIn, liveL/R, mixL/R, vocalIn, laneL/R, busIn, tmpL/R, tapL/R
     int maxBlock = 512;
 
     std::atomic<double> currentRate { 0.0 };

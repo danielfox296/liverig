@@ -399,7 +399,7 @@ void FootEngine::rebuild()
     live = std::move (fresh);
 }
 
-void FootEngine::apply (Live& entry, int midiValue)
+void FootEngine::apply (Live& entry, int midiValue, juce::uint32 nowMs)
 {
     // What the hardware said, in the two things a step can care about: where
     // the control stands, and whether this message is a press.
@@ -437,6 +437,7 @@ void FootEngine::apply (Live& entry, int midiValue)
             if (pressed)
             {
                 commands.add (step.job.action);
+                commandTimes.add (nowMs);
                 queued = true;
             }
 
@@ -551,7 +552,7 @@ bool FootEngine::handleMidi (const juce::String& deviceName, const juce::MidiMes
         if (entry.control.trigger.matches (heard))
         {
             lastHeard.controls.add (entry.control.id);
-            apply (entry, value);
+            apply (entry, value, nowMs);
         }
     }
 
@@ -624,11 +625,16 @@ void FootEngine::setCommandNotifier (std::function<void()> notify)
     notifier = std::move (notify);
 }
 
-juce::StringArray FootEngine::takeCommands()
+juce::StringArray FootEngine::takeCommands (juce::Array<juce::uint32>* pressedAtMs)
 {
     const juce::ScopedLock sl (lock);
     juce::StringArray taken;
     taken.swapWith (commands);
+
+    if (pressedAtMs != nullptr)
+        *pressedAtMs = commandTimes;
+
+    commandTimes.clearQuick();
     return taken;
 }
 

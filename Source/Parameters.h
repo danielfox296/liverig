@@ -91,6 +91,9 @@ enum ParamId
     pMasterGain,
     pMasterMute,
 
+    // The looper's own fader: how loud the loop sits under the playing.
+    pLoopLevel,
+
     NumParams
 };
 

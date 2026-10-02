@@ -92,6 +92,7 @@ set(RIG_DSP_SOURCES
     Source/dsp/AmpModel.cpp
     Source/FxChain.cpp
     Source/StemPlayer.cpp
+    Source/Looper.cpp
     Source/FootControl.cpp
     Source/Parameters.cpp)
 

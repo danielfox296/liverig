@@ -76,6 +76,10 @@ public:
                      foot.device.isEmpty() ? "any controller" : foot.device.toRawUTF8());
             }
 
+            if (const double rate = engine.getSampleRate(); rate > 0.0)
+                say ("looper: takes a played note to arrive %d samples (%.1f ms) late, plus its board\n",
+                     engine.getLoopRoundTripSamples(), engine.getLoopRoundTripSamples() / rate * 1000.0);
+
             say ("mic path: %s\n", engine.getActiveInputCount() >= 2
                                        ? "input 2 available"
                                        : "NO INPUT 2 on this device — the mic lane is silent");

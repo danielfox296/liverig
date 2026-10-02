@@ -181,6 +181,22 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     // board's TOTAL fader, not a rider under the transport.
     addAndMakeVisible (stemStrips.add (new StemStrip (uiParams, "TOTAL", pTrackGain, -1)));
 
+    // The left pane's two faces. Clicking a row of the loop pane does what
+    // its switch would, through the same door a foot's press comes in by.
+    paneBox.addItem ("BACKING TRACK", 1);
+    paneBox.addItem ("LOOP", 2);
+    paneBox.setSelectedId (settings.leftPane == "loop" ? 2 : 1, juce::dontSendNotification);
+    paneBox.setWantsKeyboardFocus (false);
+    paneBox.onChange = [this]
+    {
+        showLeftPane (paneBox.getSelectedId() == 2);
+        saveSettings();
+    };
+    addAndMakeVisible (paneBox);
+
+    loopView.onPress = [this] (const juce::String& action) { runFootCommand (action); };
+    addChildComponent (loopView);
+
     fxDefs = {
         { "input",  -1,                false, "",       "Input",      pInMute,   { pInGain } },
         { "vocal",  -1,                false, "",       "Autotune",   pVocalOn,  { pVocalGain, pVocalGate, pVocalLevel } },
@@ -441,6 +457,8 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
             loadSong (folder);
     }
 
+    showLeftPane (settings.leftPane == "loop");
+
     startTimerHz (30);
     setSize (1020, 780);
 }
@@ -455,6 +473,9 @@ MainComponent::~MainComponent()
 void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (0xff101114));
+
+    if (loopPaneShowing)
+        return;
 
     // The songs section sits in its own card.
     g.setColour (juce::Colour (0xff17181c));
@@ -477,8 +498,15 @@ void MainComponent::resized()
 
     auto left = b.removeFromLeft (300);
 
-    deviceButton.setBounds (left.removeFromTop (26).removeFromLeft (132));
+    auto paneRow = left.removeFromTop (26);
+    deviceButton.setBounds (paneRow.removeFromLeft (132));
+    paneRow.removeFromLeft (8);
+    paneBox.setBounds (paneRow);
     left.removeFromTop (8);
+
+    // The looper takes the whole pane when it is up; the songs and stems
+    // keep their places underneath for when it is not.
+    loopView.setBounds (left);
 
     // The stems keep a short, fixed footprint at the bottom; the songs card
     // above them takes every row the window can spare for the setlist.
@@ -839,6 +867,259 @@ int MainComponent::exerciseFootForSnapshot()
 
     footView.onEdited = std::move (keeper);
     std::printf ("  foot tab exercised: %d edits kept\n", kept);
+    return problems;
+}
+
+namespace
+{
+// A device that exists only to tell the engine a rate, a block size and a
+// round trip, so the offscreen check can run the real audio callback.
+struct StandInDevice : juce::AudioIODevice
+{
+    StandInDevice() : juce::AudioIODevice ("stand-in", "offscreen") {}
+
+    static constexpr int block = 64, inputLatency = 100, outputLatency = 120;
+    static constexpr double rate = 48000.0;
+
+    static juce::BigInteger twoChannels()
+    {
+        juce::BigInteger channels;
+        channels.setRange (0, 2, true);
+        return channels;
+    }
+
+    juce::StringArray getOutputChannelNames() override          { return { "L", "R" }; }
+    juce::StringArray getInputChannelNames() override           { return { "1", "2" }; }
+    juce::Array<double> getAvailableSampleRates() override      { return { rate }; }
+    juce::Array<int> getAvailableBufferSizes() override         { return { block }; }
+    int getDefaultBufferSize() override                         { return block; }
+    juce::String open (const juce::BigInteger&, const juce::BigInteger&, double, int) override { return {}; }
+    void close() override                                       {}
+    bool isOpen() override                                      { return true; }
+    void start (juce::AudioIODeviceCallback*) override          {}
+    void stop() override                                        {}
+    bool isPlaying() override                                   { return true; }
+    juce::String getLastError() override                        { return {}; }
+    int getCurrentBufferSizeSamples() override                  { return block; }
+    double getCurrentSampleRate() override                      { return rate; }
+    int getCurrentBitDepth() override                           { return 24; }
+    juce::BigInteger getActiveOutputChannels() const override   { return twoChannels(); }
+    juce::BigInteger getActiveInputChannels() const override    { return twoChannels(); }
+    int getOutputLatencyInSamples() override                    { return outputLatency; }
+    int getInputLatencyInSamples() override                     { return inputLatency; }
+};
+
+// Buttons 1 to 6 of a foot controller, each given one of the looper's jobs
+// in the pane's own order.
+FootMap looperFootMap()
+{
+    FootMap map;
+    FootLayout layout;
+    layout.name = "Default";
+
+    for (int i = 0; i < LoopView::numRows; ++i)
+    {
+        FootControl c;
+        c.id = map.freshControlId();
+        c.name = "Button " + juce::String (i + 1);
+        c.trigger = { FootTrigger::program, 1, i };
+        c.kind = FootControl::preset;
+        map.controls.push_back (c);
+        layout.jobs.push_back ({ c.id, LoopView::actionFor (i), FootJob::follow, 0.0f, 1.0f });
+    }
+
+    map.layouts = { layout };
+    map.active = layout.name;
+    return map;
+}
+}
+
+// The loop pane as it stands before a note: six switches with their jobs,
+// the tempo and bars the taps made, and the channel Record would take.
+void MainComponent::showLoopForSnapshot()
+{
+    engine.getFoot().setMap (looperFootMap());
+    footView.reload();
+    showLeftPane (true);
+    loopView.refreshSwitches();
+    refreshLoopPane();
+}
+
+// The looper end to end with no hardware: the real audio callback behind a
+// stand-in device, and the looper worked through the doors a foot and a
+// mouse come in by. A note played on the second beat of the bar must come
+// back on the second beat of the loop, not a round trip late. Returns how
+// many things did not happen.
+int MainComponent::exerciseLoopForSnapshot (const std::function<void (const char*)>& shoot)
+{
+    int problems = 0;
+    const auto expect = [&problems] (bool ok, const char* what)
+    {
+        if (! ok)
+        {
+            std::printf ("  LOOPER: %s\n", what);
+            ++problems;
+        }
+    };
+
+    // A flat rig, so what goes into the bass jack is what the loop should hold.
+    params.resetToDefaults();
+    refreshAllControls();
+
+    StandInDevice device;
+    engine.audioDeviceAboutToStart (&device);
+
+    auto& looper = engine.getLooper();
+    auto& foot = engine.getFoot();
+    const auto press = [this, &foot] (int button, juce::uint32 atMs)
+    {
+        foot.handleMidi ("box", juce::MidiMessage::programChange (1, button - 1), atMs);
+        handleAsyncUpdate();
+    };
+
+    showLoopForSnapshot();
+
+    for (int row = 0; row < LoopView::numRows; ++row)
+        expect (loopView.switchTextFor (row) == juce::String (row + 1), "a row does not show its switch's number");
+
+    // Two taps arrive in one batch; only their own press times can tell
+    // them half a second apart.
+    foot.handleMidi ("box", juce::MidiMessage::programChange (1, 0), 1000);
+    foot.handleMidi ("box", juce::MidiMessage::programChange (1, 0), 1500);
+    handleAsyncUpdate();
+    expect (std::abs (looper.getBpm() - 120.0f) < 0.01f, "two taps half a second apart did not make 120");
+
+    press (2, 3000);
+    press (2, 3200);
+    press (2, 9000);
+    expect (looper.getBars() == 1, "the bars switch did not count its taps and start over");
+
+    const int block = StandInDevice::block;
+    const juce::int64 beat = 24000, countLen = beat * 4, loopLen = beat * 4;
+    const int lateness = StandInDevice::inputLatency + StandInDevice::outputLatency + block
+                           + (int) std::lround (engine.getFxLatencyMs() * 48.0f);
+
+    // One short note, played dead on the second beat of the take.
+    juce::int64 now = 0, noteAt = 0;
+    const auto played = [&noteAt] (juce::int64 t)
+    {
+        const double d = (double) (t - noteAt);
+        return std::abs (d) < 240.0 ? (float) (0.3 * std::cos (6.283185307179586 * 1000.0 * d / 48000.0)
+                                                 * 0.5 * (1.0 + std::cos (3.141592653589793 * d / 240.0)))
+                                    : 0.0f;
+    };
+
+    std::vector<float> bass ((size_t) block), mic ((size_t) block, 0.0f), outL ((size_t) block), outR ((size_t) block);
+    std::vector<float> heard;
+
+    const auto run = [&] (juce::int64 samples)
+    {
+        for (const auto end = now + samples; now < end; now += block)
+        {
+            for (int i = 0; i < block; ++i)
+                bass[(size_t) i] = played (now + i - lateness);
+
+            const float* ins[2] = { bass.data(), mic.data() };
+            float* outs[2] = { outL.data(), outR.data() };
+            engine.audioDeviceIOCallbackWithContext (ins, 2, outs, 2, block, {});
+            heard.insert (heard.end(), outL.begin(), outL.end());
+        }
+    };
+
+    const auto loudestIn = [&heard] (juce::int64 from, juce::int64 to)
+    {
+        juce::int64 at = from;
+
+        for (auto t = from; t < to; ++t)
+            if (std::abs (heard[(size_t) t]) > std::abs (heard[(size_t) at]))
+                at = t;
+
+        return at;
+    };
+
+    run (block * 10);
+    selectChannel ("master");   // Record takes the strip selected before the master
+    const auto t0 = now;
+    noteAt = t0 + countLen + beat;
+    press (3, 20000);
+    run (block);
+    expect (looper.getState() == Looper::State::countIn && looper.getSource() == 0,
+            "Record did not start the count on the bass");
+
+    run (countLen + beat);
+    refreshLoopPane();
+    expect (looper.getState() == Looper::State::recording && loopView.stateText() == "RECORDING"
+              && loopView.labelFor (3) == "CANCEL",
+            "the pane does not show a take in progress");
+    shoot ("loop-recording.png");
+
+    const auto p0 = t0 + countLen + loopLen;
+    run (p0 + loopLen * 2 + beat * 2 - now);
+    refreshLoopPane();
+    expect (looper.getState() == Looper::State::playing && loopView.stateText() == "PLAYING"
+              && loopView.labelFor (2) == "OVERDUB" && loopView.labelFor (3) == "STOP",
+            "the take did not close into a playing loop");
+    shoot ("loop-playing.png");
+
+    for (int cycle = 0; cycle < 2; ++cycle)
+    {
+        const auto top = p0 + cycle * loopLen;
+        const auto at = loudestIn (top, top + loopLen);
+
+        if (std::abs (at - (top + beat)) > 4 || std::abs (heard[(size_t) at]) < 0.1f)
+        {
+            std::printf ("  LOOPER: the note came back %lld samples off the beat (level %.3f, round trip %d)\n",
+                         (long long) (at - (top + beat)), (double) std::abs (heard[(size_t) at]), lateness);
+            ++problems;
+        }
+    }
+
+    // A layer takes whichever strip is selected when Record is pressed.
+    selectChannel ("mic");
+    press (3, 30000);
+    run (block * 4);
+    refreshLoopPane();
+    expect (looper.getState() == Looper::State::overdubbing && looper.getSource() == 1
+              && loopView.stateText() == "OVERDUB",
+            "Record on a playing loop did not layer the selected strip");
+
+    press (5, 31000);
+    run (block * 4);
+    refreshLoopPane();
+    expect (looper.getState() == Looper::State::playing && looper.isLayerUndone() && loopView.labelFor (4) == "REDO",
+            "Undo did not take the layer off");
+
+    press (4, 32000);
+    run (block * 20);
+    refreshLoopPane();
+    expect (looper.getState() == Looper::State::stopped && loopView.labelFor (3) == "START",
+            "Stop did not stop the loop");
+
+    {
+        const auto from = (juce::int64) heard.size();
+        run (beat);
+        float peak = 0.0f;
+
+        for (auto t = from; t < (juce::int64) heard.size(); ++t)
+            peak = juce::jmax (peak, std::abs (heard[(size_t) t]));
+
+        expect (peak < 1.0e-6f, "a stopped loop still sounds");
+    }
+
+    press (6, 33000);
+    run (block * 20);
+    refreshLoopPane();
+    expect (looper.getState() == Looper::State::empty && loopView.stateText() == "READY",
+            "Clear did not empty the looper");
+
+    // The mouse comes in by the same door: two clicks on the BARS row.
+    loopView.onPress (LoopView::actionFor (1));
+    loopView.onPress (LoopView::actionFor (1));
+    expect (looper.getBars() == 2, "clicking a row did not do what its switch does");
+
+    engine.audioDeviceStopped();
+    selectChannel ("bass");
+    std::printf ("  looper exercised: round trip of %d samples taken back out\n", lateness);
     return problems;
 }
 
@@ -1523,6 +1804,10 @@ int MainComponent::slotOf (const juce::String& channelKey)
 void MainComponent::selectChannel (const juce::String& channelKey)
 {
     selectedChannel = channelKey;
+
+    if (channelKey != "master")
+        loopChannel = channelKey;
+
     uiParams.setChannel (slotOf (channelKey));
     refreshStripSelection();
     refreshPresetList();
@@ -1843,6 +2128,57 @@ void MainComponent::loopTapped()
     }
 
     refreshLoopButton();
+}
+
+// The left pane shows the backing track or the looper. Neither stops for
+// being out of sight: a song plays on under the loop pane, and a foot
+// works the looper under the setlist.
+void MainComponent::showLeftPane (bool loop)
+{
+    loopPaneShowing = loop;
+
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &menuButton, &transportButton, &loopButton,
+                                                                        &songLabel, &songsHeader, &stemsHeader,
+                                                                        &songList })
+        c->setVisible (! loop);
+
+    for (auto* strip : stemStrips)
+        strip->setVisible (! loop);
+
+    loopView.setVisible (loop);
+    paneBox.setSelectedId (loop ? 2 : 1, juce::dontSendNotification);
+    repaint();
+}
+
+// The channel Record takes: the strip selected on the rail — or, while the
+// master is selected, the strip that was selected before it.
+juce::String MainComponent::loopChannelKey() const
+{
+    const auto wanted = selectedChannel == "master" ? loopChannel : selectedChannel;
+
+    for (auto* strip : channelStrips)
+        if (strip->getComponentID() == wanted)
+            return wanted;
+
+    return channelStrips.isEmpty() ? juce::String ("bass") : channelStrips.getFirst()->getComponentID();
+}
+
+// The loop pane: what the looper is doing, and the channel Record would
+// take — or, mid-take, the one it is taking.
+void MainComponent::refreshLoopPane()
+{
+    auto& looper = engine.getLooper();
+    const auto state = looper.getState();
+    auto recording = loopChannelKey();
+
+    if (state == Looper::State::countIn || state == Looper::State::recording
+         || state == Looper::State::overdubbing)
+        for (auto* strip : channelStrips)
+            if (strip->getComponentID() != "master" && slotOf (strip->getComponentID()) == looper.getSource())
+                recording = strip->getComponentID();
+
+    loopView.setRecordsName (channelDisplayNameFor (recording));
+    loopView.tick();
 }
 
 void MainComponent::refreshLoopButton()
@@ -2447,6 +2783,8 @@ void MainComponent::refreshAllControls()
 
     for (auto* strip : stemStrips)
         strip->refresh();
+
+    loopView.refresh();
 }
 
 //==============================================================================
@@ -2526,6 +2864,16 @@ void MainComponent::buildFootMenu (juce::PopupMenu& menu, const FootView::Choose
     }
 
     menu.addSubMenu ("Song", song);
+
+    juce::PopupMenu loop;
+    item (loop, "Tap tempo", "do/loopTempo");
+    item (loop, "Bars", "do/loopBars");
+    item (loop, "Record / overdub", "do/loopRecord");
+    item (loop, "Stop / start", "do/loopStop");
+    item (loop, "Undo", "do/loopUndo");
+    item (loop, "Clear", "do/loopClear");
+    item (loop, "Level", "rig/loopLevel");
+    menu.addSubMenu ("Loop", loop);
     item (menu, "MIDI panic", "do/panic");
 
     const auto layouts = footView.getLayoutNames();
@@ -2548,6 +2896,13 @@ juce::String MainComponent::describeFootAction (const juce::String& action) cons
     if (action == "do/play")    return "Song" + dot + "Play / stop";
     if (action == "do/loop")    return "Song" + dot + "Loop tap";
     if (action == "do/panic")   return "MIDI panic";
+
+    if (action == "do/loopTempo")   return "Loop" + dot + "Tap tempo";
+    if (action == "do/loopBars")    return "Loop" + dot + "Bars";
+    if (action == "do/loopRecord")  return "Loop" + dot + "Record / overdub";
+    if (action == "do/loopStop")    return "Loop" + dot + "Stop / start";
+    if (action == "do/loopUndo")    return "Loop" + dot + "Undo";
+    if (action == "do/loopClear")   return "Loop" + dot + "Clear";
 
     if (action.startsWith ("do/layout:"))
         return "Foot layout" + dot + action.fromFirstOccurrenceOf (":", false, false);
@@ -2572,6 +2927,7 @@ juce::String MainComponent::describeFootAction (const juce::String& action) cons
         if (p == pMasterMute)   return "Master" + dot + "Mute";
         if (p == pMasterGain)   return "Master" + dot + "Gain";
         if (p == pTrackGain)    return "Song" + dot + "Track level";
+        if (p == pLoopLevel)    return "Loop" + dot + "Level";
 
         for (int i = 0; i < StemPlayer::numStems; ++i)
         {
@@ -2600,9 +2956,19 @@ juce::String MainComponent::describeFootAction (const juce::String& action) cons
     return channelName + dot + footParamName (p);
 }
 
-void MainComponent::runFootCommand (const juce::String& command)
+void MainComponent::runFootCommand (const juce::String& command, juce::uint32 pressedAtMs)
 {
-    if (command == "do/play")
+    auto& looper = engine.getLooper();
+
+    // The looper's taps are timed from the press itself, and Record takes
+    // whichever channel is selected at the moment it is pressed.
+    if (command == "do/loopTempo")          looper.tapTempo (pressedAtMs);
+    else if (command == "do/loopBars")      looper.tapBars (pressedAtMs);
+    else if (command == "do/loopRecord")    looper.pressRecord (slotOf (loopChannelKey()));
+    else if (command == "do/loopStop")      looper.pressStopStart();
+    else if (command == "do/loopUndo")      looper.pressUndo();
+    else if (command == "do/loopClear")     looper.pressClear();
+    else if (command == "do/play")
     {
         engine.getStemPlayer().togglePlay();
     }
@@ -2632,8 +2998,11 @@ void MainComponent::runFootCommand (const juce::String& command)
 
 void MainComponent::handleAsyncUpdate()
 {
-    for (const auto& command : engine.getFoot().takeCommands())
-        runFootCommand (command);
+    juce::Array<juce::uint32> pressedAt;
+    const auto commands = engine.getFoot().takeCommands (&pressedAt);
+
+    for (int i = 0; i < commands.size(); ++i)
+        runFootCommand (commands[i], pressedAt[i]);
 }
 
 //==============================================================================
@@ -2995,6 +3364,7 @@ void MainComponent::saveSettings()
     settings.vocoderPluginState = engine.getVocoderSlot().getStateBase64();
     settings.chainOrder = orderStringFor ("bass");
     settings.tuner = tunerView.isBassMode() ? "bass" : "guitar";
+    settings.leftPane = loopPaneShowing ? "loop" : "track";
     settings.save (params);
 }
 
@@ -3141,6 +3511,9 @@ void MainComponent::timerCallback()
     if (masterStrip != nullptr)
         masterStrip->setDetail (gr > 0.2f ? "LIM -" + juce::String (gr, 1) + " dB"
                                           : juce::String());
+
+    if (loopPaneShowing)
+        refreshLoopPane();
 
     const bool playing = player.isPlaying();
     transportButton.setToggleState (playing, juce::dontSendNotification);

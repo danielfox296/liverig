@@ -158,9 +158,11 @@ public:
     juce::uint32 getChangeSerial() const noexcept { return changeSerial.load (std::memory_order_relaxed); }
 
     // Commands wait here for the window. The notifier is called on the MIDI
-    // thread and must only wake someone up.
+    // thread and must only wake someone up. Each command remembers the
+    // moment its switch was pressed — a tapped tempo is measured between
+    // presses, not between the window getting round to them.
     void setCommandNotifier (std::function<void()> notify);
-    juce::StringArray takeCommands();
+    juce::StringArray takeCommands (juce::Array<juce::uint32>* pressedAtMs = nullptr);
 
     static constexpr juce::uint32 learnSettleMs = 450;
 
@@ -180,7 +182,7 @@ private:
     };
 
     void rebuild();
-    void apply (Live& live, int midiValue);
+    void apply (Live& live, int midiValue, juce::uint32 nowMs);
 
     ParamStore& params;
 
@@ -197,6 +199,7 @@ private:
 
     Heard lastHeard;
     juce::StringArray commands;
+    juce::Array<juce::uint32> commandTimes;   // one per command
     std::function<void()> notifier;
 
     std::atomic<juce::uint32> changeSerial { 0 };

@@ -229,6 +229,23 @@ int main (int argc, char* argv[])
         problems += countBlankButtons (main, "the foot tab");
         problems += main.checkFootFunctionsForSnapshot();
         problems += main.exerciseFootForSnapshot();
+
+        // The loop pane: six switches with their jobs, before a note; then
+        // the looper run for real, shot mid-take and with the loop playing.
+        const auto shootMain = [&main, &outDir] (const char* name)
+        {
+            juce::Image image (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
+            {
+                juce::Graphics g (image);
+                main.paintEntireComponent (g, true);
+            }
+            writePng (image, outDir.getChildFile (name));
+        };
+
+        main.showLoopForSnapshot();
+        shootMain ("loop.png");
+        problems += countBlankButtons (main, "the loop pane");
+        problems += main.exerciseLoopForSnapshot (shootMain);
     }
 
     {

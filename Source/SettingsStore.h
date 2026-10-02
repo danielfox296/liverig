@@ -23,6 +23,7 @@ public:
     juce::String instrument, instrumentState;
     juce::String chainOrder;    // movable stage keys, comma-separated, top to bottom
     juce::String tuner;         // "bass" or "guitar"
+    juce::String leftPane;      // "loop" when the looper has the left pane; anything else is the backing track
     juce::String ampModel;      // path of the loaded NAM capture, empty for none
 
     // Which device input channel plays which role, 1-based; 0 means never
