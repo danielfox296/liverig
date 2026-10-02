@@ -400,11 +400,14 @@ switcher or a 7-pin box, never from an audio interface. What it sends, from
 its manual:
 
 - **Preset buttons** send program changes, one per "device" it has been told
-  about, each on that device's MIDI channel. It drops repeats: pressing the
-  preset you are already on sends nothing, and neither does a new preset
-  that asks for the same program. So presets are scenes (*Turns on* / *Turns
-  off* / a value), not toggles — *Flips* on a preset button will skip
-  presses.
+  about, each on that device's MIDI channel. The manual says it filters
+  redundant program changes; measured on this unit, that means a device
+  whose program is the same in the next preset is skipped, while pressing
+  the preset you are already on sends everything again. So a preset button
+  is a dependable press, repeats included, as long as its control was
+  learned from a program that button always sends. While a GCX switcher is
+  enabled in its Setup mode, every preset also sends the eight loop
+  controllers, 80–87 on channel 16.
 - In **Bank4** preset mode the upper row (5–9 and 0) becomes six
   **instant-access** buttons, each of which can be set in its Setup mode to
   send a controller as 127 / 0 with its LED following. Those are *Latching*
