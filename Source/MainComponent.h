@@ -37,6 +37,7 @@ public:
     void selectFxForSnapshot();
     void selectInputForSnapshot();
     void selectEqForSnapshot();
+    void selectFreezeForSnapshot();
     void selectVocalForSnapshot();
     void selectVocoderForSnapshot();
     void selectKeysForSnapshot();

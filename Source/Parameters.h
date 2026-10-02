@@ -62,6 +62,10 @@ enum ParamId
 
     pTapeOn, pTapeDrive, pTapeSoften, pTapeBump, pTapeMix,
 
+    // Freeze: Hold is the foot, not a setting — down while a switch is held,
+    // and the layer it raises lasts exactly that long.
+    pFreezeOn, pFreezeHold, pFreezeLevel, pFreezeFadeIn, pFreezeFadeOut, pFreezeMotion,
+
     pRevOn, pRevSize, pRevDamp, pRevPre, pRevMod, pRevMix,
 
     // MIDI out: the tracker as a note source, aimed at swells and pads.
@@ -117,6 +121,13 @@ constexpr bool isChannelParam (int paramId) noexcept
 {
     return (paramId >= pInGain && paramId <= pRevMix)
              || paramId == pLiveOut || paramId == pLiveMute;
+}
+
+// A gesture rather than a setting: it stands only while a foot or a finger
+// holds it, so it is never written to disk and no preset carries it.
+constexpr bool isMomentaryParam (int paramId) noexcept
+{
+    return paramId == pFreezeHold;
 }
 
 // Which knob copies a channel key names: the first three strips carry the

@@ -113,6 +113,9 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
 
     reverb.prepare (sr, maxBlock);
 
+    freeze.prepare (sr);
+    frzBuf.assign ((size_t) maxBlock, 0.0f);
+
     dry.assign ((size_t) maxBlock, 0.0f);
     carrierBuf.assign ((size_t) maxBlock, 0.0f);
 
@@ -123,7 +126,7 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
                                           &synShape, &synSubLvl, &synMix,
                                           &choVoiceGain[0], &choVoiceGain[1], &choVoiceGain[2],
                                           &choMix, &dlSatAmt, &dlSmearAmt, &tapeDrive, &tapeMix,
-                                          &subLevel, &driveBlend };
+                                          &subLevel, &driveBlend, &frzLevel };
     for (auto* g : gains)
         g->reset (sr, 0.02);
 
@@ -139,7 +142,7 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
 
     juce::SmoothedValue<float>* bypasses[] { &bypComp, &bypEq, &bypFilter, &bypBoost, &bypCab, &bypSub,
                                              &bypDrive, &bypAmp, &bypOct, &bypSynth, &bypPhaser,
-                                             &bypChorus, &bypDelay, &bypTape, &bypReverb };
+                                             &bypChorus, &bypDelay, &bypTape, &bypReverb, &bypFreeze };
     for (auto* b : bypasses)
         b->reset (sr, 0.015);
 
@@ -224,6 +227,7 @@ void FxChain::reset() noexcept
     tapeRolloff.reset();
     tapeDC.reset();
 
+    freeze.reset();
     reverb.reset();
 }
 
@@ -452,6 +456,12 @@ void FxChain::updateFromParams() noexcept
     if (changed (pTapeBump))
         tapeBump.setLowShelf (sr, 80.0, 4.5 * params.get (pTapeBump));
 
+    // A pedal that is off holds nothing, so taking it off the board lets go.
+    frzHold = params.getBool (pFreezeOn) && params.getBool (pFreezeHold);
+    freeze.setFadeTimes (params.get (pFreezeFadeIn), params.get (pFreezeFadeOut));
+    freeze.setMotion (params.get (pFreezeMotion));
+    frzLevel.setTargetValue (std::clamp (params.get (pFreezeLevel), 0.0f, 1.0f));
+
     reverb.setSize (params.get (pRevSize));
     reverb.setDamping (params.get (pRevDamp));
     reverb.setPredelayMs (params.get (pRevPre));
@@ -472,6 +482,7 @@ void FxChain::updateFromParams() noexcept
     bypDelay.setTargetValue  (params.getBool (pDelayOn)  ? 1.0f : 0.0f);
     bypTape.setTargetValue   (params.getBool (pTapeOn)   ? 1.0f : 0.0f);
     bypReverb.setTargetValue (params.getBool (pRevOn)    ? 1.0f : 0.0f);
+    bypFreeze.setTargetValue (params.getBool (pFreezeOn) ? 1.0f : 0.0f);
     bool midiDirty = false;
     midiDirty |= changed (pMidiGate);
     midiDirty |= changed (pMidiHold);
@@ -1035,6 +1046,18 @@ void FxChain::process (float* mono, float* left, float* right, int numSamples) n
 
             case stTape:
                 runStage (mono, numSamples, bypTape, &tapeMix, [this] (float* d, int n) { processTape (d, n); });
+                break;
+
+            case stFreeze:
+                runStage (mono, numSamples, bypFreeze, nullptr, [this] (float* d, int n)
+                {
+                    // The live signal goes by untouched; the held layer is
+                    // laid beside it.
+                    freeze.process (d, frzBuf.data(), n, frzHold);
+
+                    for (int i = 0; i < n; ++i)
+                        d[i] += frzBuf[(size_t) i] * frzLevel.getNextValue();
+                });
                 break;
 
             default:

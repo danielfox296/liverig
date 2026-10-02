@@ -140,6 +140,7 @@ any order in the app; Input, Reverb and Live out hold their places.
 | 10 | Chorus | rate, depth, voices, tone, keep lows, mix |
 | 11 | Delay | time, feedback, mix, high cut, mod rate, mod depth, sat |
 | 12 | Tape | drive, soften, bump, mix — tape-machine warmth |
+| — | Freeze | hold, level, fade in, fade out, motion — holds what is sounding while a foot stays down |
 | 13 | Pedal | a hosted AU/VST3 effect as a chain insert — pick it, drag it anywhere |
 | 14 | Reverb | size, damping, mix — Freeverb, mono in / stereo out |
 | 15 | Live out | lane gain |
@@ -192,6 +193,51 @@ Five of the stages are modelled on specific boxes rather than invented:
   **Bump** is the tape head bump — up to +4.5 dB at 80 Hz, free weight for
   bass — and quiet playing always passes at unity, so it can idle engaged.
   It defaults to sitting just before the reverb and drags anywhere.
+
+### The freeze
+
+**Freeze** is a sustain pedal for anything with a jack: play a note or a
+chord, put a foot down, and it carries on for as long as the foot stays
+there while you play over the top. Lift the foot and it fades away.
+
+It is a pedal on the board like any other — **ADD EFFECT...**, Freeze — and
+it does nothing until **Hold** goes down. Hold is the thing to give a foot
+(see [The foot controller](#the-foot-controller)); the switch in the editor
+is the same Hold for a finger, which is how to try it with no pedal plugged
+in.
+
+- **Where it stands on the board is what it hears.** Every pedal above it is
+  in the held sound, exactly as it sounded at the press; every pedal below
+  it — and the reverb — colours the held sound and the live playing alike.
+  So with Freeze below the Overdrive, a clean chord can be held, the drive
+  kicked on, and a driven line played over a chord that stays clean.
+- **Your playing never goes through it.** The held sound is a layer laid
+  beside the live signal. Nothing is delayed and nothing is ducked, which
+  also means that while the string is still ringing you hear the string
+  *and* the hold of it — it swells at the press and settles as the string
+  dies. **Level** is the held layer against what was played: all the way up
+  is the level it was caught at.
+- **Fade in** and **Fade out** run from nothing to a second: how the layer
+  arrives under the note, and how it leaves when the foot comes up.
+- **Motion** is a slow chorus on the held layer only. At zero the hold is
+  perfectly still, like an organ stop; turned up it drifts. It leaves the
+  lows alone, so a held bass note keeps a steady bottom.
+- **Step after the note, or with it.** It holds what is sounding as the foot
+  lands — the 170 ms around that moment. A foot that comes down *before* the
+  note catches whatever came before the note.
+- A new press while the last hold is still fading starts a new hold and
+  lets the old one finish dying underneath it.
+
+Hold is a gesture, not a setting: it is never saved, and no preset carries
+it. The fades, level and motion are saved like any other knob.
+
+What is held is not a loop. A loop of a slice has a seam, and on a low note
+the seam pulses. Instead the stage reads the spectrum of the moment, finds
+each partial in it — its pitch, its strength — and keeps sounding those
+partials as steady tones. That is why a hold can last a minute without a
+ripple, and why a press that lands across a note change still comes out
+level: there is nothing in the held sound that remembers the edges of the
+slice it came from.
 
 ### The synth voice
 
@@ -391,6 +437,12 @@ obeyed or not — the first thing to look at when a pedal seems dead.
 When the foot switches on a pedal that is not on its strip's board, the
 pedal joins the board, the same way a preset's pedals do.
 
+**A sustain pedal for the Freeze** is one control with one job: learn the
+pedal, then **+** → the strip → Freeze → **Hold**, and leave it on *Follows
+it*. Down holds, up lets go. Any kind of control works — a momentary switch,
+or a pedal that only ever stands at one end or the other — because Follows
+it only asks whether the control is past half way.
+
 #### The Ground Control
 
 The Digital Music Corp Ground Control (1998) is a 5-pin MIDI device: its
@@ -420,6 +472,15 @@ its manual:
   (pitch bend goes to the keys).
 - A button can also be set to **sequencer start/stop**, which arrives as
   MIDI Start and Stop.
+
+It has no jack for a switch pedal as such. A keyboard **sustain pedal** in
+one of the expression inputs should read as an expression pedal that only
+ever stands at one end or the other, which is all a Freeze's Hold needs —
+enable and calibrate that input with the pedal up as the heel and down as
+the toe. If it comes out backwards (holding with the foot *up*), calibrate
+it the other way round, or flip the pedal's polarity switch if it has one.
+**Last heard** shows what it really sends. This has not been tried on this
+unit yet.
 
 Its display counts programs from 1 unless told otherwise ("STARTS AT 01"),
 so its preset 21 arrives here as program change 20. The cards show what is
@@ -587,7 +648,9 @@ Three places, very unevenly:
   bass. It scales with the note, and the footer's FX figure tracks it live.
 - **Everything else is free.** Filter, boost, synth, phaser, chorus are
   zero-latency; delay and reverb are wet mixes on top of an uncoloured dry
-  path; the drive's oversampler costs about a tenth of a millisecond.
+  path; the drive's oversampler costs about a tenth of a millisecond. The
+  freeze adds none either: it only ever looks back at what was already
+  played, and the live signal does not pass through it.
 
 One stage trick falls out of this: the synth's **Sub** is an octave-down
 voice with effectively no latency (a 2.5 ms envelope), so when a part needs
@@ -697,6 +760,16 @@ the per-stem levels.
 Measured on the separated bass of a real Suno track: notes sounding in 28% of
 the first minute, 94% of those frames tracked confidently, and the octave
 landed within 30 cents in 41 of 42 half-second windows.
+
+`rig_tests --freeze` runs the freeze alone, at three sample rates: armed and
+not held it must be a straight wire, a held tone must keep its level and
+pitch with no pulse, a low E must keep the balance of its harmonics, the
+layer must join a still-ringing note in phase, letting go must fade in the
+time set, three presses inside one fade must leave only the last and never
+click, and Hold must never reach the settings file. Then it puts two feet on
+a real bass stem — a careless one that comes down wherever, whose holds must
+all be steady, and a deliberate one that lands with long notes and after
+them, whose holds must come out at the level played.
 
 `rig_tests --foot` runs the foot map alone, in under a second: a lit switch
 that the rig follows, a held one, a pedal's sweep and its one press on the

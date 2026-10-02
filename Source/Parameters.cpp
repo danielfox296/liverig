@@ -134,6 +134,13 @@ static const ParamSpec specs[] =
     { "tpBump",    "Bump",       0.0f,   1.0f,  0.35f,     0.0f, 0.0f, "",     2, false },
     { "tpMix",     "Mix",        0.0f,   1.0f,   1.0f,     0.0f, 0.0f, "",     2, false },
 
+    { "frzOn",     "Freeze",     0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
+    { "frzHold",   "Hold",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, offOnChoices },
+    { "frzLevel",  "Level",      0.0f,   1.0f,   1.0f,     0.0f, 0.0f, "",     2, false },
+    { "frzIn",     "Fade in",    0.0f,1000.0f, 100.0f,   200.0f, 0.0f, " ms",  0, false },
+    { "frzOut",    "Fade out",   0.0f,1000.0f, 150.0f,   200.0f, 0.0f, " ms",  0, false },
+    { "frzMotion", "Motion",     0.0f,   1.0f,   0.3f,     0.0f, 0.0f, "",     2, false },
+
     { "rvOn",      "Reverb",     0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
     { "rvSize",    "Size",       0.0f,   1.0f,   0.5f,     0.0f, 0.0f, "",     2, false },
     { "rvDamp",    "Damping",    0.0f,   1.0f,   0.5f,     0.0f, 0.0f, "",     2, false },
@@ -224,7 +231,8 @@ juce::var ParamStore::toVar() const
     auto* obj = new juce::DynamicObject();
 
     for (int i = 0; i < NumParams; ++i)
-        obj->setProperty (juce::Identifier (specs[(size_t) i].id), get (0, i));
+        if (! isMomentaryParam (i))
+            obj->setProperty (juce::Identifier (specs[(size_t) i].id), get (0, i));
 
     // Channels beyond the first ride alongside: one dense object per slot
     // that has left its defaults, void for slots still untouched.
@@ -235,7 +243,8 @@ juce::var ParamStore::toVar() const
         bool used = false;
 
         for (int i = 0; i < NumParams && ! used; ++i)
-            used = isChannelParam (i) && get (c, i) != specs[(size_t) i].defaultValue;
+            used = isChannelParam (i) && ! isMomentaryParam (i)
+                     && get (c, i) != specs[(size_t) i].defaultValue;
 
         if (! used)
         {
@@ -246,7 +255,7 @@ juce::var ParamStore::toVar() const
         auto* co = new juce::DynamicObject();
 
         for (int i = 0; i < NumParams; ++i)
-            if (isChannelParam (i))
+            if (isChannelParam (i) && ! isMomentaryParam (i))
                 co->setProperty (juce::Identifier (specs[(size_t) i].id), get (c, i));
 
         extra.add (juce::var (co));
@@ -268,7 +277,7 @@ void ParamStore::fromVar (const juce::var& v)
         const auto& s = specs[(size_t) i];
         const juce::Identifier key (s.id);
 
-        if (obj->hasProperty (key))
+        if (obj->hasProperty (key) && ! isMomentaryParam (i))
             set (0, i, juce::jlimit (s.minValue, s.maxValue, (float) (double) obj->getProperty (key)));
     }
 
@@ -285,7 +294,7 @@ void ParamStore::fromVar (const juce::var& v)
 
             for (int i = 0; i < NumParams; ++i)
             {
-                if (! isChannelParam (i))
+                if (! isChannelParam (i) || isMomentaryParam (i))
                     continue;
 
                 const auto& s = specs[(size_t) i];

@@ -316,7 +316,8 @@ static juce::var capture (const ParamStore& params)
     auto* obj = new juce::DynamicObject();
 
     for (int i = pInGain; i < NumParams; ++i)
-        obj->setProperty (juce::Identifier (spec (i).id), params.get (i));
+        if (! isMomentaryParam (i))
+            obj->setProperty (juce::Identifier (spec (i).id), params.get (i));
 
     return juce::var (obj);
 }
@@ -426,7 +427,7 @@ bool PresetStore::apply (const juce::String& name, ParamStore& params,
         const auto& s = spec (i);
         const juce::Identifier key (s.id);
 
-        if (obj->hasProperty (key))
+        if (obj->hasProperty (key) && ! isMomentaryParam (i))
             params.set (slot, i, juce::jlimit (s.minValue, s.maxValue, (float) (double) obj->getProperty (key)));
     }
 
@@ -443,7 +444,8 @@ void PresetStore::store (const juce::String& name, const ParamStore& params,
     auto* obj = new juce::DynamicObject();
 
     for (int i : onlyIds)
-        obj->setProperty (juce::Identifier (spec (i).id), (double) params.get (slot, i));
+        if (! isMomentaryParam (i))
+            obj->setProperty (juce::Identifier (spec (i).id), (double) params.get (slot, i));
 
     const juce::var subset (obj);
     const int index = names.indexOf (name);
@@ -482,7 +484,7 @@ bool PresetStore::apply (const juce::String& name, ParamStore& params) const
         const auto& s = spec (i);
         const juce::Identifier key (s.id);
 
-        if (obj->hasProperty (key))
+        if (obj->hasProperty (key) && ! isMomentaryParam (i))
             params.set (i, juce::jlimit (s.minValue, s.maxValue, (float) (double) obj->getProperty (key)));
     }
 
@@ -627,7 +629,7 @@ bool PresetStore::applyEffect (const juce::String& effect, const juce::String& n
     {
         const int id = paramIndexForId (property.name.toString());
 
-        if (id < 0)
+        if (id < 0 || isMomentaryParam (id))
             continue;
 
         const auto& s = spec (id);
@@ -647,7 +649,8 @@ void PresetStore::storeEffect (const juce::String& effect, const juce::String& n
     auto* obj = new juce::DynamicObject();
 
     for (int id : paramIds)
-        obj->setProperty (juce::Identifier (spec (id).id), params.get (slot, id));
+        if (! isMomentaryParam (id))
+            obj->setProperty (juce::Identifier (spec (id).id), params.get (slot, id));
 
     const int index = indexOfEffectPreset (effect, name);
 

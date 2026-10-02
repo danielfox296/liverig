@@ -4671,6 +4671,536 @@ static void testInstrumentHosting (const juce::String& wanted, double sr, int bl
 // The parameter store's channel slots: copies are independent, globals are one
 // value everywhere, the one-argument view is channel 0, and the settings shape
 // still reads in an old build's flat form.
+//==============================================================================
+// The Freeze pedal held the way a foot holds it: Hold goes down at one block
+// and up at another, and the lane comes back whole. presses is a flat list of
+// sample positions — down, up, down, up — and a missing last "up" never lets go.
+static std::vector<float> renderFreeze (ParamStore& params, const std::vector<float>& in,
+                                        double sr, int block, const std::vector<int>& presses,
+                                        double* worstMicros = nullptr)
+{
+    FxChain chain (params);
+    chain.prepare (sr, block);
+
+    std::vector<float> mono ((size_t) block), left ((size_t) block), right ((size_t) block);
+    std::vector<float> out;
+    out.reserve (in.size());
+
+    for (int i = 0; i + block <= (int) in.size(); i += block)
+    {
+        bool down = false;
+
+        for (int at : presses)
+            if (i >= at)
+                down = ! down;
+
+        params.set (pFreezeHold, down ? 1.0f : 0.0f);
+
+        std::copy (in.begin() + i, in.begin() + i + block, mono.begin());
+
+        const auto t0 = std::chrono::steady_clock::now();
+        {
+            juce::ScopedNoDenormals noDenormals;   // as the audio callback runs
+            chain.process (mono.data(), left.data(), right.data(), block);
+        }
+        const auto t1 = std::chrono::steady_clock::now();
+
+        if (worstMicros != nullptr && i > block * 8)
+            *worstMicros = juce::jmax (*worstMicros,
+                                       std::chrono::duration<double, std::micro> (t1 - t0).count());
+
+        for (int k = 0; k < block; ++k)
+            out.push_back (left[(size_t) k]);
+    }
+
+    params.set (pFreezeHold, 0.0f);
+    return out;
+}
+
+static double largestStep (const std::vector<float>& x, int from, int to)
+{
+    double step = 0.0;
+
+    for (int i = juce::jmax (1, from); i < juce::jmin (to, (int) x.size()); ++i)
+        step = juce::jmax (step, (double) std::abs (x[(size_t) i] - x[(size_t) (i - 1)]));
+
+    return step;
+}
+
+// How far the loudness wanders across a stretch, in dB, judged over windows
+// of whole cycles — a looped slice pulses at its seam and shows up here.
+static double levelWander (const std::vector<float>& x, int from, int to, int window)
+{
+    double lo = 1.0e30, hi = 0.0;
+
+    for (int i = from; i + window <= to; i += window)
+    {
+        const double r = rmsOf (x.data() + i, window);
+        lo = juce::jmin (lo, r);
+        hi = juce::jmax (hi, r);
+    }
+
+    return 20.0 * std::log10 (hi / (lo + 1.0e-12));
+}
+
+static void testFreeze (double sr, int block)
+{
+    std::printf ("\nFreeze  (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    const auto at = [sr, block] (double seconds) { return ((int) (sr * seconds) / block) * block; };
+    const double db = 20.0;
+
+    // Armed but not held, the pedal is a straight wire.
+    {
+        std::vector<float> note;
+        makeNote (note, sr, 55.0, 1.5, 0.4f);
+
+        ParamStore off, armed;
+        armed.set (pFreezeOn, 1.0f);
+
+        const auto plain = renderChain (off, note, sr, block);
+        const auto ready = renderChain (armed, note, sr, block);
+
+        report ("armed and not held is a straight wire", plain == ready,
+                juce::String ((int) plain.size()) + " samples identical to the pedal being off");
+    }
+
+    // A steady tone, held, with the playing stopped: the layer alone has to
+    // be the same note at the same level, and stay there.
+    {
+        std::vector<float> in;
+        makeSine (in, sr, 110.0, 6.0, 0.2f);
+
+        const int press = at (1.0), quiet = at (1.2);
+
+        for (int i = quiet; i < (int) in.size(); ++i)
+            in[(size_t) i] *= (float) std::exp (-(double) (i - quiet) / (sr * 0.01));
+
+        ParamStore params;
+        params.set (pFreezeOn, 1.0f);
+        params.set (pFreezeMotion, 0.0f);
+
+        const auto out = renderFreeze (params, in, sr, block, { press });
+
+        const int from = at (2.5), len = at (3.0);
+        const double level = db * std::log10 (rmsOf (out.data() + from, len) / (0.2 / std::sqrt (2.0)));
+        const double pitch = cents (estimateF0 (out.data() + from, at (0.5), sr, 40.0, 900.0), 110.0);
+        const double wander = levelWander (out, from, from + len, (int) (sr / 110.0 * 6.0));
+
+        report ("a held tone keeps its level", std::abs (level) < 0.5,
+                juce::String (level, 2) + " dB against what was played");
+        report ("a held tone keeps its pitch", std::abs (pitch) < 3.0,
+                juce::String (pitch, 2) + " cents");
+        report ("no seam: the level does not pulse", wander < 0.2,
+                juce::String (wander, 3) + " dB of wander across three seconds");
+
+        // While the string still rings, the layer comes in under it in phase.
+        std::vector<float> ringing;
+        makeSine (ringing, sr, 110.0, 3.0, 0.2f);
+        const auto both = renderFreeze (params, ringing, sr, block, { press });
+        const double sum = db * std::log10 (rmsOf (both.data() + at (2.0), at (0.5)) / (0.2 / std::sqrt (2.0)));
+
+        report ("the layer joins the ringing note in phase", std::abs (sum - 6.02) < 0.3,
+                juce::String (sum, 2) + " dB — two of the same note, no comb");
+    }
+
+    // The thing it is for: a plucked low E, caught mid-decay, with every
+    // harmonic where it was.
+    {
+        const double f0 = 41.2;
+        std::vector<float> in;
+        makeNote (in, sr, f0, 5.0, 0.4f);
+
+        const int press = at (0.7), quiet = at (0.9);
+
+        for (int i = quiet; i < (int) in.size(); ++i)
+            in[(size_t) i] *= (float) std::exp (-(double) (i - quiet) / (sr * 0.01));
+
+        ParamStore params;
+        params.set (pFreezeOn, 1.0f);
+        params.set (pFreezeMotion, 0.0f);
+
+        const auto out = renderFreeze (params, in, sr, block, { press });
+
+        const int from = at (2.0), len = at (2.5);
+        const int before = press - (int) (sr * 0.17);
+        const double pitch = cents (estimateF0 (out.data() + from, at (0.6), sr, 30.0, 400.0), f0);
+        const double level = db * std::log10 (rmsOf (out.data() + from, len)
+                                                / rmsOf (in.data() + before, press - before));
+
+        // makeNote gives harmonic h an amplitude of h^-1.35 under one shared
+        // envelope, so the balance that was played is known exactly. A held
+        // partial is a few bins turning at nearly the same rate, so it is
+        // weighed as the energy around its harmonic — a Hann-windowed
+        // quarter second, averaged along the hold — not as one spectral line.
+        const auto partial = [&] (int h)
+        {
+            const int win = (int) (sr * 0.25);
+            const double w = 6.283185307179586 * f0 * h / sr;
+            double energy = 0.0;
+            int count = 0;
+
+            for (int start = from; start + win <= from + len; start += win / 2, ++count)
+            {
+                double re = 0.0, im = 0.0;
+
+                for (int i = 0; i < win; ++i)
+                {
+                    const double hann = 0.5 - 0.5 * std::cos (6.283185307179586 * i / win);
+                    re += out[(size_t) (start + i)] * hann * std::cos (w * i);
+                    im += out[(size_t) (start + i)] * hann * std::sin (w * i);
+                }
+
+                energy += re * re + im * im;
+            }
+
+            return std::sqrt (energy / juce::jmax (1, count));
+        };
+
+        double worstHarmonic = 0.0;
+
+        for (int h = 2; h <= 5; ++h)
+            worstHarmonic = juce::jmax (worstHarmonic,
+                                        std::abs (db * std::log10 (partial (h) / partial (1) * std::pow ((double) h, 1.35))));
+
+        report ("a low E holds on its pitch", std::abs (pitch) < 6.0, juce::String (pitch, 2) + " cents");
+        report ("it holds at the level it was caught", std::abs (level) < 1.0,
+                juce::String (level, 2) + " dB against the last 170 ms before the press");
+        report ("its harmonics keep their balance", worstHarmonic < 1.5,
+                "worst of harmonics 2-5 off by " + juce::String (worstHarmonic, 2) + " dB");
+        report ("the held bass does not pulse", levelWander (out, from, from + len, (int) (sr / f0 * 4.0)) < 0.5,
+                juce::String (levelWander (out, from, from + len, (int) (sr / f0 * 4.0)), 3) + " dB of wander");
+    }
+
+    // Playing over it, then letting go.
+    {
+        std::vector<float> in, over;
+        makeSine (in, sr, 110.0, 6.0, 0.2f);
+        makeSine (over, sr, 330.0, 6.0, 0.1f);
+
+        const int press = at (1.0), change = at (1.5), release = at (3.5);
+
+        for (int i = 0; i < (int) in.size(); ++i)
+        {
+            const float x = juce::jlimit (0.0f, 1.0f, (float) (i - change) / (float) (sr * 0.02));
+            in[(size_t) i] = in[(size_t) i] * (1.0f - x) + over[(size_t) i] * x;
+        }
+
+        ParamStore params;
+        params.set (pFreezeOn, 1.0f);
+        params.set (pFreezeMotion, 0.0f);
+        params.set (pFreezeFadeOut, 200.0f);
+
+        const auto out = renderFreeze (params, in, sr, block, { press, release });
+
+        const int from = at (2.2), len = at (1.0);
+        const double held = goertzel (out.data() + from, len, sr, 110.0);
+        const double live = goertzel (out.data() + from, len, sr, 330.0);
+
+        report ("the held note stays under new playing",
+                std::abs (db * std::log10 (held / 0.2)) < 0.5 && std::abs (db * std::log10 (live / 0.1)) < 0.5,
+                "held " + juce::String (db * std::log10 (held / 0.2), 2) + " dB, live "
+                    + juce::String (db * std::log10 (live / 0.1), 2) + " dB");
+
+        const int after = release + (int) (sr * 0.2) + block * 2;
+        const double left = goertzel (out.data() + after, at (1.0), sr, 110.0);
+        const double halfway = goertzel (out.data() + release + (int) (sr * 0.08), (int) (sr * 0.04), sr, 110.0);
+
+        report ("letting go fades it out in the time set", left < 0.2 * 1.0e-4 && halfway > 0.2 * 0.3 && halfway < 0.2 * 0.75,
+                juce::String (db * std::log10 (halfway / 0.2), 1) + " dB halfway, "
+                    + juce::String (db * std::log10 ((left + 1.0e-12) / 0.2), 0) + " dB after 200 ms");
+
+        // The steepest thing in the render should be the notes themselves.
+        const double natural = 0.2 * 6.283185307179586 * 110.0 / sr * 2.0 + 0.1 * 6.283185307179586 * 330.0 / sr;
+        const double step = largestStep (out, at (0.5), (int) out.size());
+
+        report ("no click going down or coming up", step < natural * 1.25,
+                "largest step " + juce::String (step, 5) + " vs " + juce::String (natural, 5) + " for the notes alone");
+    }
+
+    // A new press while the last hold is still dying takes the other layer;
+    // a third inside the same fade steals one. Neither may click, and the
+    // last thing caught is the thing left sounding.
+    {
+        const double tones[] { 110.0, 165.0, 247.5 };
+        const int total = at (7.0);
+        const double starts[] { 0.0, 1.25, 1.72, 2.4 };
+        std::vector<float> in ((size_t) total, 0.0f);
+
+        for (int i = 0; i < total; ++i)
+        {
+            const double t = i / sr;
+
+            for (int n = 0; n < 3; ++n)
+            {
+                const double env = juce::jlimit (0.0, 1.0, (t - starts[n]) / 0.02)
+                                     * juce::jlimit (0.0, 1.0, (starts[n + 1] + 0.02 - t) / 0.02);
+                in[(size_t) i] += (float) (env * 0.2 * std::sin (6.283185307179586 * tones[n] * t));
+            }
+        }
+
+        ParamStore params;
+        params.set (pFreezeOn, 1.0f);
+        params.set (pFreezeMotion, 0.0f);
+        params.set (pFreezeFadeOut, 1000.0f);
+
+        // Down on the first tone, up; down on the second, up; down on the
+        // third while both earlier holds are still dying — a steal.
+        // Timed five times and the best kept: one slow block is the
+        // scheduler, the same slow block five times is the code.
+        double worst = 1.0e30;
+        std::vector<float> out;
+
+        for (int run = 0; run < 5; ++run)
+        {
+            double thisRun = 0.0;
+            out = renderFreeze (params, in, sr, block,
+                                { at (1.2), at (1.5), at (1.7), at (1.8), at (1.98) }, &thisRun);
+            worst = juce::jmin (worst, thisRun);
+        }
+
+        const double budget = block * 1000000.0 / sr;
+        report ("a press costs less than half a block", worst < budget * 0.5,
+                juce::String (worst, 1) + " us worst block across three presses, budget "
+                    + juce::String (budget, 1) + " us");
+
+        bool finite = true;
+        for (float v : out)
+            finite = finite && std::isfinite (v);
+
+        const int from = at (4.5), len = at (2.0);
+        const double last = goertzel (out.data() + from, len, sr, tones[2]);
+        const double ghosts = juce::jmax (goertzel (out.data() + from, len, sr, tones[0]),
+                                          goertzel (out.data() + from, len, sr, tones[1]));
+
+        report ("three presses inside one fade leave only the last",
+                finite && std::abs (db * std::log10 (last / 0.2)) < 0.5 && ghosts < 0.2 * 1.0e-3,
+                "last " + juce::String (db * std::log10 (last / 0.2), 2) + " dB, earlier holds "
+                    + juce::String (db * std::log10 ((ghosts + 1.0e-12) / 0.2), 0) + " dB");
+
+        const double natural = 3.0 * 0.2 * 6.283185307179586 * tones[2] / sr;
+        const double step = largestStep (out, at (1.0), (int) out.size());
+
+        report ("re-pressing never clicks", step < natural,
+                "largest step " + juce::String (step, 5) + " vs " + juce::String (natural, 5) + " allowed");
+    }
+
+    // Motion moves the held layer and nothing else, and leaves the lows be.
+    {
+        std::vector<float> in;
+        makeSine (in, sr, 660.0, 8.0, 0.2f);
+
+        const int press = at (1.0), quiet = at (1.2);
+
+        for (int i = quiet; i < (int) in.size(); ++i)
+            in[(size_t) i] *= (float) std::exp (-(double) (i - quiet) / (sr * 0.01));
+
+        ParamStore params;
+        params.set (pFreezeOn, 1.0f);
+        params.set (pFreezeMotion, 1.0f);
+
+        const auto moving = renderFreeze (params, in, sr, block, { press });
+        const int from = at (2.0), len = at (5.5);
+        const double wander = levelWander (moving, from, from + len, (int) (sr * 0.05));
+        const double level = db * std::log10 (rmsOf (moving.data() + from, len) / (0.2 / std::sqrt (2.0)));
+
+        std::vector<float> low;
+        makeSine (low, sr, 55.0, 8.0, 0.2f);
+
+        for (int i = quiet; i < (int) low.size(); ++i)
+            low[(size_t) i] *= (float) std::exp (-(double) (i - quiet) / (sr * 0.01));
+
+        const auto lows = renderFreeze (params, low, sr, block, { press });
+        const double lowWander = levelWander (lows, from, from + len, (int) (sr / 55.0 * 6.0));
+
+        report ("motion makes the held layer drift", wander > 1.0 && std::abs (level) < 3.0,
+                juce::String (wander, 2) + " dB of movement at 660 Hz, mean level " + juce::String (level, 2) + " dB");
+        report ("motion leaves a low note steady", lowWander < 1.0,
+                juce::String (lowWander, 3) + " dB of movement at 55 Hz");
+    }
+
+    // Hold is a foot, not a setting: no file and no preset remembers it.
+    {
+        ParamStore store;
+        store.set (pFreezeHold, 1.0f);
+        store.set (2, pFreezeHold, 1.0f);
+        store.set (pFreezeFadeOut, 640.0f);
+
+        ParamStore loaded;
+        loaded.fromVar (store.toVar());
+
+        report ("a held foot is never written to the settings",
+                ! loaded.getBool (pFreezeHold) && ! loaded.getBool (2, pFreezeHold)
+                  && loaded.get (pFreezeFadeOut) == 640.0f,
+                "the fades come back, the hold does not");
+    }
+}
+
+// The same pedal on real playing. A held layer is isolated as the held
+// render minus the same render never pressed.
+//
+// Two feet are tried. A careless one comes down every three seconds wherever
+// that lands — mid-note, on an attack, across a change — and whatever it
+// catches has to come out steady. A deliberate one comes down on long notes,
+// from right with the note to well after it, and has to catch the note at
+// the level it was played.
+static void testFreezeOnRealBass (const juce::File& stem, int block)
+{
+    if (! stem.existsAsFile())
+        return;
+
+    std::printf ("\nFreeze on a real bass stem\n");
+
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (stem));
+
+    if (reader == nullptr)
+        return;
+
+    const double sr = reader->sampleRate;
+    const int n = (int) juce::jmin ((juce::int64) (sr * 90.0), reader->lengthInSamples);
+    juce::AudioBuffer<float> buffer ((int) reader->numChannels, n);
+    reader->read (&buffer, 0, n, 0, true, true);
+
+    const std::vector<float> in (buffer.getReadPointer (0), buffer.getReadPointer (0) + n);
+    const auto at = [sr, block] (double seconds) { return ((int) (sr * seconds) / block) * block; };
+
+    ParamStore params;
+    params.set (pFreezeOn, 1.0f);
+    params.set (pFreezeMotion, 0.0f);
+    params.set (pFreezeFadeIn, 0.0f);
+    params.set (pFreezeFadeOut, 0.0f);
+
+    const auto plain = renderFreeze (params, in, sr, block, {});
+
+    const auto layerFor = [&] (const std::vector<int>& presses)
+    {
+        auto layer = renderFreeze (params, in, sr, block, presses);
+
+        for (size_t i = 0; i < layer.size(); ++i)
+            layer[i] -= plain[i];
+
+        return layer;
+    };
+
+    const auto pct = [] (std::vector<double> v, double q)
+    {
+        std::sort (v.begin(), v.end());
+        return v.empty() ? 0.0 : v[(size_t) ((double) (v.size() - 1) * q)];
+    };
+
+    // The careless foot.
+    {
+        const int hop = sr > 50000.0 ? 4096 : 2048;
+        std::vector<double> flutters, wanders;
+        bool finite = true;
+
+        for (double offset : { 0.0, 0.71, 1.52, 2.31 })
+        {
+            std::vector<int> presses;
+
+            for (double t = 3.0 + offset; t + 3.0 < n / sr; t += 3.0)
+            {
+                presses.push_back (at (t));
+                presses.push_back (at (t + 2.5));
+            }
+
+            const auto layer = layerFor (presses);
+
+            for (float v : layer)
+                finite = finite && std::isfinite (v);
+
+            for (size_t h = 0; h < presses.size(); h += 2)
+            {
+                const int from = presses[h] + at (0.6), to = presses[h] + at (2.4);
+
+                if (rmsOf (layer.data() + from, to - from) < 1.0e-3)
+                    continue;   // it came down in a rest
+
+                // A frame that repeats itself shows as loudness that rises
+                // and falls once per hop: fold the layer's energy onto one
+                // hop and see how uneven it is.
+                std::vector<double> fold ((size_t) hop, 0.0);
+
+                for (int i = from; i + hop <= to; i += hop)
+                    for (int j = 0; j < hop; ++j)
+                        fold[(size_t) j] += (double) layer[(size_t) (i + j)] * layer[(size_t) (i + j)];
+
+                double lo = 1.0e30, hi = 0.0;
+
+                for (int j = 0; j < hop; j += 64)
+                {
+                    double e = 0.0;
+
+                    for (int k = 0; k < hop / 4; ++k)
+                        e += fold[(size_t) ((j + k) % hop)];
+
+                    lo = juce::jmin (lo, e);
+                    hi = juce::jmax (hi, e);
+                }
+
+                flutters.push_back (10.0 * std::log10 (hi / (lo + 1.0e-30)));
+                wanders.push_back (levelWander (layer, from, to, (int) (sr * 0.2)));
+            }
+        }
+
+        report ("whatever a careless foot catches is steady",
+                finite && flutters.size() > 20 && pct (flutters, 0.9) < 1.0 && pct (wanders, 0.9) < 0.5,
+                juce::String ((int) flutters.size()) + " holds: frame-rate flutter "
+                    + juce::String (pct (flutters, 0.5), 2) + " dB typical, " + juce::String (pct (flutters, 0.9), 2)
+                    + " dB at the 90th; slow wander " + juce::String (pct (wanders, 0.9), 2) + " dB at the 90th");
+    }
+
+    // The deliberate foot. The tracker's note-on is itself some tens of
+    // milliseconds after the pick, so "with the note" here is a foot landing
+    // about where a player's would.
+    {
+        std::vector<double> onsets;
+        double last = -10.0;
+
+        for (const auto& note : segmentNotes (in, sr, block))
+            if (note.off - note.on > 0.45 && note.on - last > 2.2 && note.on > 1.0 && note.on + 2.5 < n / sr)
+            {
+                onsets.push_back (note.on);
+                last = note.on;
+            }
+
+        bool caught = onsets.size() > 8;
+        juce::String detail;
+
+        for (double after : { -0.03, 0.06, 0.15 })
+        {
+            std::vector<int> presses;
+
+            for (double on : onsets)
+            {
+                presses.push_back (at (on + after));
+                presses.push_back (at (on + after + 1.6));
+            }
+
+            const auto layer = layerFor (presses);
+            std::vector<double> levels;
+
+            for (size_t h = 0; h < onsets.size(); ++h)
+            {
+                const int on = at (onsets[h]);
+                const double played = rmsOf (plain.data() + on + (int) (sr * 0.02), (int) (sr * 0.2));
+                const int from = presses[h * 2] + at (0.6), to = presses[h * 2] + at (1.5);
+
+                levels.push_back (20.0 * std::log10 ((rmsOf (layer.data() + from, to - from) + 1.0e-9) / played));
+            }
+
+            caught = caught && std::abs (pct (levels, 0.5)) < 1.5 && pct (levels, 0.1) > -5.0;
+            detail << juce::String (after * 1000.0, 0) << " ms: " << juce::String (pct (levels, 0.5), 1)
+                   << " dB typical, " << juce::String (pct (levels, 0.1), 1) << " dB at worst tenth; ";
+        }
+
+        report ("a foot landing with the note or after it catches the note", caught,
+                juce::String ((int) onsets.size()) + " long notes — " + detail.trimEnd());
+    }
+}
+
 static void testChannelParams()
 {
     std::printf ("\nChannel parameter store\n");
@@ -4976,6 +5506,32 @@ static void testFootControl()
     }
 
     {
+        // A sustain pedal on Follow is the Freeze pedal's hold, whichever
+        // way the box reports it: a held switch, or — through an expression
+        // jack — a pedal that only ever stands at one end or the other.
+        auto sustain = map;
+        sustain.controls.push_back (footControl ("sus", FootTrigger::controller, 1, 64, FootControl::momentary));
+        sustain.controls.push_back (footControl ("jack", FootTrigger::controller, 1, 4, FootControl::sweep));
+        sustain.layouts[0].jobs.push_back ({ "sus", "bass/frzHold", FootJob::follow, 0.0f, 1.0f });
+        sustain.layouts[0].jobs.push_back ({ "jack", "ch4/frzHold", FootJob::follow, 0.0f, 1.0f });
+        foot.setMap (sustain);
+
+        foot.handleMidi ("gc", cc (1, 64, 127));
+        const bool down = params.getBool (pFreezeHold);
+        foot.handleMidi ("gc", cc (1, 64, 0));
+        const bool up = ! params.getBool (pFreezeHold);
+
+        foot.handleMidi ("gc", cc (1, 4, 120));
+        const bool jackDown = params.getBool (3, pFreezeHold) && ! params.getBool (0, pFreezeHold);
+        foot.handleMidi ("gc", cc (1, 4, 0));
+
+        report ("a sustain pedal holds the freeze while it is down",
+                down && up && jackDown && ! params.getBool (3, pFreezeHold),
+                "as a held switch on the bass, as a two-position pedal on channel 4");
+        foot.setMap (map);
+    }
+
+    {
         const auto text = juce::JSON::toString (map.toVar(), false);
         const auto back = FootMap::fromVar (juce::JSON::parse (text));
         report ("the map survives its file", juce::JSON::toString (back.toVar(), false) == text,
@@ -5035,6 +5591,18 @@ int main (int argc, char* argv[])
         return failures == 0 ? 0 : 1;
     }
 
+    // The freeze on its own, for the same reason.
+    if (argc == 2 && juce::String (argv[1]) == "--freeze")
+    {
+        testFreeze (48000.0, 64);
+        testFreeze (44100.0, 64);
+        testFreeze (96000.0, 256);
+        testFreezeOnRealBass (juce::File ("/Users/fox296/LiveRig/Songs/Plan B/bass.wav"), 64);
+        std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASS" : "FAILURES",
+                     failures, failures == 1 ? "" : "s");
+        return failures == 0 ? 0 : 1;
+    }
+
     std::printf ("LiveRig DSP validation\n======================\n");
 
     for (double sr : { 48000.0, 44100.0 })
@@ -5055,6 +5623,9 @@ int main (int argc, char* argv[])
     testChorus (48000.0, 64);
     testAnalogDelay (48000.0, 64);
     testTape (48000.0, 64);
+    testFreeze (48000.0, 64);
+    testFreeze (44100.0, 64);
+    testFreeze (96000.0, 256);
     testAmpStage (48000.0, 64);
     testCaptureLibrary();
     testReverb (48000.0, 64);
@@ -5088,6 +5659,7 @@ int main (int argc, char* argv[])
     testLiveOutMute (48000.0, 64);
     testTunerFilter();
     testSegmenterOnRealBass (juce::File ("/Users/fox296/LiveRig/Songs/Plan B/bass.wav"), 48000.0, 64);
+    testFreezeOnRealBass (juce::File ("/Users/fox296/LiveRig/Songs/Plan B/bass.wav"), 64);
     testSubOctave (48000.0, 64);
     testCabFilter (48000.0, 64);
     testCompSidechain (48000.0, 64);

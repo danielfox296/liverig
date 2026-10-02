@@ -15,6 +15,7 @@
 #include "dsp/OctaveShifter.h"
 #include "dsp/PitchTracker.h"
 #include "dsp/PlateVerb.h"
+#include "dsp/SpectralFreeze.h"
 #include "dsp/SubOctave.h"
 
 namespace rig
@@ -38,8 +39,8 @@ public:
     enum Stage
     {
         stComp = 0, stEq, stFilter, stBoost, stDrive, stAmp, stCab,
-        stOctave, stSub, stSynth, stPhaser, stChorus, stDelay, stTape,
-        numMovableStages   // 14 stages, 4 bits each — well inside the order word
+        stOctave, stSub, stSynth, stPhaser, stChorus, stDelay, stTape, stFreeze,
+        numMovableStages   // 15 stages, 4 bits each — the order word holds 16
     };
 
     // The chain is one channel's pedalboard: it reads that channel's copies
@@ -232,11 +233,20 @@ private:
     DCBlocker tapeDC;
     juce::SmoothedValue<float> tapeDrive, tapeMix;
 
+    // Freeze: a held layer added beside the live signal, never in its way.
+    // Where the pedal stands on the board is what it hears — everything
+    // above it is in the frozen sound, everything below colours both.
+    SpectralFreeze freeze;
+    juce::SmoothedValue<float> frzLevel;
+    std::vector<float> frzBuf;
+    bool frzHold = false;
+
     PlateVerb reverb;
     juce::SmoothedValue<float> reverbMix;
 
     juce::SmoothedValue<float> bypComp, bypEq, bypFilter, bypBoost, bypDrive, bypAmp, bypOct,
-                               bypSynth, bypPhaser, bypChorus, bypDelay, bypTape, bypReverb, bypCab, bypSub;
+                               bypSynth, bypPhaser, bypChorus, bypDelay, bypTape, bypReverb, bypCab, bypSub,
+                               bypFreeze;
 
     std::vector<float> carrierBuf;
 
@@ -254,6 +264,7 @@ private:
 
     std::atomic<uint64_t> orderPacked { defaultPackedOrder() };
     static_assert (std::atomic<uint64_t>::is_always_lock_free, "need a lock-free order word");
+    static_assert (numMovableStages <= 16, "a stage id must fit its four bits");
 
     std::atomic<float> reportedLatency { 0.0f };
     std::atomic<float> liveHz { 0.0f }, liveConf { 0.0f };

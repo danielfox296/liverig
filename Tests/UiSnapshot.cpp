@@ -69,7 +69,7 @@ int main (int argc, char* argv[])
         rig::SettingsStore settings;
         settings.channelList = "bass,mic,keys";   // stage the full rail the snapshots document
         settings.bassLoadout = "midi,comp,eq,filter,boost,drive,amp,cab,octave,sub,synth,"
-                               "phaser,chorus,delay,tape,reverb";
+                               "phaser,chorus,delay,tape,freeze,reverb";
         settings.micLoadout = "vocal,vocoder";
         settings.keysLoadout = "keys";
         rig::AudioEngine engine (params);          // deliberately not opened
@@ -157,6 +157,20 @@ int main (int argc, char* argv[])
         }
         writePng (eqShot, outDir.getChildFile ("eq-editor.png"));
         problems += countBlankButtons (main, "the EQ editor");
+
+        // The freeze pedal, held: its hold switch, level, fades and motion.
+        params.set (rig::pFreezeOn, 1.0f);
+        params.set (rig::pFreezeHold, 1.0f);
+        main.selectFreezeForSnapshot();
+
+        juce::Image freezeShot (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
+        {
+            juce::Graphics g (freezeShot);
+            main.paintEntireComponent (g, true);
+        }
+        writePng (freezeShot, outDir.getChildFile ("freeze.png"));
+        problems += countBlankButtons (main, "the freeze editor");
+        params.set (rig::pFreezeHold, 0.0f);
 
         // The autotune strip: the switch, its three faders, and the status line.
         params.set (rig::pVocalOn, 1.0f);
