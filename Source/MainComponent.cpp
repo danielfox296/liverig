@@ -218,7 +218,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
                                || def.onParam == pMasterMute;
 
         auto* panel = panels.add (new FxPanel (uiParams, def.name, def.onParam, def.movable,
-                                               def.key == "midi" ? &midiStatus : nullptr, 84,
+                                               def.key == "midi" ? &midiStatus : nullptr, 90,
                                                muteRow));
 
         // The freeze's switch is the hold itself, and says so.
@@ -255,8 +255,6 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
                            [this, key = fxDefs[(size_t) i].key] { removeFxFromChannel (key); });
                 m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (panel));
             };
-
-            panel->setRemovable (true);
         }
 
         fxHolder.addAndMakeVisible (panel);
@@ -550,7 +548,7 @@ void MainComponent::resized()
 
     // The chain list on the left — narrow, since caps titles and the dot
     // grip are all a row carries — and the editor tabs beside it.
-    fxViewport.setBounds (b.removeFromLeft (268));
+    fxViewport.setBounds (b.removeFromLeft (244));
     b.removeFromLeft (8);
     editorTabs.setBounds (b);
 
@@ -728,13 +726,11 @@ int MainComponent::checkFootFunctionsForSnapshot()
     return problems;
 }
 
-// Anything that can be taken away must show the way to take it: every pedal
-// row on every strip's board, and every strip but the master. And nothing
-// that cannot leave may wear the button. Returns how many get it wrong.
+// Every strip but the master wears a remove button in its corner, and the
+// master, which cannot leave, does not. Returns how many get it wrong.
 int MainComponent::checkRemoveButtonsForSnapshot()
 {
-    int problems = 0, pedals = 0, strips = 0;
-    const auto startedOn = selectedChannel;
+    int problems = 0, strips = 0;
 
     for (auto* strip : channelStrips)
     {
@@ -748,29 +744,10 @@ int MainComponent::checkRemoveButtonsForSnapshot()
         }
 
         strips += canLeave ? 1 : 0;
-        selectChannel (key);
-
-        for (int i = 0; i < panels.size(); ++i)
-        {
-            if (! panels[i]->isVisible())
-                continue;
-
-            const bool loadable = isLoadable (fxDefs[(size_t) i]);
-
-            if (panels[i]->hasRemoveButton() != loadable)
-            {
-                std::printf ("  REMOVE BUTTON wrong on %s / %s\n", key.toRawUTF8(),
-                             fxDefs[(size_t) i].key.toRawUTF8());
-                ++problems;
-            }
-
-            pedals += loadable ? 1 : 0;
-        }
     }
 
-    selectChannel (startedOn);
-    std::printf ("  remove buttons on %d pedals and %d strips\n", pedals, strips);
-    return problems + (pedals == 0 || strips == 0 ? 1 : 0);
+    std::printf ("  remove buttons on %d strips\n", strips);
+    return problems + (strips == 0 ? 1 : 0);
 }
 
 // The foot tab used the way a player would use it, with no mouse and no

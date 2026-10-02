@@ -537,36 +537,12 @@ public:
         if (extraComponent != nullptr)
             addAndMakeVisible (extraComponent);
 
-        // The way off the board, where it can be seen. It opens the row's
-        // menu rather than acting: this sits beside a switch that gets hit
-        // without looking, and a stray tap must cost nothing.
-        remove.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xc3\x97")));
-        remove.setWantsKeyboardFocus (false);
-        remove.onClick = [this] { if (onContextMenu != nullptr) onContextMenu(); };
-        addChildComponent (remove);
-
         if (draggable)
             setMouseCursor (juce::MouseCursor::DraggingHandCursor);
     }
 
     std::function<void()> onSelect;
-    std::function<void()> onContextMenu;   // the remove button, or a right click
-
-    // Only a pedal that can leave the board wears the button.
-    void setRemovable (bool canBeRemoved)
-    {
-        if (remove.isVisible() != canBeRemoved)
-        {
-            remove.setVisible (canBeRemoved);
-            resized();
-        }
-    }
-
-    bool hasRemoveButton() const
-    {
-        return remove.isVisible() && ! remove.getBounds().isEmpty()
-                 && const_cast<FxPanel*> (this)->getComponentAt (remove.getBounds().getCentre()) == &remove;
-    }
+    std::function<void()> onContextMenu;   // right-click: remove and friends
     std::function<void (const juce::MouseEvent&)> onDragMove;
     std::function<void()> onDragEnd;
 
@@ -669,12 +645,6 @@ public:
         if (bypassId >= 0)
             power.setBounds (header.removeFromRight (58));
 
-        if (remove.isVisible())
-        {
-            header.removeFromRight (6);
-            remove.setBounds (header.removeFromRight (22));
-        }
-
         if (extraComponent != nullptr)
         {
             header.removeFromRight (8);
@@ -691,7 +661,7 @@ private:
     bool selected = false;
     bool dragging = false;
     juce::Label title;
-    juce::TextButton power, remove;
+    juce::TextButton power;
     juce::Component* extraComponent = nullptr;
     int extraWidth = 90;
 
