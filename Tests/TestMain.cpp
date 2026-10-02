@@ -5532,6 +5532,81 @@ static void testFootControl()
     }
 
     {
+        // No sustain pedal to hand: two preset buttons latch the hold, one
+        // to start it and one to stop it, and a third does both on Flips.
+        // Heard through a real chain, on the wires a Ground Control's
+        // buttons use — program changes on channel 1.
+        const double sr = 48000.0;
+        const int block = 64;
+
+        FootMap latch;
+        latch.controls = {
+            footControl ("start",  FootTrigger::program, 1, 0, FootControl::preset),
+            footControl ("stop",   FootTrigger::program, 1, 1, FootControl::preset),
+            footControl ("toggle", FootTrigger::program, 1, 2, FootControl::preset),
+        };
+        latch.layouts = { { "Latch", { { "start",  "bass/frzHold", FootJob::on,   0.0f, 1.0f },
+                                       { "stop",   "bass/frzHold", FootJob::off,  0.0f, 1.0f },
+                                       { "toggle", "bass/frzHold", FootJob::flip, 0.0f, 1.0f } } } };
+        latch.active = "Latch";
+
+        ParamStore held;
+        held.set (pFreezeOn, 1.0f);
+        held.set (pFreezeMotion, 0.0f);
+
+        FootEngine buttons (held);
+        buttons.setMap (latch);
+
+        // 110 Hz played for 1.2 s, silence, then 165 Hz from 4.0 to 5.2 s.
+        std::vector<float> in ((size_t) (sr * 7.6), 0.0f);
+
+        for (size_t i = 0; i < in.size(); ++i)
+        {
+            const double t = (double) i / sr;
+            const double first = t < 1.2 ? 1.0 : std::exp (-(t - 1.2) / 0.01);
+            const double second = juce::jlimit (0.0, 1.0, (t - 4.0) / 0.02) * (t < 5.2 ? 1.0 : std::exp (-(t - 5.2) / 0.01));
+
+            in[i] = (float) (0.2 * (first * std::sin (6.283185307179586 * 110.0 * t)
+                                      + second * std::sin (6.283185307179586 * 165.0 * t)));
+        }
+
+        // seconds, program
+        const std::pair<double, int> presses[] { { 1.0, 0 }, { 1.5, 0 }, { 3.0, 1 }, { 5.0, 2 }, { 6.5, 2 } };
+
+        FxChain chain (held);
+        chain.prepare (sr, block);
+
+        std::vector<float> mono ((size_t) block), left ((size_t) block), right ((size_t) block), out;
+        size_t next = 0;
+
+        for (int i = 0; i + block <= (int) in.size(); i += block)
+        {
+            while (next < std::size (presses) && (double) i / sr >= presses[next].first)
+                buttons.handleMidi ("gc", pc (1, presses[next++].second));
+
+            std::copy (in.begin() + i, in.begin() + i + block, mono.begin());
+            juce::ScopedNoDenormals noDenormals;
+            chain.process (mono.data(), left.data(), right.data(), block);
+            out.insert (out.end(), left.begin(), left.end());
+        }
+
+        const auto level = [&] (double from, double to, double hz)
+        {
+            return goertzel (out.data() + (int) (sr * from), (int) (sr * (to - from)), sr, hz) / 0.2;
+        };
+
+        const double started = level (2.0, 2.9, 110.0), stopped = level (3.5, 3.9, 110.0);
+        const double flipped = level (5.6, 6.4, 165.0), flippedOff = level (7.0, 7.5, 165.0);
+
+        report ("two buttons latch the freeze, and one on Flips does both",
+                std::abs (started - 1.0) < 0.05 && stopped < 1.0e-3
+                  && std::abs (flipped - 1.0) < 0.05 && flippedOff < 1.0e-3 && ! held.getBool (pFreezeHold),
+                "start holds " + juce::String (started, 2) + " of the note through a second press, stop leaves "
+                    + juce::String (stopped, 4) + "; flip holds " + juce::String (flipped, 2) + ", flip again leaves "
+                    + juce::String (flippedOff, 4));
+    }
+
+    {
         const auto text = juce::JSON::toString (map.toVar(), false);
         const auto back = FootMap::fromVar (juce::JSON::parse (text));
         report ("the map survives its file", juce::JSON::toString (back.toVar(), false) == text,

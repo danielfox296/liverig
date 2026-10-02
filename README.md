@@ -443,6 +443,13 @@ it*. Down holds, up lets go. Any kind of control works — a momentary switch,
 or a pedal that only ever stands at one end or the other — because Follows
 it only asks whether the control is past half way.
 
+**No sustain pedal? Two buttons latch it.** Give one preset button the job
+Freeze → Hold on *Turns on* and another the same job on *Turns off*: the
+first starts the hold and it stays until the second lets it go. One button
+on *Flips* does both — press to hold, press again to release. Either way
+the hold is of what was sounding when it started; to catch a new chord, let
+go and start again.
+
 #### The Ground Control
 
 The Digital Music Corp Ground Control (1998) is a 5-pin MIDI device: its
@@ -773,7 +780,9 @@ them, whose holds must come out at the level played.
 
 `rig_tests --foot` runs the foot map alone, in under a second: a lit switch
 that the rig follows, a held one, a pedal's sweep and its one press on the
-way up, a preset button setting a scene across channels, layouts trading
+way up, a sustain pedal and a pair of buttons each holding the freeze
+through a real chain, a preset button setting a scene across channels,
+layouts trading
 jobs, learning that captures instead of obeying, and a map file that
 survives being saved, damaged or missing.
 
