@@ -137,7 +137,7 @@ public:
             case 0:  return "TAP TEMPO";
             case 1:  return "BARS";
             case 2:  return shown.state == S::empty || taking ? "RECORD" : "OVERDUB";
-            case 3:  return taking ? "CANCEL" : running ? "STOP" : shown.state == S::stopped ? "START" : "STOP / START";
+            case 3:  return taking ? "CANCEL" : running ? "PAUSE" : shown.state == S::paused ? "PLAY" : "PLAY / PAUSE";
             case 4:  return shown.undone ? "REDO" : "UNDO";
             default: return "CLEAR";
         }
@@ -152,7 +152,7 @@ public:
             case Looper::State::recording:    return "RECORDING";
             case Looper::State::playing:      return "PLAYING";
             case Looper::State::overdubbing:  return "OVERDUB";
-            case Looper::State::stopped:      return "STOPPED";
+            case Looper::State::paused:       return "PAUSED";
         }
 
         return {};
@@ -236,7 +236,7 @@ public:
             auto blocks = area.removeFromTop (12).toFloat();
             const float blockGap = 6.0f;
             const float blockWidth = (blocks.getWidth() - blockGap * (Looper::beatsPerBar - 1)) / Looper::beatsPerBar;
-            const bool moving = shown.state != S::empty && shown.state != S::stopped;
+            const bool moving = shown.state != S::empty && shown.state != S::paused;
 
             for (int i = 0; i < Looper::beatsPerBar; ++i)
             {

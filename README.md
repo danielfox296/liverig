@@ -393,19 +393,26 @@ played rather than by how well you can stomp on the last beat:
 
 1. **Tap tempo** — tap the switch in time. Two taps make a tempo; more taps
    average. A tap after a couple of seconds starts a new count.
-2. **Bars** — tap once per bar: four taps is a four-bar loop. After a pause
-   the next tap starts again from one. Sixteen bars at most, fewer below
-   60 BPM (the loop holds 64 seconds).
+2. **Bars** — each tap adds a bar, and the tap after sixteen is one again:
+   the number only goes up, and comes back round. Sixteen bars at most,
+   fewer below 60 BPM (the loop holds 64 seconds).
 3. **Record** — four clicks, then the take. The click keeps going under the
    take, the take ends itself after the bars you tapped, and the loop comes
    straight back with no click.
 
+**Record again during the take ends it early**, on the bar line nearest the
+press, so the loop is always a whole number of bars and the beat never
+moves. Just after a bar line, the loop closes on that line and is already
+playing; before one, the take runs on to it. In the first half of bar one
+it runs to the end of bar one. Bars then shows the length the loop came out
+at. During the count-in, Record again calls the take off.
+
 From there **Record** starts and ends a layer on top (the row reads OVERDUB),
 **Undo** takes the newest layer off and a second press puts it back,
-**Stop / start** parks the loop and comes back in from the top, and
-**Clear** wipes it. Stop during the count-in or the take cancels it. The
-taps are ignored while a loop exists — it keeps the tempo and length it was
-recorded at; Clear first.
+**Play / pause** holds the loop where it is and carries on from the same
+spot, and **Clear** wipes it. Pause during the count-in or the take cancels
+it. The taps are ignored while a loop exists — it keeps the tempo and
+length it was recorded at; Clear first.
 
 **One channel at a time.** Record takes whichever strip is selected on the
 rail at the moment it is pressed — the pane's RECORDS line names it — so a
@@ -416,7 +423,7 @@ it was played with while you change the board for the next layer. The
 backing track is never recorded.
 
 **The pane** (LOOP in the left pane's box) says what the looper is doing —
-READY, COUNT IN, RECORDING, PLAYING, OVERDUB, STOPPED, the bar, the beat —
+READY, COUNT IN, RECORDING, PLAYING, OVERDUB, PAUSED, the bar, the beat —
 and lists the six functions with the number of the foot switch that does
 each, big enough to read standing up. The number is the one the switch's
 name ends in ("Button 3" shows 3); a function no switch has yet shows a

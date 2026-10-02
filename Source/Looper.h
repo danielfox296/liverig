@@ -12,9 +12,10 @@ namespace rig
 // played: one switch taps the tempo, another taps how many bars, and Record
 // gives four clicks and then takes exactly that many bars of one channel —
 // the click keeps going under the take and stops when the loop starts to
-// play. After that Record layers on top, Undo drops the newest layer (and
-// brings it back), Stop / start parks the loop and comes back in from the
-// top, and Clear wipes it.
+// play. A second press of Record during the take ends it early, on the
+// nearest bar line. After that Record layers on top, Undo drops the newest
+// layer (and brings it back), Play / pause holds the loop where it is and
+// carries on from there, and Clear wipes it.
 //
 // What is recorded is what the channel sounded like after its pedals, and
 // it is placed where the player heard it: the engine says how late a played
@@ -24,11 +25,12 @@ namespace rig
 // The first take lives in one buffer; each layer is recorded into one of
 // two more, and the layer before it is folded into the first as the new one
 // starts — a few thousand samples per block, never one long stall — so the
-// newest layer can always be taken back.
+// newest layer can always be taken back. The longest loop takes about a
+// second to fold; a layer started inside that second waits for it.
 class Looper
 {
 public:
-    enum class State { empty, countIn, recording, playing, overdubbing, stopped };
+    enum class State { empty, countIn, recording, playing, overdubbing, paused };
 
     static constexpr int beatsPerBar = 4, countInBeats = 4, maxBars = 16;
     static constexpr float minBpm = 40.0f, maxBpm = 240.0f;
@@ -42,15 +44,17 @@ public:
 
     // Taps count only while there is no loop; a loop keeps the tempo and
     // length it was recorded at. Two taps make a tempo; a tap after a long
-    // gap starts a new count. Each bars tap adds a bar; after a pause the
-    // next tap starts again from one.
+    // gap starts a new count. Each bars tap adds a bar, and the tap past
+    // the most the loop can hold comes back round to one.
     void tapTempo (juce::uint32 nowMs);
     void tapBars (juce::uint32 nowMs);
 
     // Record with no loop counts in and takes the first pass of this
-    // channel slot; with a loop it starts and ends a layer.
+    // channel slot; pressed again during the take it ends the take on the
+    // nearest bar line (during the count, it calls the take off). With a
+    // loop it starts and ends a layer.
     void pressRecord (int sourceSlot);
-    void pressStopStart();
+    void pressPlayPause();
     void pressUndo();
     void pressClear();
 
@@ -84,7 +88,7 @@ public:
                   int latencySamples, float level) noexcept;
 
 private:
-    enum Command { cmdRecord, cmdStopStart, cmdUndo, cmdClear };
+    enum Command { cmdRecord, cmdPlayPause, cmdUndo, cmdClear };
     enum class Job { none, fold, wipe };
 
     void push (Command type, int arg) noexcept;
@@ -92,6 +96,7 @@ private:
 
     void handle (Command type, int arg) noexcept;
     void toEmpty() noexcept;
+    void closeTake() noexcept;
     void tryStartLayer() noexcept;
     void endLayer (bool keepTail) noexcept;
     void runJobs (int budget) noexcept;
@@ -104,8 +109,6 @@ private:
 
     juce::uint32 tempoTaps[5] {};
     int numTempoTaps = 0;
-    juce::uint32 lastBarsTap = 0;
-    int barsTapCount = 0;
 
     static constexpr int queueSize = 32;
     juce::AbstractFifo queue { queueSize };
@@ -132,7 +135,7 @@ private:
     bool latchLatency = false;
     int latency = 0, source = -1;
 
-    int playPos = 0;
+    int playPos = 0, pausedAt = 0;
     juce::SmoothedValue<float> playGain, levelGain, layerGain[2], dubGain;
 
     int newest = -1;             // the newest layer's buffer; -1 when the loop is its first take alone

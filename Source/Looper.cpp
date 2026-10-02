@@ -143,18 +143,17 @@ void Looper::tapTempo (juce::uint32 nowMs)
                 std::memory_order_relaxed);
 }
 
-void Looper::tapBars (juce::uint32 nowMs)
+void Looper::tapBars (juce::uint32)
 {
     if (getState() != State::empty)
         return;
 
     ensureBuffers();
 
-    barsTapCount = barsTapCount == 0 || nowMs - lastBarsTap > 2000 ? 1 : barsTapCount + 1;
-    barsTapCount = juce::jmin (barsTapCount, maxBarsAt (bpm.load (std::memory_order_relaxed)));
-    lastBarsTap = nowMs;
-
-    bars.store (barsTapCount, std::memory_order_relaxed);
+    // One more bar a tap; the tap past the longest loop is one bar again.
+    const int next = bars.load (std::memory_order_relaxed) + 1;
+    bars.store (next > maxBarsAt (bpm.load (std::memory_order_relaxed)) ? 1 : next,
+                std::memory_order_relaxed);
 }
 
 void Looper::push (Command type, int arg) noexcept
@@ -174,7 +173,7 @@ void Looper::pressRecord (int sourceSlot)
         push (cmdRecord, sourceSlot);
 }
 
-void Looper::pressStopStart()   { push (cmdStopStart, 0); }
+void Looper::pressPlayPause()   { push (cmdPlayPause, 0); }
 void Looper::pressUndo()        { push (cmdUndo, 0); }
 void Looper::pressClear()       { push (cmdClear, 0); }
 
@@ -230,11 +229,15 @@ void Looper::handle (Command type, int arg) noexcept
                 }
 
                 case State::countIn:
-                case State::recording:
+                    toEmpty();   // nothing has been played yet; the take is called off
                     break;
 
-                case State::stopped:
-                    playPos = 0;
+                case State::recording:
+                    closeTake();
+                    break;
+
+                case State::paused:
+                    playPos = pausedAt;
                     playGain.setTargetValue (1.0f);
                     state = State::playing;
                     [[fallthrough]];
@@ -251,7 +254,7 @@ void Looper::handle (Command type, int arg) noexcept
             }
             break;
 
-        case cmdStopStart:
+        case cmdPlayPause:
             switch (state)
             {
                 case State::empty:
@@ -266,12 +269,13 @@ void Looper::handle (Command type, int arg) noexcept
                 case State::overdubbing:
                     endLayer (false);
                     wantLayer = false;
-                    state = State::stopped;
+                    pausedAt = playPos;   // the loop runs on under its fade; Play picks up from here
+                    state = State::paused;
                     playGain.setTargetValue (0.0f);
                     break;
 
-                case State::stopped:
-                    playPos = 0;
+                case State::paused:
+                    playPos = pausedAt;
                     playGain.setTargetValue (1.0f);
                     state = State::playing;
                     break;
@@ -319,9 +323,10 @@ void Looper::toEmpty() noexcept
         {
             if (b == newest || job[b] != Job::none)
             {
+                // A wipe still running from a longer loop keeps its reach.
+                jobLen[b] = job[b] != Job::none ? juce::jmax (jobLen[b], loopLen) : loopLen;
                 job[b] = Job::wipe;
                 jobPos[b] = 0;
-                jobLen[b] = loopLen;
             }
         }
     }
@@ -333,6 +338,59 @@ void Looper::toEmpty() noexcept
     source = -1;
     state = State::empty;
     playGain.setTargetValue (0.0f);
+}
+
+// Record pressed again during the take: the loop ends on the bar line
+// nearest the press. A press just after a bar line closes the loop on that
+// line and playback is already that far into it, so the beat never moves;
+// a press before one lets the take run on to it. Either way the loop is a
+// whole number of bars, and at least one.
+void Looper::closeTake() noexcept
+{
+    const double barLen = beatLen * beatsPerBar;
+    const int planned = (totalBeats - countInBeats) / beatsPerBar;
+    const juce::int64 pos = clock - countLen;   // how far into the take the press fell
+    const int kept = juce::jlimit (1, planned, (int) std::llround ((double) pos / barLen));
+
+    if (kept == planned)
+        return;   // the take is about to close itself on that same line
+
+    const int length = (int) std::llround (barLen * kept);
+
+    // The seam's fade belongs at the new end. Whatever of it has already
+    // been written is blended here; the rest is blended as it arrives.
+    const juce::int64 written = clock - latency - countLen;
+
+    for (int k = 0; k < fadeLen; ++k)
+    {
+        const int index = length - fadeLen + k;
+
+        if (index >= written)
+            break;
+
+        const float w = (float) (k + 1) / (float) (fadeLen + 1);
+
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            float* data = base.getWritePointer (ch);
+            data[index] += w * (preRoll[ch][(size_t) k] - data[index]);
+        }
+    }
+
+    loopLen = length;
+    totalBeats = countInBeats + beatsPerBar * kept;
+    bars.store (kept, std::memory_order_relaxed);
+
+    if (written >= length)
+        capturing = false;
+
+    if (pos >= length)
+    {
+        state = State::playing;
+        playPos = (int) (pos - length);
+        playGain.setCurrentAndTargetValue (0.0f);
+        playGain.setTargetValue (1.0f);
+    }
 }
 
 // A new layer needs a clean buffer. The layer before it is folded into the
@@ -442,7 +500,7 @@ void Looper::process (const float* srcL, const float* srcR, float* outL, float* 
         latchLatency = false;
     }
 
-    runJobs (numSamples * 256);
+    runJobs (numSamples * 64);
 
     if (wantLayer && state == State::playing)
         tryStartLayer();

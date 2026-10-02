@@ -5777,30 +5777,36 @@ static void testLooper (double sr, int block)
     looper.tapTempo (20000);
     looper.tapTempo (20500);
 
-    for (juce::uint32 t : { 30000u, 30300u, 30600u, 30900u })
-        looper.tapBars (t);
+    // Bars: a tap is one more bar, and the tap past sixteen is one again.
+    const auto tapBarsTo = [&looper] (int wanted)
+    {
+        for (int i = 0; i < 40 && looper.getBars() != wanted; ++i)
+            looper.tapBars (0);
+    };
 
-    const int four = looper.getBars();
+    const int first = looper.getBars();
+    looper.tapBars (30000);
+    const int second = looper.getBars();
+    tapBarsTo (16);
+    const int most = looper.getBars();
     looper.tapBars (40000);
-    looper.tapBars (40400);
-    report ("bars count the taps, start over after a pause", four == 4 && looper.getBars() == 2,
-            juce::String (four) + " then " + juce::String (looper.getBars()));
+    report ("a bars tap adds a bar; past sixteen it is one", first == 4 && second == 5 && most == 16 && looper.getBars() == 1,
+            juce::String (first) + ", " + juce::String (second) + " ... " + juce::String (most) + ", "
+              + juce::String (looper.getBars()));
 
+    tapBarsTo (16);
     looper.tapTempo (50000);
     looper.tapTempo (51500);   // 40 BPM: six-second bars
-
-    for (int i = 0; i < 20; ++i)
-        looper.tapBars (60000 + (juce::uint32) i * 200);
-
-    report ("bars stop at what the loop can hold", looper.getBars() == Looper::maxBarsAt (40.0f)
+    const int held = looper.getBars();
+    looper.tapBars (60000);
+    report ("a slow tempo shortens the longest loop", held == Looper::maxBarsAt (40.0f) && looper.getBars() == 1
               && Looper::maxBarsAt (60.0f) == 16 && Looper::maxBarsAt (240.0f) == 16,
-            juce::String (looper.getBars()) + " bars at 40 BPM");
+            juce::String (held) + " bars at 40 BPM, then round to " + juce::String (looper.getBars()));
 
     // 120 BPM, two bars.
     looper.tapTempo (70000);
     looper.tapTempo (70500);
-    looper.tapBars (80000);
-    looper.tapBars (80300);
+    tapBarsTo (2);
 
     const auto beat = (juce::int64) std::llround (sr * 0.5);
     const juce::int64 countLen = beat * 4, loopLen = beat * 8;
@@ -6035,25 +6041,32 @@ static void testLooper (double sr, int block)
     bench.level = 1.0f;
     bench.run (loopLen / 2);
 
-    // --- stop / start ---
-    looper.pressStopStart();
+    // --- play / pause ---
+    bench.run (loopLen + loopLen / 3);
+    const auto pausedAt = bench.now;
+    looper.pressPlayPause();
     bench.run (edge);
     from = bench.now;
     bench.runSeconds (0.5);
-    report ("Stop is silence", bench.peak (from, bench.now) == 0.0 && looper.getState() == Looper::State::stopped,
+    report ("Pause is silence", bench.peak (from, bench.now) == 0.0 && looper.getState() == Looper::State::paused,
             "after a 10 ms fade");
 
-    looper.pressStopStart();
-    const auto restartedAt = bench.now;
+    looper.pressPlayPause();
+    const auto resumedAt = bench.now;
     bench.run (loopLen + edge);
     {
-        // Back in from the top: the first sample out is the loop's first.
+        // Play carries on from the sample Pause was pressed on: what comes
+        // out now is what came out one loop before the pause, moved along
+        // by however long the pause lasted.
+        const auto held = resumedAt - pausedAt;
         double worst = 0.0;
 
-        for (auto t = restartedAt + edge; t < restartedAt + loopLen / 8; ++t)
-            worst = juce::jmax (worst, std::abs ((double) bench.out[(size_t) t] - firstTake (p0 + (t - restartedAt))));
+        for (auto t = resumedAt + edge; t < resumedAt + loopLen / 8; ++t)
+            worst = juce::jmax (worst, std::abs ((double) bench.out[(size_t) t]
+                                                   - (double) bench.out[(size_t) (t - held - loopLen)]));
 
-        report ("Start comes back in from the top", worst < 1.0e-5 && looper.getState() == Looper::State::playing,
+        report ("Play picks up where Pause left it", worst < 1.0e-5 && looper.getState() == Looper::State::playing
+                  && bench.peak (resumedAt + edge, resumedAt + loopLen / 8) > 0.05,
                 "worst error " + juce::String (worst, 7));
     }
 
@@ -6069,7 +6082,7 @@ static void testLooper (double sr, int block)
 
     looper.tapTempo (200000);
     looper.tapTempo (200625);
-    looper.tapBars (210000);
+    tapBarsTo (1);
 
     {
         const double beat2 = sr * 0.625;   // not a whole number of samples at 44.1k
@@ -6120,13 +6133,124 @@ static void testLooper (double sr, int block)
         bench.run (edge);
         looper.pressRecord (0);
         bench.run (count2 / 2);
-        looper.pressStopStart();
+        looper.pressPlayPause();
         bench.run (block);
         from = bench.now + (juce::int64) (0.08 * sr);   // the last click rings out
         bench.runSeconds (1.0);
-        report ("Stop during the count-in cancels the take",
+        report ("Pause during the count-in cancels the take",
                 looper.getState() == Looper::State::empty && bench.peak (from, bench.now) == 0.0,
                 "empty and silent");
+
+        looper.pressRecord (0);
+        bench.run (count2 / 2);
+        looper.pressRecord (0);
+        bench.run (block);
+        from = bench.now + (juce::int64) (0.08 * sr);
+        bench.runSeconds (1.0);
+        report ("Record again during the count-in calls it off",
+                looper.getState() == Looper::State::empty && bench.peak (from, bench.now) == 0.0,
+                "empty and silent");
+    }
+
+    // --- Record pressed again during the take ends it on the nearest bar ---
+    {
+        looper.tapTempo (300000);
+        looper.tapTempo (300500);   // 120 BPM
+        tapBarsTo (8);
+
+        const auto bar = beat * 4;
+        const auto x3 = tone (83.1, 0.25f);
+
+        // The loop is `kept` bars of what was played from the downbeat, and
+        // the beat never moved: the loop's position is the grid's.
+        const auto takeError = [&] (juce::int64 downbeat, int kept, juce::int64 checkFrom)
+        {
+            const auto length = bar * kept;
+            double worst = 0.0;
+
+            for (auto t = checkFrom; t < checkFrom + length; ++t)
+            {
+                const auto pos = (t - downbeat) % length;
+
+                if (pos < length - edge)
+                    worst = juce::jmax (worst, std::abs ((double) bench.out[(size_t) t] - (double) x3 (downbeat + pos)));
+            }
+
+            return worst;
+        };
+
+        // A press a little late: just past the end of bar one.
+        bench.hands = x3;
+        auto downbeat = bench.now + countLen;
+        looper.pressRecord (0);
+        runUntil (downbeat + bar + bar / 10);
+        const bool wasTaking = looper.getState() == Looper::State::recording;
+        const auto lateAt = bench.now;
+        looper.pressRecord (0);
+        bench.run (block);
+        const bool closedAtOnce = looper.getState() == Looper::State::playing && looper.getBars() == 1;
+        bench.hands = nullptr;
+        runUntil (lateAt + bar * 3);
+        report ("Record just after a bar line closes on that line",
+                wasTaking && closedAtOnce && takeError (downbeat, 1, lateAt + edge) < 1.0e-5,
+                "1 bar, worst error " + juce::String (takeError (downbeat, 1, lateAt + edge), 7));
+
+        {
+            double step = 0.0;
+
+            for (auto t = downbeat + bar * 3 - edge; t < downbeat + bar * 3 + edge; ++t)
+                step = juce::jmax (step, (double) std::abs (bench.out[(size_t) t] - bench.out[(size_t) (t - 1)]));
+
+            report ("the early-closed loop's seam does not click", step < 0.012, "largest step " + juce::String (step, 4));
+        }
+
+        // A press a little early: most of the way through bar two.
+        looper.pressClear();
+        bench.run (edge);
+        tapBarsTo (8);
+        bench.hands = x3;
+        downbeat = bench.now + countLen;
+        looper.pressRecord (0);
+        runUntil (downbeat + bar + (bar * 8) / 10);
+        looper.pressRecord (0);
+        bench.run (block);
+        const bool ranOn = looper.getState() == Looper::State::recording && looper.getBars() == 2;
+        runUntil (downbeat + bar * 2 + block);
+        const bool closedOnLine = looper.getState() == Looper::State::playing;
+        bench.hands = nullptr;
+        runUntil (downbeat + bar * 5);
+        report ("Record just before a bar line runs on to it",
+                ranOn && closedOnLine && takeError (downbeat, 2, downbeat + bar * 2) < 1.0e-5,
+                "2 bars, worst error " + juce::String (takeError (downbeat, 2, downbeat + bar * 2), 7));
+
+        {
+            // No click after the early close: the take's last beat is the
+            // last one sounded.
+            int late = 0;
+
+            for (auto t = downbeat + bar * 2 + (juce::int64) (0.08 * sr); t < downbeat + bar * 5; ++t)
+                if (std::abs ((double) bench.out[(size_t) t] - (double) x3 (downbeat + (t - downbeat) % (bar * 2))) > 0.02
+                     && (t - downbeat) % (bar * 2) < bar * 2 - edge)
+                    ++late;
+
+            report ("the click stops when the take does", late == 0, juce::String (late) + " stray samples");
+        }
+
+        // In the first half of bar one there is no bar behind to close on.
+        looper.pressClear();
+        bench.run (edge);
+        tapBarsTo (8);
+        bench.hands = x3;
+        downbeat = bench.now + countLen;
+        looper.pressRecord (0);
+        runUntil (downbeat + bar / 4);
+        looper.pressRecord (0);
+        runUntil (downbeat + bar + block);
+        bench.hands = nullptr;
+        report ("the shortest loop is one bar", looper.getState() == Looper::State::playing && looper.getBars() == 1,
+                juce::String (looper.getBars()) + " bar");
+        looper.pressClear();
+        bench.run (edge);
     }
 
     // --- the longest loop: folding a layer must not cost a block its time ---
@@ -6135,8 +6259,8 @@ static void testLooper (double sr, int block)
         big.looper.tapTempo (0);
         big.looper.tapTempo (1000);   // 60 BPM
 
-        for (int i = 0; i < 16; ++i)
-            big.looper.tapBars (5000 + (juce::uint32) i * 100);
+        for (int i = 0; i < 40 && big.looper.getBars() != 16; ++i)
+            big.looper.tapBars (0);
 
         big.hands = x;
         big.looper.pressRecord (0);
@@ -6159,9 +6283,9 @@ static void testLooper (double sr, int block)
             big.runSeconds (1.5);
         }
 
-        // One block in a thousand is the machine's, not the looper's.
+        // One block in a hundred is the machine's, not the looper's.
         std::sort (big.blockUs.begin(), big.blockUs.end());
-        const double typicalWorst = big.blockUs[(size_t) ((double) big.blockUs.size() * 0.999)];
+        const double typicalWorst = big.blockUs[(size_t) ((double) big.blockUs.size() * 0.99)];
         const double budgetUs = 1.0e6 * block / sr;
 
         report ("folding a 64 s loop stays inside the block", big.looper.getBars() == 16

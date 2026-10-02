@@ -989,10 +989,13 @@ int MainComponent::exerciseLoopForSnapshot (const std::function<void (const char
     handleAsyncUpdate();
     expect (std::abs (looper.getBpm() - 120.0f) < 0.01f, "two taps half a second apart did not make 120");
 
-    press (2, 3000);
-    press (2, 3200);
+    // Four bars to begin with: twelve taps reach sixteen, and the next is one.
+    for (int i = 0; i < 12; ++i)
+        press (2, 3000 + (juce::uint32) i * 200);
+
+    const int most = looper.getBars();
     press (2, 9000);
-    expect (looper.getBars() == 1, "the bars switch did not count its taps and start over");
+    expect (most == 16 && looper.getBars() == 1, "the bars switch did not count up and come back round to one");
 
     const int block = StandInDevice::block;
     const juce::int64 beat = 24000, countLen = beat * 4, loopLen = beat * 4;
@@ -1057,7 +1060,7 @@ int MainComponent::exerciseLoopForSnapshot (const std::function<void (const char
     run (p0 + loopLen * 2 + beat * 2 - now);
     refreshLoopPane();
     expect (looper.getState() == Looper::State::playing && loopView.stateText() == "PLAYING"
-              && loopView.labelFor (2) == "OVERDUB" && loopView.labelFor (3) == "STOP",
+              && loopView.labelFor (2) == "OVERDUB" && loopView.labelFor (3) == "PAUSE",
             "the take did not close into a playing loop");
     shoot ("loop-playing.png");
 
@@ -1092,8 +1095,9 @@ int MainComponent::exerciseLoopForSnapshot (const std::function<void (const char
     press (4, 32000);
     run (block * 20);
     refreshLoopPane();
-    expect (looper.getState() == Looper::State::stopped && loopView.labelFor (3) == "START",
-            "Stop did not stop the loop");
+    expect (looper.getState() == Looper::State::paused && loopView.labelFor (3) == "PLAY"
+              && loopView.stateText() == "PAUSED",
+            "Pause did not pause the loop");
 
     {
         const auto from = (juce::int64) heard.size();
@@ -1103,7 +1107,7 @@ int MainComponent::exerciseLoopForSnapshot (const std::function<void (const char
         for (auto t = from; t < (juce::int64) heard.size(); ++t)
             peak = juce::jmax (peak, std::abs (heard[(size_t) t]));
 
-        expect (peak < 1.0e-6f, "a stopped loop still sounds");
+        expect (peak < 1.0e-6f, "a paused loop still sounds");
     }
 
     press (6, 33000);
@@ -1115,7 +1119,7 @@ int MainComponent::exerciseLoopForSnapshot (const std::function<void (const char
     // The mouse comes in by the same door: two clicks on the BARS row.
     loopView.onPress (LoopView::actionFor (1));
     loopView.onPress (LoopView::actionFor (1));
-    expect (looper.getBars() == 2, "clicking a row did not do what its switch does");
+    expect (looper.getBars() == 3, "clicking a row did not do what its switch does");
 
     engine.audioDeviceStopped();
     selectChannel ("bass");
@@ -2869,7 +2873,7 @@ void MainComponent::buildFootMenu (juce::PopupMenu& menu, const FootView::Choose
     item (loop, "Tap tempo", "do/loopTempo");
     item (loop, "Bars", "do/loopBars");
     item (loop, "Record / overdub", "do/loopRecord");
-    item (loop, "Stop / start", "do/loopStop");
+    item (loop, "Play / pause", "do/loopStop");
     item (loop, "Undo", "do/loopUndo");
     item (loop, "Clear", "do/loopClear");
     item (loop, "Level", "rig/loopLevel");
@@ -2900,7 +2904,7 @@ juce::String MainComponent::describeFootAction (const juce::String& action) cons
     if (action == "do/loopTempo")   return "Loop" + dot + "Tap tempo";
     if (action == "do/loopBars")    return "Loop" + dot + "Bars";
     if (action == "do/loopRecord")  return "Loop" + dot + "Record / overdub";
-    if (action == "do/loopStop")    return "Loop" + dot + "Stop / start";
+    if (action == "do/loopStop")    return "Loop" + dot + "Play / pause";
     if (action == "do/loopUndo")    return "Loop" + dot + "Undo";
     if (action == "do/loopClear")   return "Loop" + dot + "Clear";
 
@@ -2965,7 +2969,7 @@ void MainComponent::runFootCommand (const juce::String& command, juce::uint32 pr
     if (command == "do/loopTempo")          looper.tapTempo (pressedAtMs);
     else if (command == "do/loopBars")      looper.tapBars (pressedAtMs);
     else if (command == "do/loopRecord")    looper.pressRecord (slotOf (loopChannelKey()));
-    else if (command == "do/loopStop")      looper.pressStopStart();
+    else if (command == "do/loopStop")      looper.pressPlayPause();
     else if (command == "do/loopUndo")      looper.pressUndo();
     else if (command == "do/loopClear")     looper.pressClear();
     else if (command == "do/play")
