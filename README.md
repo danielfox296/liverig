@@ -417,8 +417,9 @@ moves:
 - a **command** (play/stop, loop tap, recall a preset, panic) just happens
   on the press.
 
-Right-click a job to remove it; right-click a card to remove the control or
-**Learn again**.
+The **×** at the end of a job takes it off. The **...** on a card is that
+control's own menu: **Learn again**, or remove the control. A right click on
+either does the same.
 
 **Layouts** are named sets of jobs — the box at the top of the tab. The
 controls stay; what they do changes. **Copy** starts a new layout from the

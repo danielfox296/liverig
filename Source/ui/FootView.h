@@ -256,6 +256,13 @@ private:
             name.setInterceptsMouseClicks (false, false);
             addAndMakeVisible (name);
 
+            // Taking a job off has to be something you can see. The right
+            // click below still works, but nobody finds a right click.
+            remove.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xc3\x97")));
+            remove.setWantsKeyboardFocus (false);
+            remove.onClick = [this] { owner.removeJobFromRow (index); };
+            addAndMakeVisible (remove);
+
             FootParamTarget target;
 
             if (! parseFootParamAction (job.action, target))
@@ -354,6 +361,9 @@ private:
         {
             auto b = getLocalBounds().reduced (0, 3);
 
+            remove.setBounds (b.removeFromRight (26));
+            b.removeFromRight (6);
+
             if (verbs.isVisible())
             {
                 verbs.setBounds (b.removeFromRight (112));
@@ -368,6 +378,18 @@ private:
             }
 
             name.setBounds (b);
+        }
+
+        // The offscreen check's finger on the remove button: true if the
+        // button is really there to be pressed, and was.
+        bool clickRemove (int jobIndex)
+        {
+            if (jobIndex != index || ! remove.isVisible() || remove.getBounds().isEmpty()
+                 || getComponentAt (remove.getBounds().getCentre()) != &remove)
+                return false;
+
+            remove.onClick();
+            return true;
         }
 
     private:
@@ -390,6 +412,7 @@ private:
         juce::Label name, value;
         juce::ComboBox verbs;
         juce::Slider fader;
+        juce::TextButton remove;
     };
 
     //==========================================================================
@@ -436,6 +459,13 @@ private:
             add.setWantsKeyboardFocus (false);
             add.onClick = [this] { owner.showFunctionMenu (controlId, add); };
             addAndMakeVisible (add);
+
+            // Learn again and Remove, where a hand can find them; the same
+            // menu a right click on the card brings up.
+            more.setButtonText ("...");
+            more.setWantsKeyboardFocus (false);
+            more.onClick = [this] { owner.showControlMenu (controlId, name.getText()); };
+            addAndMakeVisible (more);
         }
 
         void addRow (JobRow* row)
@@ -446,6 +476,20 @@ private:
         int preferredHeight() const
         {
             return 50 + rows.size() * rowHeight + (rows.isEmpty() ? 0 : 5);
+        }
+
+        bool clickRemoveOn (int jobIndex)
+        {
+            for (auto* row : rows)
+                if (row->clickRemove (jobIndex))
+                    return true;
+
+            return false;
+        }
+
+        bool hasMenuButton() const
+        {
+            return more.isVisible() && ! more.getBounds().isEmpty();
         }
 
         void flash()   { flashTicks = 6; }
@@ -516,6 +560,8 @@ private:
             auto head = b.removeFromTop (24);
             head.removeFromLeft (18);   // the lamp
             add.setBounds (head.removeFromRight (30));
+            head.removeFromRight (4);
+            more.setBounds (head.removeFromRight (30));
 
             if (kindBox.isVisible())
             {
@@ -543,7 +589,7 @@ private:
         FootControl::Kind kind;
         juce::Label name, wire;
         juce::ComboBox kindBox;
-        juce::TextButton add;
+        juce::TextButton add, more;
         juce::OwnedArray<JobRow> rows;
         float lamp = 0.0f;
         int flashTicks = 0;
@@ -637,6 +683,42 @@ public:
                 rebuildCards();
             }
         }
+    }
+
+    // From the button on the job's own row. The job goes now; the cards are
+    // rebuilt once the click that asked has finished with the row it is on.
+    void removeJobFromRow (int index)
+    {
+        if (auto* layout = map.activeLayout())
+        {
+            if (juce::isPositiveAndBelow (index, (int) layout->jobs.size()))
+            {
+                layout->jobs.erase (layout->jobs.begin() + index);
+                push (true);
+                rebuildSoon();
+            }
+        }
+    }
+
+    // The offscreen check pressing what a player would press: the remove
+    // button on the row showing job `index`, and whether every card carries
+    // its menu button.
+    bool clickRemoveOn (int index)
+    {
+        for (auto* card : cards)
+            if (card->clickRemoveOn (index))
+                return true;
+
+        return false;
+    }
+
+    bool everyCardHasItsMenu() const
+    {
+        for (auto* card : cards)
+            if (! card->hasMenuButton())
+                return false;
+
+        return ! cards.isEmpty();
     }
 
     // A new job starts where it is most likely wanted: a switch follows a

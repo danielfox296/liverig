@@ -814,6 +814,16 @@ int MainComponent::exerciseFootForSnapshot()
               && (int) map.activeLayout()->jobs.size() == base + 2,
             "deleting a layout left it, or left a job pointing at it");
 
+    // Taking a job back off, by the button a player can see on its row.
+    {
+        const int before = (int) map.activeLayout()->jobs.size();
+        footView.addJob (id, "bass/chOn");
+        expect ((int) map.activeLayout()->jobs.size() == before + 1 && footView.clickRemoveOn (before)
+                  && (int) map.activeLayout()->jobs.size() == before,
+                "the remove button on a job's row is missing, covered, or did not remove the job");
+        expect (footView.everyCardHasItsMenu(), "a card has no visible way to its Learn again / Remove menu");
+    }
+
     footView.renameControl (id, "Chorus scene");
     footView.removeControl (id);
     expect (map.controls.size() == 3 && (int) map.activeLayout()->jobs.size() == base,
