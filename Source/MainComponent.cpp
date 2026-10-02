@@ -726,30 +726,6 @@ int MainComponent::checkFootFunctionsForSnapshot()
     return problems;
 }
 
-// Every strip but the master wears a remove button in its corner, and the
-// master, which cannot leave, does not. Returns how many get it wrong.
-int MainComponent::checkRemoveButtonsForSnapshot()
-{
-    int problems = 0, strips = 0;
-
-    for (auto* strip : channelStrips)
-    {
-        const auto key = strip->getComponentID();
-        const bool canLeave = key != "master";
-
-        if (strip->hasRemoveButton() != canLeave)
-        {
-            std::printf ("  REMOVE BUTTON wrong on the %s strip\n", key.toRawUTF8());
-            ++problems;
-        }
-
-        strips += canLeave ? 1 : 0;
-    }
-
-    std::printf ("  remove buttons on %d strips\n", strips);
-    return problems + (strips == 0 ? 1 : 0);
-}
-
 // The foot tab used the way a player would use it, with no mouse and no
 // hardware: learn a switch, give it jobs, press it, turn it into a pedal,
 // learn it again as something else, copy the layout, switch layouts by
@@ -1392,37 +1368,27 @@ void MainComponent::rebuildChannelRail()
         strip->onSelect = [this, key] { selectChannel (key); };
         addAndMakeVisible (strip);
 
-        // Removing a strip always asks first, whichever door it came in by:
-        // the button in the strip's corner, or a right click.
-        strip->onRemove = [this, key, strip]
-        {
-            juce::AlertWindow::showOkCancelBox (
-                juce::MessageBoxIconType::QuestionIcon,
-                "Remove " + strip->getName() + "?",
-                "The strip leaves the rail and its sound stops. "
-                "Its knobs stay saved for a return.",
-                "Remove", "Keep", this,
-                juce::ModalCallbackFunction::create ([this, key] (int choice)
-                {
-                    if (choice == 1)
-                        removeChannel (key);
-                }));
-        };
-
-        strip->onContextMenu = [this, strip]
+        strip->onContextMenu = [this, key, strip]
         {
             juce::PopupMenu m;
             m.addItem ("Remove " + strip->getName() + "...",
-                       [safe = juce::Component::SafePointer<ChannelStrip> (strip)]
+                       [this, key, name = strip->getName()]
             {
-                if (safe != nullptr && safe->onRemove != nullptr)
-                    safe->onRemove();
+                juce::AlertWindow::showOkCancelBox (
+                    juce::MessageBoxIconType::QuestionIcon,
+                    "Remove " + name + "?",
+                    "The strip leaves the rail and its sound stops. "
+                    "Its knobs stay saved for a return.",
+                    "Remove", "Keep", this,
+                    juce::ModalCallbackFunction::create ([this, key] (int choice)
+                    {
+                        if (choice == 1)
+                            removeChannel (key);
+                    }));
             });
 
             m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (strip));
         };
-
-        strip->setRemovable (true);
     }
 
     masterStrip = channelStrips.add (new ChannelStrip ("master", "Master", &masterMeter));

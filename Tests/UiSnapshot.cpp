@@ -169,7 +169,6 @@ int main (int argc, char* argv[])
         }
         writePng (freezeShot, outDir.getChildFile ("freeze.png"));
         problems += countBlankButtons (main, "the freeze editor");
-        problems += main.checkRemoveButtonsForSnapshot();
         params.set (rig::pFreezeOn, 0.0f);
 
         // The autotune strip: the switch, its three faders, and the status line.

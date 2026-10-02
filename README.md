@@ -48,9 +48,6 @@ Everything happens in the window. There is nothing to run in a terminal.
   nothing to scroll past. Tap the row again to put them away; with nothing
   selected the panel just says so. Which effect is up is remembered between
   sessions.
-- **Right-click a row to take that pedal off the board.** It goes quiet and
-  keeps its knob settings for when it comes back. A channel leaves the rail
-  by the × in its corner, or a right click; either asks first.
 - **The list is the signal chain**, top to bottom, and the rows with a
   gripper can be **dragged into any order** — put drive before the filter,
   chorus before the octave, whatever the song wants. Input stays at the top,
