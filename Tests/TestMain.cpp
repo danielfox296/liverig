@@ -5698,7 +5698,8 @@ struct LoopBench
             std::fill (outR.begin(), outR.end(), 0.0f);
 
             const auto start = std::chrono::high_resolution_clock::now();
-            looper.process (src.data(), src.data(), outL.data(), outR.data(), block, latency, level);
+            looper.process (src.data(), src.data(), outL.data(), outR.data(), block, latency, level,
+                            heardAt (now));
 
             if (timing)
                 blockUs.push_back (std::chrono::duration<double, std::micro> (
@@ -5709,6 +5710,10 @@ struct LoopBench
     }
 
     void runSeconds (double seconds)   { run ((juce::int64) (seconds * sr)); }
+
+    // When sample t of what comes out reaches the speakers: a made-up
+    // clock, behind the writing by speakersLate.
+    double heardAt (juce::int64 t) const   { return 5000.0 + (double) (t + speakersLate) * 1000.0 / sr; }
 
     // Largest difference between what came out over a stretch and what was
     // expected there.
@@ -5734,7 +5739,7 @@ struct LoopBench
 
     Looper looper;
     double sr;
-    int block, latency;
+    int block, latency, speakersLate = 300;
     juce::int64 now = 0;
     float level = 1.0f;
     int wanted = -1;
@@ -5882,6 +5887,33 @@ static void testLooper (double sr, int block)
 
         report ("the seam does not click", step < 0.012,
                 "largest step " + juce::String (step, 4) + " (a bare jump would be up to 0.5)");
+    }
+
+    // The pane's beat is the one in the speakers, which are behind the
+    // writing, and it runs on between blocks: asked for the moment a
+    // sample is heard, it gives that sample's place in the loop — round
+    // the seam too — and never runs more than a tenth of a second past
+    // the last block.
+    {
+        const auto placeOf = [&] (juce::int64 t)
+        {
+            const auto p = ((t - p0) % loopLen + loopLen) % loopLen;
+            return (double) p / (double) beat;
+        };
+
+        const auto heard = [&] (juce::int64 t) { return (double) looper.getBeatPosition (bench.heardAt (t)); };
+        const auto end = bench.now;
+        double worst = 0.0;
+
+        for (const auto t : { end - (juce::int64) bench.speakersLate, end - 1, end + (juce::int64) (0.05 * sr) })
+            worst = juce::jmax (worst, std::abs (heard (t) - placeOf (t)));
+
+        const double written = std::abs ((double) looper.getBeatPosition() - placeOf (end));
+        const double held = std::abs (heard (end + (juce::int64) (2.0 * sr)) - placeOf (end + (juce::int64) (0.1 * sr)));
+
+        report ("the beat shown is the beat heard", worst < 1.0e-3 && written < 1.0e-3 && held < 1.0e-3,
+                "worst " + juce::String (worst, 5) + " beats off, behind the writing by "
+                  + juce::String (bench.speakersLate) + " samples, across the seam");
     }
 
     // From here the first take is judged against its own clean second pass,

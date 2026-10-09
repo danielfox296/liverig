@@ -70,7 +70,7 @@ void Looper::prepare (double sampleRate, int)
     clickLen = (int) (0.060 * sampleRate);
     clickDecay = sampleRate > 0.0 ? (float) std::exp (-1.0 / (0.012 * sampleRate)) : 0.0f;
 
-    publish();
+    publish (0.0);
 }
 
 // Three stereo buffers of the longest loop is tens of megabytes, so a rig
@@ -473,21 +473,56 @@ void Looper::runJobs (int budget) noexcept
     }
 }
 
-void Looper::publish() noexcept
+void Looper::publish (double heardAtMs) noexcept
 {
     const bool counting = state == State::countIn || state == State::recording;
 
     uiState.store ((int) state, std::memory_order_relaxed);
     uiPos.store (counting ? (int) (state == State::countIn ? clock : clock - countLen) : playPos,
                  std::memory_order_relaxed);
+    uiHeardAt.store (heardAtMs, std::memory_order_relaxed);
+    uiLoopLen.store (loopLen, std::memory_order_relaxed);
     uiBeatLen.store ((float) beatLen, std::memory_order_relaxed);
     uiSource.store (source, std::memory_order_relaxed);
     uiHasLayer.store (newest >= 0, std::memory_order_relaxed);
     uiUndone.store (undone, std::memory_order_relaxed);
 }
 
+float Looper::getBeatPosition (double nowMs) const noexcept
+{
+    const float beat = uiBeatLen.load (std::memory_order_relaxed);
+
+    if (beat <= 0.0f)
+        return 0.0f;
+
+    double pos = (double) uiPos.load (std::memory_order_relaxed);
+    const double heardAt = uiHeardAt.load (std::memory_order_relaxed);
+    const auto shownState = getState();
+
+    if (nowMs > 0.0 && heardAt > 0.0 && shownState != State::empty && shownState != State::paused)
+    {
+        // The published sample is heard at heardAt; the one heard now is
+        // that far before or after it. Should the audio stop answering,
+        // the beat goes no further than a tenth of a second past the last
+        // block rather than run on alone.
+        pos += juce::jmin (100.0, nowMs - heardAt) * 0.001 * rate.load (std::memory_order_relaxed);
+
+        const int length = uiLoopLen.load (std::memory_order_relaxed);
+
+        if ((shownState == State::playing || shownState == State::overdubbing) && length > 0)
+        {
+            pos = std::fmod (pos, (double) length);
+
+            if (pos < 0.0)
+                pos += length;
+        }
+    }
+
+    return (float) (pos / beat);
+}
+
 void Looper::process (const float* srcL, const float* srcR, float* outL, float* outR, int numSamples,
-                      int latencySamples, float level) noexcept
+                      int latencySamples, float level, double heardAtMs) noexcept
 {
     if (! allocated.load (std::memory_order_acquire))
         return;
@@ -630,7 +665,10 @@ void Looper::process (const float* srcL, const float* srcR, float* outL, float* 
         outR[i] += addR;
     }
 
-    publish();
+    // What is published is where the next block starts, so its time is the
+    // end of this one.
+    const double r = rate.load (std::memory_order_relaxed);
+    publish (heardAtMs > 0.0 && r > 0.0 ? heardAtMs + numSamples * 1000.0 / r : 0.0);
 }
 
 } // namespace rig

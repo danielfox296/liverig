@@ -496,6 +496,7 @@ void InstrumentHost::process (const NoteEvent* events, int numEvents,
     if (plugin == nullptr || numSamples > scratch.getNumSamples())
         return;
 
+    latencySamples.store (plugin->getLatencySamples(), std::memory_order_relaxed);
     midi.clear();
 
     for (int i = 0; i < numEvents; ++i)

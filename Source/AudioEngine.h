@@ -93,7 +93,8 @@ public:
     float getIoLatencyMs() noexcept;
 
     // How late the looper takes a played note to be before the board's own
-    // delay is added: the interface's input and output latency and one buffer.
+    // delay is added: the interface's input and output latency, which
+    // between them already hold the two buffers of the round trip.
     int getLoopRoundTripSamples() const noexcept { return ioRoundTrip.load (std::memory_order_relaxed); }
 
     float getInputPeak() const noexcept     { return inPeak.load (std::memory_order_relaxed); }
@@ -209,10 +210,12 @@ private:
 
     // The instrument looper: one channel's sound in, after its board; the
     // loop and its click out into the live sum. The round trip is what the
-    // interface costs a played note — in, out and one buffer — so the loop
-    // can put each note back where the player heard it.
+    // interface costs a played note — in and out — so the loop can put each
+    // note back where the player heard it. A key on the keyboard never
+    // comes in through the interface: it is late by the way out, and by
+    // the wait for the block that plays it, half a block on average.
     Looper looper;
-    std::atomic<int> ioRoundTrip { 0 };
+    std::atomic<int> ioRoundTrip { 0 }, keysRoundTrip { 0 };
 
     // Playback-lane dynamics: the song is limited into the headroom the
     // instrument leaves, so a song never ducks the playing.

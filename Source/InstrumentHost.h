@@ -85,6 +85,10 @@ public:
     void process (const NoteEvent* events, int numEvents,
                   float* left, float* right, int numSamples, float gain) noexcept;
 
+    // How long the instrument itself holds a note back, as it last said
+    // while playing.
+    int getLatencySamples() const noexcept   { return latencySamples.load (std::memory_order_relaxed); }
+
 private:
     void timerCallback() override;
     void scanOnThisThread();
@@ -109,6 +113,7 @@ private:
     // expects is how a host reads off the end of a buffer.
     juce::AudioBuffer<float> scratch;
     std::atomic<int> pluginOutputs { 2 };
+    std::atomic<int> latencySamples { 0 };
     juce::MidiBuffer midi;
 
     std::atomic<bool> scanning { false };

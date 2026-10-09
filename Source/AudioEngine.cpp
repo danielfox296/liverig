@@ -239,10 +239,14 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     instrument.prepare (rate, maxBlock);
     stems.prepare (rate, maxBlock);
 
+    // Each of the device's two figures already counts its own buffer: a
+    // note heard from the output and played back in arrives in + out late,
+    // and adding a buffer on top put every take a buffer early.
     looper.prepare (rate, maxBlock);
-    ioRoundTrip.store (device->getInputLatencyInSamples() + device->getOutputLatencyInSamples()
-                         + device->getCurrentBufferSizeSamples(),
+    ioRoundTrip.store (device->getInputLatencyInSamples() + device->getOutputLatencyInSamples(),
                        std::memory_order_relaxed);
+    keysRoundTrip.store (device->getOutputLatencyInSamples() + device->getCurrentBufferSizeSamples() / 2,
+                         std::memory_order_relaxed);
 
     tuneSlot.prepare (rate, maxBlock);
     vocoderSlot.prepare (rate, maxBlock);
@@ -360,11 +364,17 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                                                     float* const* outputChannelData,
                                                     int numOutputChannels,
                                                     int numSamples,
-                                                    const juce::AudioIODeviceCallbackContext&)
+                                                    const juce::AudioIODeviceCallbackContext& context)
 {
     juce::ScopedNoDenormals noDenormals;
 
     const double rate = currentRate.load (std::memory_order_relaxed);
+
+    // When this block's first sample leaves for the speakers, on the same
+    // clock the screen reads, so the loop pane can show the beat being
+    // heard rather than the one being written. A device that does not say
+    // (the offscreen stand-in) leaves it unknown.
+    const double outMs = context.hostTimeNs != nullptr ? (double) *context.hostTimeNs * 1.0e-6 : 0.0;
     const float decay = rate > 0.0 ? std::exp (-(float) numSamples / (float) (rate * 0.35)) : 0.0f;
 
     float* monoIn  = scratch.getWritePointer (0);
@@ -532,13 +542,19 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
             const float pathLatency = loopSource == 1 ? micLanes + (boardActive[1].load (std::memory_order_relaxed)
                                                                        ? micChain.getLatencySamples() : 0.0f)
-                                    : loopSource == 2 ? (boardActive[2].load (std::memory_order_relaxed)
-                                                            ? keysChain.getLatencySamples() : 0.0f)
+                                    : loopSource == 2 ? (float) instrument.getLatencySamples()
+                                                          + (boardActive[2].load (std::memory_order_relaxed)
+                                                                ? keysChain.getLatencySamples() : 0.0f)
                                                       : slowest;
 
+            // The keys are played on a keyboard, not through the interface.
+            const int roundTrip = loopSource == 2 ? keysRoundTrip.load (std::memory_order_relaxed)
+                                                  : ioRoundTrip.load (std::memory_order_relaxed);
+
             looper.process (tapL, tapR, liveL, liveR, n,
-                            ioRoundTrip.load (std::memory_order_relaxed) + (int) std::lround (pathLatency),
-                            juce::Decibels::decibelsToGain (params.get (pLoopLevel), -60.0f));
+                            roundTrip + (int) std::lround (pathLatency),
+                            juce::Decibels::decibelsToGain (params.get (pLoopLevel), -60.0f),
+                            outMs > 0.0 && rate > 0.0 ? outMs + offset * 1000.0 / rate : 0.0);
         }
 
         // --- playback lane ---

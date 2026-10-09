@@ -999,7 +999,9 @@ int MainComponent::exerciseLoopForSnapshot (const std::function<void (const char
 
     const int block = StandInDevice::block;
     const juce::int64 beat = 24000, countLen = beat * 4, loopLen = beat * 4;
-    const int lateness = StandInDevice::inputLatency + StandInDevice::outputLatency + block
+    // A device's input and output figures each count their own buffer;
+    // together they are the whole round trip a played note makes.
+    const int lateness = StandInDevice::inputLatency + StandInDevice::outputLatency
                            + (int) std::lround (engine.getFxLatencyMs() * 48.0f);
 
     // One short note, played dead on the second beat of the take.

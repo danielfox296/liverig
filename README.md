@@ -434,7 +434,16 @@ a foot job too.
 The loop is placed where you heard it, not where it arrived: a played note
 reaches the looper late by the interface's round trip plus the board's own
 delay, and each sample is written that much earlier. The round trip is the
-figure the interface reports (`LiveRig --diagnose` prints it).
+interface's input and output figures added together — each already holds
+its buffer — as reported (`LiveRig --diagnose` prints it): about 12 ms on
+the Scarlett 4i4 at 44.1 kHz and 192 samples. A key on the keyboard never
+goes through the interface's input, so the keys are taken back only by the
+way out, half a block for the wait to be played, and the instrument's own
+delay.
+
+The beat and bar on the pane are the ones in the speakers: the pane
+follows the display's refresh and reads the looper for the moment what it
+draws will be on screen, from when the interface says each block is heard.
 
 The click goes to the main outputs with everything else.
 

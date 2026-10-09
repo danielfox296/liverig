@@ -66,12 +66,13 @@ public:
     bool isLayerUndone() const noexcept  { return uiUndone.load (std::memory_order_relaxed); }
 
     // Where things stand in beats: through the count-in while counting,
-    // through the loop otherwise.
-    float getBeatPosition() const noexcept
-    {
-        const float beat = uiBeatLen.load (std::memory_order_relaxed);
-        return beat > 0.0f ? (float) uiPos.load (std::memory_order_relaxed) / beat : 0.0f;
-    }
+    // through the loop otherwise. Given the time now on the
+    // Time::getMillisecondCounterHiRes clock, it is where the player is
+    // hearing — the audio thread is always a little ahead of the speakers,
+    // and the screen asks between blocks — so the beat shown is the beat
+    // heard. Without a time, or from a device that never said when its
+    // blocks are heard, it is where the writing has got to.
+    float getBeatPosition (double nowMs = 0.0) const noexcept;
 
     static int maxBarsAt (float beatsPerMinute) noexcept;
 
@@ -83,9 +84,11 @@ public:
 
     // The wanted channel's sound in, the loop and the click added to the
     // sum. latencySamples is how late a played note arrives here; level is
-    // the loop's own gain, and the click does not ride it.
+    // the loop's own gain, and the click does not ride it. heardAtMs is
+    // when the block's first sample reaches the speakers, on the
+    // Time::getMillisecondCounterHiRes clock, or 0 when nobody knows.
     void process (const float* srcL, const float* srcR, float* outL, float* outR, int numSamples,
-                  int latencySamples, float level) noexcept;
+                  int latencySamples, float level, double heardAtMs = 0.0) noexcept;
 
 private:
     enum Command { cmdRecord, cmdPlayPause, cmdUndo, cmdClear };
@@ -100,7 +103,7 @@ private:
     void tryStartLayer() noexcept;
     void endLayer (bool keepTail) noexcept;
     void runJobs (int budget) noexcept;
-    void publish() noexcept;
+    void publish (double heardAtMs) noexcept;
 
     // The settings the taps make. Written on the message thread, latched by
     // the audio thread when a take begins.
@@ -150,8 +153,9 @@ private:
     double clickPhase = 0.0, clickStep = 0.0;
     float clickEnv = 0.0f, clickDecay = 0.0f;
 
-    std::atomic<int> uiState { 0 }, uiPos { 0 }, uiSource { -1 };
+    std::atomic<int> uiState { 0 }, uiPos { 0 }, uiSource { -1 }, uiLoopLen { 0 };
     std::atomic<float> uiBeatLen { 0.0f };
+    std::atomic<double> uiHeardAt { 0.0 };   // when uiPos reaches the speakers; 0 unknown
     std::atomic<bool> uiHasLayer { false }, uiUndone { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Looper)

@@ -60,24 +60,13 @@ public:
     // foot map, which a press in the foot tab may have changed.
     void tick()
     {
-        Shown now;
-        now.state = looper.getState();
-        now.bpm = (int) std::lround (looper.getBpm());
-        now.bars = looper.getBars();
-        now.beat = (int) std::floor (looper.getBeatPosition());
-        now.undone = looper.isLayerUndone();
-
         if (++switchRefresh >= 8)
         {
             switchRefresh = 0;
             refreshSwitches();
         }
 
-        if (now != shown)
-        {
-            shown = now;
-            repaint();
-        }
+        follow();
     }
 
     // Which control does each job, by the name on its card. Called on the
@@ -308,6 +297,40 @@ public:
     }
 
 private:
+    // The looper as it will be heard when what is painted now reaches the
+    // screen — a frame from now — so the beat lights with the beat in the
+    // speakers. The window's timer is too coarse for that on its own; the
+    // display's refresh calls this too.
+    void follow()
+    {
+        const double nowMs = juce::Time::getMillisecondCounterHiRes();
+
+        Shown now;
+        now.state = looper.getState();
+        now.bpm = (int) std::lround (looper.getBpm());
+        now.bars = looper.getBars();
+        now.beat = (int) std::floor (looper.getBeatPosition (nowMs + frameMs));
+        now.undone = looper.isLayerUndone();
+
+        if (now != shown)
+        {
+            shown = now;
+            repaint();
+        }
+    }
+
+    void onRefresh()
+    {
+        const double nowMs = juce::Time::getMillisecondCounterHiRes();
+        const double gap = nowMs - lastRefreshMs;
+
+        if (lastRefreshMs > 0.0 && gap > 4.0 && gap < 40.0)
+            frameMs += 0.05 * (gap - frameMs);
+
+        lastRefreshMs = nowMs;
+        follow();
+    }
+
     // Everything the pane draws from; a repaint only when one of them moved.
     struct Shown
     {
@@ -332,6 +355,9 @@ private:
     int switchRefresh = 0;
 
     juce::Rectangle<int> stateArea, recordsArea, rowAreas[numRows];
+
+    double frameMs = 1000.0 / 60.0, lastRefreshMs = 0.0;
+    juce::VBlankAttachment refreshes { this, [this] { onRefresh(); } };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LoopView)
 };
