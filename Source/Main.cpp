@@ -24,6 +24,10 @@ public:
 
     void initialise (const juce::String&) override
     {
+       #if JUCE_IOS
+        useTouchLayout();   // before any component exists
+       #endif
+
         // Launched from the Dock or Finder, an app inherits a bare PATH. The
         // stem splitter shells out to ffmpeg, so give its children a real one.
         setenv ("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", 1);
@@ -167,6 +171,14 @@ public:
     }
 
     void systemRequestedQuit() override { quit(); }
+
+    // iOS can end a backgrounded app without calling shutdown: save on the
+    // way out of the foreground.
+    void suspended() override
+    {
+        if (window != nullptr)
+            window->saveSettings();
+    }
 
 private:
     class MainWindow : public juce::DocumentWindow

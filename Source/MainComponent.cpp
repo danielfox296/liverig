@@ -1,6 +1,8 @@
 #include "MainComponent.h"
 
-#include <CoreAudio/CoreAudio.h>
+#if JUCE_MAC
+ #include <CoreAudio/CoreAudio.h>
+#endif
 
 namespace rig
 {
@@ -13,6 +15,11 @@ namespace rig
 static juce::StringArray inputChannelOwners (const juce::String& deviceName, int channelCount)
 {
     juce::StringArray owners;
+
+   #if ! JUCE_MAC
+    juce::ignoreUnused (deviceName, channelCount);
+    return owners;   // aggregates are a macOS idea
+   #else
 
     AudioObjectPropertyAddress addr { kAudioHardwarePropertyDevices,
                                       kAudioObjectPropertyScopeGlobal,
@@ -105,6 +112,7 @@ static juce::StringArray inputChannelOwners (const juce::String& deviceName, int
         owners.clear();   // the map does not line up; no labels beats wrong labels
 
     return owners;
+   #endif
 }
 
 static constexpr int panelGap = 7;
@@ -112,6 +120,12 @@ static constexpr int panelGap = 7;
 MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     : params (p), engine (e), settings (s)
 {
+   #if JUCE_IOS
+    phone = true;
+   #else
+    phone = forcePhoneLayout;
+   #endif
+
     presets.load();
 
     // The engine already runs; tell it which channels the lanes live on,
@@ -282,7 +296,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     // grows or shrinks it by hand. The + at the end offers what can be added.
     addChannelButton.setWantsKeyboardFocus (false);
     addChannelButton.onClick = [this] { showAddChannelMenu(); };
-    addAndMakeVisible (addChannelButton);
+    railParent().addAndMakeVisible (addChannelButton);
 
     rebuildChannelRail();
     refreshChainWiring();
@@ -295,12 +309,19 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     fxViewport.setScrollBarsShown (true, false);
     addAndMakeVisible (fxViewport);
 
-    editorTabs.setTabBarDepth (30);
-    editorTabs.setOutline (0);
-    editorTabs.addTab ("EFFECT", juce::Colour (0xff101114), &fxEditor, false);
-    editorTabs.addTab ("TUNER", juce::Colour (0xff101114), &tunerView, false);
-    editorTabs.addTab ("FOOT", juce::Colour (0xff101114), &footView, false);
-    addAndMakeVisible (editorTabs);
+    if (phone)
+    {
+        setUpPhoneChrome();
+    }
+    else
+    {
+        editorTabs.setTabBarDepth (30);
+        editorTabs.setOutline (0);
+        editorTabs.addTab ("EFFECT", juce::Colour (0xff101114), &fxEditor, false);
+        editorTabs.addTab ("TUNER", juce::Colour (0xff101114), &tunerView, false);
+        editorTabs.addTab ("FOOT", juce::Colour (0xff101114), &footView, false);
+        addAndMakeVisible (editorTabs);
+    }
 
     // The foot tab asks the window what the rig can do and what to call it;
     // the map it edits is kept beside the settings. Commands from a foot
@@ -474,6 +495,18 @@ void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (0xff101114));
 
+    if (phone)
+    {
+        // the tab bar's panel, down through the home-indicator strip
+        const auto tabs = tabButtons[0].getBounds();
+        g.setColour (juce::Colour (0xff17181c));
+        g.fillRect (getLocalBounds().withTop (tabs.getY() - 6));
+        g.setColour (juce::Colour (0xff26272d));
+        g.fillRect (0, tabs.getY() - 6, getWidth(), 1);
+        g.fillRect (0, railViewport.getBottom() + 5, getWidth(), 1);
+        return;
+    }
+
     if (loopPaneShowing)
         return;
 
@@ -487,6 +520,12 @@ void MainComponent::paint (juce::Graphics& g)
 void MainComponent::resized()
 {
     songPanel.setBounds (getLocalBounds());
+
+    if (phone)
+    {
+        layoutPhone();
+        return;
+    }
 
     auto b = getLocalBounds().reduced (10);
 
@@ -674,6 +713,9 @@ void MainComponent::selectVocoderForSnapshot()
 void MainComponent::showTunerForSnapshot()
 {
     editorTabs.setCurrentTabIndex (1);
+
+    if (phone)
+        showPhoneTab (PhoneTab::tune);
     tunerView.update (55.3f, 1.0f, 0.2f);   // a slightly sharp low A
 }
 
@@ -721,6 +763,9 @@ void MainComponent::showFootForSnapshot()
     engine.getFoot().handleMidi ("Scarlett 4i4 USB", juce::MidiMessage::controllerEvent (16, 80, 127));
     footView.tick();
     editorTabs.setCurrentTabIndex (2);
+
+    if (phone)
+        showPhoneTab (PhoneTab::foot);
 }
 
 // Every function the foot menu offers must be one the engine can carry out
@@ -1652,8 +1697,16 @@ void MainComponent::rebuildChannelRail()
             continue;
         }
 
-        strip->onSelect = [this, key] { selectChannel (key); };
-        addAndMakeVisible (strip);
+        // On the phone there is no right-click: tapping the strip that is
+        // already selected offers what the context menu would.
+        strip->onSelect = [this, key, strip]
+        {
+            if (phone && selectedChannel == key && strip->onContextMenu != nullptr)
+                strip->onContextMenu();
+            else
+                selectChannel (key);
+        };
+        railParent().addAndMakeVisible (strip);
 
         strip->onContextMenu = [this, key, strip]
         {
@@ -1680,7 +1733,7 @@ void MainComponent::rebuildChannelRail()
 
     masterStrip = channelStrips.add (new ChannelStrip ("master", "Master", &masterMeter));
     masterStrip->onSelect = [this] { selectChannel ("master"); };
-    addAndMakeVisible (masterStrip);
+    railParent().addAndMakeVisible (masterStrip);
 
     // The selection must point at a strip that exists.
     bool selectedExists = false;
@@ -1880,7 +1933,7 @@ void MainComponent::selectFx (int index)
         {
             // The curve view carries all fifteen band parameters itself.
             extra = &eqControls;
-            extraHeight = EqView::preferredHeight;
+            extraHeight = EqView::preferredHeight();
             faderRows = false;
         }
         else if (def.key == "vocal")
@@ -1897,6 +1950,12 @@ void MainComponent::selectFx (int index)
     else
     {
         fxEditor.clear();
+    }
+
+    if (phone)
+    {
+        refreshSheetSwitch();
+        resized();
     }
 }
 
@@ -2141,6 +2200,13 @@ void MainComponent::loopTapped()
 // works the looper under the setlist.
 void MainComponent::showLeftPane (bool loop)
 {
+    if (phone)
+    {
+        loopPaneShowing = phoneTab == PhoneTab::loop;
+        loopView.setVisible (loopPaneShowing);
+        return;
+    }
+
     loopPaneShowing = loop;
 
     for (juce::Component* c : std::initializer_list<juce::Component*> { &menuButton, &transportButton, &loopButton,
@@ -3507,7 +3573,13 @@ void MainComponent::timerCallback()
     for (int i = 0; i < genericMeterKeys.size(); ++i)
         genericMeters[i]->setLevel (0, engine.getSlotPeak (slotOf (genericMeterKeys[i])));
 
-    if (editorTabs.getCurrentTabIndex() == 1)
+    if (phone && (++statusTick % 15) == 0)
+    {
+        refreshStatusLine();
+        refreshSheetSwitch();
+    }
+
+    if (tunerShowing())
         tunerView.update (engine.getFxChain().getTrackedHz(),
                           engine.getFxChain().getTrackedConfidence(),
                           engine.getInputPeak());
@@ -3544,6 +3616,282 @@ void MainComponent::timerCallback()
         if (paramsChangedSinceSnapshot())
             saveSettings();
     }
+}
+
+//==============================================================================
+// The phone face. Same rig, same logic, laid out for one thumb: the strip
+// rail across the top, four screens on tabs at the bottom, and a pedal's
+// controls on a sheet that slides up over the board.
+
+void MainComponent::setUpPhoneChrome()
+{
+    // What only the backing-track side uses stays off the phone.
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &menuButton, &transportButton, &loopButton,
+                                                                        &songLabel, &songsHeader, &stemsHeader,
+                                                                        &songList, &paneBox, &editorTabs })
+        c->setVisible (false);
+
+    for (auto* strip : stemStrips)
+        strip->setVisible (false);
+
+    railViewport.setViewedComponent (&railHolder, false);
+    railViewport.setScrollBarsShown (false, false, false, true);
+    railViewport.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all);
+    addAndMakeVisible (railViewport);
+
+    fxViewport.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all);
+    fxViewport.setScrollBarsShown (false, false, true, false);
+
+    deviceButton.setButtonText ("Setup");
+
+    addChildComponent (tunerView);
+    addChildComponent (footView);
+
+    const char* names[] { "BOARD", "LOOP", "TUNE", "FOOT" };
+
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& t = tabButtons[i];
+        t.setButtonText (names[i]);
+        t.setWantsKeyboardFocus (false);
+        t.setColour (juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+        t.setColour (juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
+        t.setColour (juce::TextButton::textColourOffId, juce::Colour (0xff70737c));
+        t.setColour (juce::TextButton::textColourOnId, juce::Colour (0xfff0954a));
+        t.setColour (juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
+        t.onClick = [this, i] { showPhoneTab ((PhoneTab) i); };
+        addAndMakeVisible (t);
+    }
+
+    statusLine.setText ("Starting audio...", juce::dontSendNotification);
+    statusLine.setFont (rigFont (10.0f));
+    statusLine.setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
+    statusLine.setJustificationType (juce::Justification::centred);
+    statusLine.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (statusLine);
+
+    scrim.onTap = [this] { selectFx (-1); };
+    addChildComponent (scrim);
+    addChildComponent (fxEditor);
+
+    sheetSwitch.setClickingTogglesState (true);
+    sheetSwitch.setWantsKeyboardFocus (false);
+    sheetSwitch.onClick = [this]
+    {
+        if (! juce::isPositiveAndBelow (selectedFx, (int) fxDefs.size()))
+            return;
+
+        const auto& def = fxDefs[(size_t) selectedFx];
+        uiParams.set (def.onParam, sheetSwitch.getToggleState() ? 1.0f : 0.0f);
+
+        if (auto* panel = panels[selectedFx])
+            panel->refresh();
+
+        saveSettings();
+    };
+    addChildComponent (sheetSwitch);
+
+    sheetClose.setWantsKeyboardFocus (false);
+    sheetClose.onClick = [this] { selectFx (-1); };
+    addChildComponent (sheetClose);
+
+    sheetRemove.setWantsKeyboardFocus (false);
+    sheetRemove.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4483c));
+    sheetRemove.onClick = [this]
+    {
+        if (! juce::isPositiveAndBelow (selectedFx, (int) fxDefs.size()))
+            return;
+
+        const auto key = fxDefs[(size_t) selectedFx].key;
+        selectFx (-1);
+        removeFxFromChannel (key);
+    };
+    addChildComponent (sheetRemove);
+
+    showPhoneTab (settings.leftPane == "loop" ? PhoneTab::loop : PhoneTab::board);
+}
+
+void MainComponent::showPhoneTab (PhoneTab tab)
+{
+    if (! phone)
+        return;
+
+    phoneTab = tab;
+
+    for (int i = 0; i < 4; ++i)
+        tabButtons[i].setToggleState (i == (int) tab, juce::dontSendNotification);
+
+    const bool board = tab == PhoneTab::board;
+
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &fxViewport, &presetBox,
+                                                                        &savePresetButton, &deletePresetButton })
+        c->setVisible (board);
+
+    loopPaneShowing = tab == PhoneTab::loop;
+    loopView.setVisible (loopPaneShowing);
+    tunerView.setVisible (tab == PhoneTab::tune);
+    footView.setVisible (tab == PhoneTab::foot);
+
+    if (tab == PhoneTab::foot)
+        footView.reload();
+
+    resized();
+    repaint();
+}
+
+bool MainComponent::tunerShowing() const
+{
+    return phone ? phoneTab == PhoneTab::tune : editorTabs.getCurrentTabIndex() == 1;
+}
+
+juce::BorderSize<int> MainComponent::safeArea() const
+{
+    if (! simulatedSafeArea.isEmpty())
+        return simulatedSafeArea;
+
+    if (auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
+        return display->safeAreaInsets;
+
+    return {};
+}
+
+void MainComponent::refreshSheetSwitch()
+{
+    if (! juce::isPositiveAndBelow (selectedFx, (int) fxDefs.size()))
+        return;
+
+    const auto& def = fxDefs[(size_t) selectedFx];
+    const bool mute = def.onParam == pInMute || def.onParam == pLiveMute || def.onParam == pMasterMute;
+
+    sheetSwitch.setButtonText (mute ? "MUTE" : (isMomentaryParam (def.onParam) ? "HOLD" : "ON"));
+    sheetSwitch.setColour (juce::TextButton::buttonOnColourId,
+                           juce::Colour (mute ? 0xffe4483c : (isMomentaryParam (def.onParam) ? 0xff4d9be4 : 0xff3f9d4a)));
+    sheetSwitch.setToggleState (uiParams.getBool (def.onParam), juce::dontSendNotification);
+}
+
+void MainComponent::refreshStatusLine()
+{
+    auto* device = engine.getDeviceManager().getCurrentAudioDevice();
+
+    if (device == nullptr)
+    {
+        statusLine.setText ("No audio device. Plug in your interface, then tap Setup.", juce::dontSendNotification);
+        return;
+    }
+
+    const double rate = device->getCurrentSampleRate();
+    statusLine.setText (juce::String (rate / 1000.0, 1) + " kHz  \xc2\xb7  "
+                          + juce::String (device->getCurrentBufferSizeSamples()) + " samples  \xc2\xb7  I/O "
+                          + juce::String (engine.getIoLatencyMs(), 1) + " ms  \xc2\xb7  FX "
+                          + juce::String (engine.getFxLatencyMs(), 1) + " ms  \xc2\xb7  "
+                          + juce::String (engine.getActiveInputCount()) + " in",
+                        juce::dontSendNotification);
+}
+
+void MainComponent::layoutPhone()
+{
+    const auto full = getLocalBounds();
+    const auto inset = safeArea();
+    auto b = inset.subtractedFrom (full);
+
+    // tabs along the bottom, in thumb reach
+    auto tabs = b.removeFromBottom (54);
+    const int tabWidth = tabs.getWidth() / 4;
+
+    for (int i = 0; i < 4; ++i)
+        tabButtons[i].setBounds (i == 3 ? tabs : tabs.removeFromLeft (tabWidth));
+
+    b.removeFromBottom (6);
+
+    // the strip rail across the top, Setup at its end
+    auto top = b.removeFromTop (ChannelStrip::preferredHeight + 12).reduced (10, 6);
+    deviceButton.setBounds (top.removeFromRight (66).reduced (0, 4));
+    top.removeFromRight (8);
+    railViewport.setBounds (top);
+
+    {
+        const int stripWidth = 118, gap = 6, plus = 44;
+        int x = 0;
+
+        for (auto* strip : channelStrips)
+        {
+            strip->setBounds (x, 0, strip == masterStrip ? 112 : stripWidth, top.getHeight());
+            x += strip->getWidth() + gap;
+        }
+
+        addChannelButton.setBounds (x, 4, plus, top.getHeight() - 8);
+        railHolder.setSize (x + plus, top.getHeight());
+    }
+
+    b.removeFromTop (6);
+    b = b.reduced (10, 0);
+
+    statusLine.setBounds (b.removeFromBottom (18));
+    b.removeFromBottom (2);
+
+    if (phoneTab == PhoneTab::board)
+    {
+        auto bar = b.removeFromTop (FxEditor::presetRowHeight);
+        deletePresetButton.setBounds (bar.removeFromRight (70));
+        bar.removeFromRight (6);
+        savePresetButton.setBounds (bar.removeFromRight (66));
+        bar.removeFromRight (8);
+        presetBox.setBounds (bar);
+        b.removeFromTop (10);
+        fxViewport.setBounds (b);
+        layoutFxPanels();
+    }
+
+    loopView.setBounds (b);
+    tunerView.setBounds (b);
+    footView.setBounds (b);
+
+    // the sheet: only over the board, only while a row is selected
+    const bool open = phoneTab == PhoneTab::board && juce::isPositiveAndBelow (selectedFx, (int) fxDefs.size());
+
+    scrim.setVisible (open);
+    fxEditor.setVisible (open);
+    sheetSwitch.setVisible (open);
+    sheetClose.setVisible (open);
+
+    if (! open)
+    {
+        sheetRemove.setVisible (false);
+        return;
+    }
+
+    const auto& def = fxDefs[(size_t) selectedFx];
+    const bool removable = isLoadable (def) && selectedChannel != "master";
+    sheetRemove.setButtonText ("Remove " + def.name + " from board");
+    sheetRemove.setVisible (removable);
+
+    scrim.setBounds (full);
+    scrim.toFront (false);
+
+    const int footer = (removable ? 60 : 12) + inset.getBottom();
+    const int wanted = fxEditor.getPreferredHeight() + footer;
+    const int top2 = juce::jmax (inset.getTop() + 24, full.getHeight() - wanted - 14);
+    sheetArea = full.withTop (top2);
+    scrim.sheet = sheetArea;
+    scrim.repaint();
+
+    auto sheet = sheetArea;
+    sheet.removeFromBottom (inset.getBottom());
+
+    if (removable)
+        sheetRemove.setBounds (sheet.removeFromBottom (60).reduced (16, 8));
+
+    fxEditor.setBounds (sheet.withTrimmedTop (14));
+    fxEditor.toFront (false);
+
+    // close and the row's own switch, on the title line
+    const int titleY = sheetArea.getY() + 14 + 8;
+    sheetClose.setBounds (sheetArea.getRight() - 16 - 44, titleY, 44, 40);
+    sheetSwitch.setBounds (sheetClose.getX() - 10 - 80, titleY, 80, 40);
+    sheetRemove.toFront (false);
+    sheetSwitch.toFront (false);
+    sheetClose.toFront (false);
+    refreshSheetSwitch();
 }
 
 } // namespace rig

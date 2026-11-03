@@ -1,0 +1,40 @@
+# Builds the iPhone app on every push, unsigned, so a change that breaks the
+# iOS build is caught here rather than at the Mac. Installing on a phone
+# still happens from Xcode with your own Apple ID (see ios/README.md).
+name: iOS build
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch JUCE 8.0.4
+        run: git clone --depth 1 --branch 8.0.4 https://github.com/juce-framework/JUCE.git JUCE
+
+      - name: Configure (Xcode, iOS)
+        run: cmake -B build-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+
+      - name: Build for a device (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project build-ios/LiveRig.xcodeproj -target LiveRig -configuration Release \
+            -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | tail -n 60
+
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project build-ios/LiveRig.xcodeproj -target LiveRig -configuration Debug \
+            -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build | tail -n 30

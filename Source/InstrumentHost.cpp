@@ -126,6 +126,7 @@ void InstrumentHost::runScanWorker (const juce::String& formatName,
 // takes its child down and is skipped; one that hangs is killed at the
 // deadline. Either way the rig's own process never runs a stranger's code
 // during a scan, and the show goes on.
+#if ! JUCE_IOS
 static bool describeInChild (const juce::String& formatName, const juce::String& identifier,
                              juce::Array<juce::PluginDescription>& into,
                              std::atomic<bool>& abortFlag)
@@ -190,6 +191,8 @@ static bool describeInChild (const juce::String& formatName, const juce::String&
     return complete;
 }
 
+#endif
+
 void InstrumentHost::scanOnThisThread()
 {
     juce::Array<juce::PluginDescription> found;
@@ -224,7 +227,19 @@ void InstrumentHost::scanOnThisThread()
                 return;
             }
 
+           #if JUCE_IOS
+            // iOS has no child processes. AUv3 plugins run in their own
+            // extension process anyway, so describing one here is safe.
+            {
+                juce::OwnedArray<juce::PluginDescription> types;
+                format->findAllTypesForFile (types, identifier);
+
+                for (auto* type : types)
+                    found.add (*type);
+            }
+           #else
             describeInChild (format->getName(), identifier, found, abortScan);
+           #endif
         }
     }
 

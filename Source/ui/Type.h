@@ -7,7 +7,11 @@ namespace rig
 
 // Every piece of type in the app is sized through here, so the whole face
 // can be scaled in one place.
-constexpr float kTypeScale = 1.1f;
+inline float kTypeScale = 1.1f;
+
+// The phone face: bigger type, thumb-sized rows, drags only from grips. Set
+// once at startup, before any component exists (see useTouchLayout()).
+inline bool kTouchLayout = false;
 
 inline juce::Font rigFont (float size, bool bold = false)
 {

@@ -34,6 +34,17 @@ public:
 
     void saveSettings();
 
+    // The touch layout: the iPhone build always, and the snapshot tool when
+    // it renders the phone face on a desktop. Set before construction.
+    static inline bool forcePhoneLayout = false;
+
+    // The screen edges a notch or home bar owns, for snapshot renders that
+    // want to look like a phone; the device reports its own.
+    static inline juce::BorderSize<int> simulatedSafeArea;
+
+    enum class PhoneTab { board, loop, tune, foot };
+    void showPhoneTab (PhoneTab tab);
+
     // Used by the offscreen snapshot tool.
     void selectFxForSnapshot();
     void selectInputForSnapshot();
@@ -56,6 +67,14 @@ public:
 private:
     void timerCallback() override;
     void handleAsyncUpdate() override;
+
+    void setUpPhoneChrome();
+    void layoutPhone();
+    juce::BorderSize<int> safeArea() const;
+    juce::Component& railParent() { return phone ? static_cast<juce::Component&> (railHolder) : *this; }
+    bool tunerShowing() const;
+    void refreshSheetSwitch();
+    void refreshStatusLine();
 
     int getNumRows() override;
     void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override;
@@ -400,6 +419,44 @@ private:
     juce::uint32 lastFootSerial = 0;
     int midiInputRefresh = 0;
     int lastSlotFailures = 0;
+
+    // --- the phone face -------------------------------------------------
+    bool phone = false;
+    PhoneTab phoneTab = PhoneTab::board;
+    int statusTick = 0;
+    juce::Viewport railViewport;
+    juce::Component railHolder;
+    juce::TextButton tabButtons[4];
+    juce::Label statusLine;
+
+    // The editor slides up over the board as a sheet: a scrim behind it that
+    // closes it on a tap, its own switch, close and remove.
+    struct Scrim : juce::Component
+    {
+        std::function<void()> onTap;
+        juce::Rectangle<int> sheet;   // the panel the editor sits on, in this component's space
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colours::black.withAlpha (0.55f));
+
+            if (! sheet.isEmpty())
+            {
+                const auto r = sheet.toFloat();
+                juce::Path p;
+                p.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), r.getHeight() + 20.0f, 18.0f);
+                g.setColour (juce::Colour (0xff17181c));
+                g.fillPath (p);
+                g.setColour (juce::Colour (0xff3a3c44));
+                g.fillRoundedRectangle (r.getCentreX() - 20.0f, r.getY() + 7.0f, 40.0f, 5.0f, 2.5f);
+            }
+        }
+        void mouseUp (const juce::MouseEvent&) override { if (onTap != nullptr) onTap(); }
+    };
+
+    Scrim scrim;
+    juce::Rectangle<int> sheetArea;
+    juce::TextButton sheetSwitch, sheetClose { juce::CharPointer_UTF8 ("\xc3\x97") }, sheetRemove;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

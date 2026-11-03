@@ -30,8 +30,18 @@ juce::String AudioEngine::initialise (std::unique_ptr<juce::XmlElement> savedSta
         // anything. A live rig would rather start small. Only the untouched
         // default is overridden: pick a size in the device dialog and that
         // choice is saved and honoured from then on.
+       #if JUCE_IOS
+        // An instrument wants the raw input: no voice processing, no
+        // automatic gain. Measurement mode also skips iOS's own input EQ.
+        if (auto* device = deviceManager.getCurrentAudioDevice())
+            device->setAudioPreprocessingEnabled (false);
+
+        // On a phone the smallest buffer is the whole point of being native.
+        preferLowLatencyBuffer();
+       #else
         if (! hadSavedState)
             preferLowLatencyBuffer();
+       #endif
 
         deviceManager.addAudioCallback (this);
         callbackAdded = true;
