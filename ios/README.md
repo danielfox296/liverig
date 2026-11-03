@@ -71,8 +71,11 @@ are kept.
 ## What is different from the desktop
 
 - No songs, stems or splitter (by design).
-- Hosted plugins are iOS AUv3 plugins: the Pedal stage, the Keys instrument,
-  and the Autotune/Vocoder lanes find whatever AUv3 apps are installed.
+- Autotune and Vocoder work out of the box with built-in versions (key,
+  scale, retune speed and amount; consonants and release). An installed
+  AUv3 pitch corrector or vocoder takes over the role if you have one.
+- Hosted plugins are iOS AUv3 plugins: the Pedal stage and the Keys
+  instrument find whatever AUv3 apps are installed.
 - Captures (.nam) are imported with the Files picker. The app's folder also
   shows up in the Files app and in Finder when the phone is connected.
 

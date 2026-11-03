@@ -13,22 +13,22 @@ static int nextPow2 (int n)
     return p;
 }
 
-void PitchTracker::prepare (double sampleRate)
+void PitchTracker::prepare (double sampleRate, double decimatedRate, double lowestHz, double highestHz)
 {
     sr = sampleRate;
 
-    decim   = std::max (1, (int) std::lround (sr / 3000.0));
+    decim   = std::max (1, (int) std::lround (sr / decimatedRate));
     decRate = sr / decim;
 
     // 6th-order Butterworth at 700 Hz: passes every bass/guitar fundamental,
     // ~40 dB down by the decimated Nyquist.
-    const double aaFreq = std::min (700.0, decRate * 0.24);
+    const double aaFreq = std::min (highestHz * 1.4, decRate * 0.24);
     aa[0].setLowpass (sr, aaFreq, 0.51764);
     aa[1].setLowpass (sr, aaFreq, 0.70711);
     aa[2].setLowpass (sr, aaFreq, 1.93185);
 
-    tauMin = std::max (3, (int) std::floor (decRate / 500.0));   // up to 500 Hz
-    tauMax = std::min (200, (int) std::ceil (decRate / 26.0));   // down to 26 Hz: a
+    tauMin = std::max (3, (int) std::floor (decRate / highestHz));   // up to 500 Hz
+    tauMax = std::min (200, (int) std::ceil (decRate / lowestHz));   // down to 26 Hz: a
                                                                  // 5-string low B, and
                                                                  // drop tunings under it
     window = 256;                                                // ~85 ms: two and a bit

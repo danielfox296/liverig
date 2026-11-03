@@ -32,6 +32,7 @@
 #include "dsp/OctaveShifter.h"
 #include "dsp/PitchTracker.h"
 #include "dsp/PlateVerb.h"
+#include "dsp/VoiceTools.h"
 
 using namespace rig;
 
@@ -4189,7 +4190,7 @@ static void testVocoderSidechain (double sr, int block)
 
 // The mic strip: one function with stage manners. Off is the microphone
 // itself — a channel with no effects still plays — a lane switched on with
-// no plugin is silence (and the row says why), the gate kills the breaths,
+// no plugin plays the built-in one (and the row says so), the gate kills the breaths,
 // and the switch is a crossfade a footswitch cannot click.
 static void testVocalChannel (double sr, int block)
 {
@@ -4254,8 +4255,9 @@ static void testVocalChannel (double sr, int block)
 
     params.set (pVocalOn, 1.0f);
     const float unboundPeak = run (0.2f, 0.4, nullptr);
-    report ("a lane on with no plugin takes the voice and is silent, not a crash",
-            unboundPeak < 1.0e-6f, "peak " + juce::String (unboundPeak, 7));
+    // An A is in C major: the built-in corrector passes it at its level.
+    report ("a lane on with no plugin plays the built-in corrector",
+            unboundPeak > 0.15f && unboundPeak < 0.25f, "peak " + juce::String (unboundPeak, 4) + " from a 0.2 mic");
 
     params.set (pVocalOn, 0.0f);
     params.set (pVocoderOn, 1.0f);
@@ -4263,8 +4265,10 @@ static void testVocalChannel (double sr, int block)
     params.set (pVocoderOn, 0.0f);
     params.set (pVocalOn, 1.0f);
 
-    report ("the vocoder lane takes it over the same way", vocoderUnbound < 1.0e-6f,
-            "peak " + juce::String (vocoderUnbound, 7));
+    // With no carrier (the bass is silent here) the built-in vocoder has
+    // nothing to shape: near silence, and the dry voice is gone.
+    report ("the vocoder lane takes the voice over, built-in", vocoderUnbound < 0.01f,
+            "peak " + juce::String (vocoderUnbound, 5) + " with no carrier");
 
     // The rest needs audio through the slot; any clean-passing effect will do.
     const auto name = pickEffect (host.getEffectNames(),
@@ -6326,6 +6330,108 @@ static void testLooper (double sr, int block)
     }
 }
 
+//==============================================================================
+// The mic lanes' built-in tenants: the corrector must land a sharp voice on
+// the scale note and leave it alone at Amount 0; the vocoder must speak only
+// while the voice does, and stay finite.
+static float measureVoiceHz (const std::vector<float>& x, double sr, int from)
+{
+    PitchTracker t;
+    t.prepare (sr, 8000.0, 70.0, 1000.0);
+
+    for (int i = from; i + 64 <= (int) x.size(); i += 64)
+        t.process (x.data() + i, 64);
+
+    return t.getFrequency();
+}
+
+static void testVoiceTools (double sr, int block)
+{
+    std::printf ("\nBuilt-in autotune and vocoder @ %.0f Hz, %d-sample blocks\n", sr, block);
+
+    const auto voice = [sr] (double hz, double seconds)
+    {
+        std::vector<float> v ((size_t) (sr * seconds));
+
+        for (size_t i = 0; i < v.size(); ++i)
+        {
+            const double t = (double) i / sr;
+            v[i] = (float) (0.25 * (std::sin (6.283185307179586 * hz * t)
+                                    + 0.5 * std::sin (2.0 * 6.283185307179586 * hz * t)
+                                    + 0.25 * std::sin (3.0 * 6.283185307179586 * hz * t)));
+        }
+
+        return v;
+    };
+
+    // 30 cents sharp of A3 in C major: lands on A3 (220 Hz).
+    for (const float amount : { 1.0f, 0.0f })
+    {
+        BuiltInAutotune tune;
+        tune.prepare (sr);
+        auto x = voice (220.0 * std::pow (2.0, 0.3 / 12.0), 1.5);
+
+        for (int i = 0; i + block <= (int) x.size(); i += block)
+            tune.process (x.data() + i, block, 0, 1, 0.0f, amount);
+
+        const float hz = measureVoiceHz (x, sr, (int) (sr * 0.8));
+        const double off = cents (hz, amount > 0.5f ? 220.0 : 220.0 * std::pow (2.0, 0.3 / 12.0));
+        report (amount > 0.5f ? "a sharp A lands on A (C major)" : "Amount 0 leaves the voice alone",
+                std::abs (off) < 5.0, juce::String (hz, 2) + " Hz, " + juce::String (off, 1) + " c off target");
+    }
+
+    // A G#3 in C major is between G and A: it must go to one of them, not stay.
+    {
+        BuiltInAutotune tune;
+        tune.prepare (sr);
+        auto x = voice (207.65, 1.5);
+
+        for (int i = 0; i + block <= (int) x.size(); i += block)
+            tune.process (x.data() + i, block, 0, 1, 0.0f, 1.0f);
+
+        const float hz = measureVoiceHz (x, sr, (int) (sr * 0.8));
+        const bool onScale = std::abs (cents (hz, 196.0)) < 6.0 || std::abs (cents (hz, 220.0)) < 6.0;
+        report ("an out-of-key note moves into the key", onScale, juce::String (hz, 2) + " Hz");
+    }
+
+    // Vocoder: a voice for half a second, then silence, over a 55 Hz saw.
+    {
+        BuiltInVocoder voc;
+        voc.prepare (sr);
+        const int n = (int) (sr * 1.2);
+        std::vector<float> mod ((size_t) n, 0.0f), car ((size_t) n), out ((size_t) n);
+        const auto v = voice (180.0, 0.5);
+        std::copy (v.begin(), v.end(), mod.begin());
+
+        for (int i = 0; i < n; ++i)
+            car[(size_t) i] = (float) (2.0 * std::fmod (55.0 * i / sr, 1.0) - 1.0) * 0.4f;
+
+        for (int i = 0; i + block <= n; i += block)
+            voc.process (mod.data() + i, car.data() + i, out.data() + i, block, 0.3f, 60.0f);
+
+        const auto rms = [&] (double a, double b)
+        {
+            double q = 0.0;
+            const int i0 = (int) (a * sr), i1 = (int) (b * sr);
+
+            for (int i = i0; i < i1; ++i)
+                q += (double) out[(size_t) i] * out[(size_t) i];
+
+            return std::sqrt (q / std::max (1, i1 - i0));
+        };
+
+        bool finite = true;
+
+        for (float s : out)
+            finite = finite && std::isfinite (s);
+
+        const double speaking = rms (0.2, 0.45), quiet = rms (0.9, 1.15);
+        report ("the vocoder speaks while the voice does", speaking > 0.02, "rms " + juce::String (speaking, 4));
+        report ("and falls silent when it stops", quiet < speaking * 0.05,
+                "rms " + juce::String (quiet, 5) + (finite ? "" : ", NON-FINITE"));
+    }
+}
+
 int main (int argc, char* argv[])
 {
     // The scan spawns this same binary as its disposable per-plugin worker.
@@ -6356,6 +6462,16 @@ int main (int argc, char* argv[])
     {
         testLooper (48000.0, 64);
         testLooper (44100.0, 128);
+        std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASS" : "FAILURES",
+                     failures, failures == 1 ? "" : "s");
+        return failures == 0 ? 0 : 1;
+    }
+
+    // The mic lanes' built-in tenants on their own.
+    if (argc == 2 && juce::String (argv[1]) == "--voice")
+    {
+        testVoiceTools (48000.0, 64);
+        testVoiceTools (44100.0, 128);
         std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASS" : "FAILURES",
                      failures, failures == 1 ? "" : "s");
         return failures == 0 ? 0 : 1;
@@ -6397,6 +6513,7 @@ int main (int argc, char* argv[])
     testFreeze (44100.0, 64);
     testFreeze (96000.0, 256);
     testAmpStage (48000.0, 64);
+    testVoiceTools (48000.0, 64);
     testCaptureLibrary();
     testReverb (48000.0, 64);
     testReverb (44100.0, 32);

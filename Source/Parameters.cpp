@@ -7,6 +7,8 @@ static const char* const voiceChoices[] { "Green", "Gold", "Plexi" };
 static const char* const offOnChoices[] { "Off", "On" };
 static const char* const expressionChoices[] { "Off", "CC1 mod", "CC11 expr" };
 static const char* const divideChoices[] { "-1 oct", "-2 oct" };
+static const char* const keyChoices[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+static const char* const scaleChoices[] { "Chromatic", "Major", "Minor", "Maj pent", "Min pent", "Blues" };
 
 // id, label, min, max, default, skewCentre, step, suffix, decimals, isToggle, choices
 static const ParamSpec specs[] =
@@ -167,6 +169,13 @@ static const ParamSpec specs[] =
 
     { "vocoderOn", "Vocoder",    0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
     { "vocoderLvl","Level",    -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
+
+    { "tuneKey",   "Key",        0.0f,  11.0f,   0.0f,     0.0f, 1.0f, "",     0, false, keyChoices },
+    { "tuneScale", "Scale",      0.0f,   5.0f,   1.0f,     0.0f, 1.0f, "",     0, false, scaleChoices },
+    { "tuneSpeed", "Retune",     0.0f, 200.0f,  25.0f,    40.0f, 0.0f, " ms",  0, false },
+    { "tuneAmount","Amount",     0.0f,   1.0f,   1.0f,     0.0f, 0.0f, "",     2, false },
+    { "vocSib",    "Consonants", 0.0f,   1.0f,   0.3f,     0.0f, 0.0f, "",     2, false },
+    { "vocRelease","Release",    5.0f, 300.0f,  60.0f,    60.0f, 0.0f, " ms",  0, false },
 
     { "liveOut",   "Live out", -60.0f,  12.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
     { "liveMute",  "Mute",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },

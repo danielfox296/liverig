@@ -19,7 +19,10 @@ namespace rig
 class PitchTracker
 {
 public:
-    void prepare (double sampleRate);
+    // The defaults are the bass tracker (26-500 Hz, decimated to ~3 kHz);
+    // a voice wants a higher rate and range.
+    void prepare (double sampleRate, double decimatedRate = 3000.0,
+                  double lowestHz = 26.0, double highestHz = 500.0);
     void reset() noexcept;
 
     void process (const float* in, int numSamples) noexcept;

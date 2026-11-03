@@ -7,6 +7,7 @@
 #include "EffectSlot.h"
 #include "Parameters.h"
 #include "dsp/Biquad.h"
+#include "dsp/VoiceTools.h"
 
 namespace rig
 {
@@ -48,6 +49,10 @@ public:
     void process (const float* mic, const float* carrier,
                   float* left, float* right, int numSamples) noexcept;
 
+    // What the built-in corrector holds the voice back, when it is the one
+    // playing; the looper places a sung layer by it.
+    float getBuiltInTuneLatency() const noexcept { return nativeTune.getLatencySamples(); }
+
 private:
     ParamStore& params;
     EffectSlot& tuneSlot;
@@ -64,6 +69,10 @@ private:
     bool gateOpen = false;
 
     std::vector<float> gated, tuneL, tuneR, vocL, vocR;
+
+    // Who plays a lane when no hosted plugin holds its role.
+    BuiltInAutotune nativeTune;
+    BuiltInVocoder nativeVocoder;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VocalChannel)
 };

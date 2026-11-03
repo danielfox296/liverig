@@ -175,8 +175,9 @@ public:
                             ? (int) std::lround ((s.maxValue - s.minValue) / s.step) + 1
                             : 0;
 
+        // Named steps read best as a menu, however many there are.
         mode = steps == 2 ? Mode::toggle
-                          : (steps >= 3 && steps <= 5 ? Mode::menu : Mode::fader);
+                          : ((steps >= 3 && steps <= 5) || (s.choices != nullptr && steps > 2) ? Mode::menu : Mode::fader);
 
         name.setText (s.label, juce::dontSendNotification);
         name.setFont (rigFont (12.0f));

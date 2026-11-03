@@ -213,8 +213,8 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
 
     fxDefs = {
         { "input",  -1,                false, "",       "Input",      pInMute,   { pInGain } },
-        { "vocal",  -1,                false, "",       "Autotune",   pVocalOn,  { pVocalGain, pVocalGate, pVocalLevel } },
-        { "vocoder",-1,                false, "",       "Vocoder",    pVocoderOn,{ pVocalGain, pVocalGate, pVocoderLevel } },
+        { "vocal",  -1,                false, "",       "Autotune",   pVocalOn,  { pVocalGain, pVocalGate, pVocalLevel, pTuneKey, pTuneScale, pTuneSpeed, pTuneAmount } },
+        { "vocoder",-1,                false, "",       "Vocoder",    pVocoderOn,{ pVocalGain, pVocalGate, pVocoderLevel, pVocoderSib, pVocoderRelease } },
         { "keys",   -1,                false, "keys",   "Keys",       pInstOn,   { pInstLevel } },
         { "midi",   -1,                false, "midi",   "MIDI",       pMidiOn,   { pMidiChannel, pMidiTranspose, pMidiGate, pMidiHold, pMidiRelease, pMidiBendRange, pMidiExpression, pMidiThru } },
         { "comp",   FxChain::stComp,   true,  "comp",   "Compressor", pCompOn,   { pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup, pCompBlend, pCompSidechain } },
@@ -3316,13 +3316,11 @@ void MainComponent::refreshSlotControls()
         tuneLine = tune.getLoadedName() + " — " + describe (tune);
     else if (tune.getLastError().isNotEmpty())
         tuneLine = tune.getLastError();
-    else if (scanning)
-        tuneLine = "looking for a pitch plugin...";
     else
-        tuneLine = "no pitch plugin installed — Graillon 3 is free (auburnsounds.com)";
+        tuneLine = "built-in corrector: Key, Scale, Retune and Amount below";
 
     autotuneControls.status.setText (tuneLine + noMic, juce::dontSendNotification);
-    autotuneControls.open.setEnabled (tune.isLoaded());
+    autotuneControls.open.setVisible (tune.isLoaded());   // the built-in one has its knobs below
 
     auto& vocoder = engine.getVocoderSlot();
     juce::String vocoderLine;
@@ -3342,13 +3340,11 @@ void MainComponent::refreshSlotControls()
     }
     else if (vocoder.getLastError().isNotEmpty())
         vocoderLine = vocoder.getLastError();
-    else if (scanning)
-        vocoderLine = "looking for a vocoder...";
     else
-        vocoderLine = "no vocoder installed — TAL-Vocoder 3 is free (tal-software.com)";
+        vocoderLine = "built-in 20-band vocoder, carrier is the bass board";
 
     vocoderControls.status.setText (vocoderLine + noMic, juce::dontSendNotification);
-    vocoderControls.open.setEnabled (vocoder.isLoaded());
+    vocoderControls.open.setVisible (vocoder.isLoaded());
 
 
 }

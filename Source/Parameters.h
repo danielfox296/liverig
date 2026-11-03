@@ -84,6 +84,12 @@ enum ParamId
     pVocalOn, pVocalGain, pVocalGate, pVocalLevel,
     pVocoderOn, pVocoderLevel,
 
+    // The built-in lanes' own settings, used when no hosted plugin holds the
+    // role (an iPhone usually has none): the corrector's key, scale, speed
+    // and strength, and the vocoder's consonants and release.
+    pTuneKey, pTuneScale, pTuneSpeed, pTuneAmount,
+    pVocoderSib, pVocoderRelease,
+
     // The channel's live out: its level, and the mute that stands on it.
     pLiveOut, pLiveMute,
 

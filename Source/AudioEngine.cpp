@@ -547,7 +547,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             // The mic's lanes run through hosted plugins that hold the
             // voice back themselves — a pitch corrector by tens of
             // milliseconds — ahead of whatever its board adds.
-            const float micLanes = (float) juce::jmax (params.getBool (pVocalOn) ? tuneSlot.getLatencySamples() : 0,
+            const float micLanes = (float) juce::jmax (params.getBool (pVocalOn) ? (tuneSlot.isLoaded() ? tuneSlot.getLatencySamples()
+                                                                                           : (int) vocal.getBuiltInTuneLatency()) : 0,
                                                        params.getBool (pVocoderOn) ? vocoderSlot.getLatencySamples() : 0);
 
             const float pathLatency = loopSource == 1 ? micLanes + (boardActive[1].load (std::memory_order_relaxed)

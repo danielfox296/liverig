@@ -23,6 +23,9 @@ void VocalChannel::prepare (double sampleRate, int maxBlockSize)
     gateOpen = false;
     gateCoef = (float) (1.0 - std::exp (-1.0 / (0.008 * sr)));
 
+    nativeTune.prepare (sr);
+    nativeVocoder.prepare (sr);
+
     for (auto* s : { &gain, &tuneLevel, &vocoderLevel, &tuneRamp, &vocoderRamp })
         s->reset (sr, 0.015);
 
@@ -71,11 +74,37 @@ void VocalChannel::process (const float* mic, const float* carrier,
         gated[(size_t) i] = mic[i] * gain.getNextValue() * gateState;
     }
 
+    // A hosted plugin, when one holds the role; the built-in one otherwise.
     if (tuneAlive)
-        tuneSlot.process (gated.data(), nullptr, tuneL.data(), tuneR.data(), numSamples);
+    {
+        if (tuneSlot.isLoaded())
+        {
+            tuneSlot.process (gated.data(), nullptr, tuneL.data(), tuneR.data(), numSamples);
+        }
+        else
+        {
+            std::copy (gated.begin(), gated.begin() + numSamples, tuneL.begin());
+            nativeTune.process (tuneL.data(), numSamples,
+                                (int) std::lround (params.get (pTuneKey)),
+                                (int) std::lround (params.get (pTuneScale)),
+                                params.get (pTuneSpeed), params.get (pTuneAmount));
+            std::copy (tuneL.begin(), tuneL.begin() + numSamples, tuneR.begin());
+        }
+    }
 
     if (vocoderAlive)
-        vocoderSlot.process (gated.data(), carrier, vocL.data(), vocR.data(), numSamples);
+    {
+        if (vocoderSlot.isLoaded())
+        {
+            vocoderSlot.process (gated.data(), carrier, vocL.data(), vocR.data(), numSamples);
+        }
+        else
+        {
+            nativeVocoder.process (gated.data(), carrier, vocL.data(), numSamples,
+                                   params.get (pVocoderSib), params.get (pVocoderRelease));
+            std::copy (vocL.begin(), vocL.begin() + numSamples, vocR.begin());
+        }
+    }
 
     for (int i = 0; i < numSamples; ++i)
     {
