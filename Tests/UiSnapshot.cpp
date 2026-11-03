@@ -2,6 +2,7 @@
 // without a person having to look at a running app.
 //
 //   rig_uishot <output-directory>
+//   rig_uishot <output-directory> --phone     the iPhone face, at iPhone 12 size
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -53,8 +54,71 @@ static void writePng (const juce::Image& image, const juce::File& file)
 
 static int problems = 0;
 
+// The iPhone face, rendered on a desktop: the same component the phone runs,
+// at an iPhone 12's 390 x 844 points with its notch and home-bar insets.
+static int phoneShots (const juce::File& outDir)
+{
+    rig::useTouchLayout();
+    rig::MainComponent::forcePhoneLayout = true;
+    rig::MainComponent::simulatedSafeArea = { 47, 0, 34, 0 };
+
+    rig::ParamStore params;
+    rig::SettingsStore settings;
+    settings.channelList = "bass,mic,keys";
+    settings.bassLoadout = "comp,eq,drive,octave,chorus,delay,reverb,midi";
+    settings.micLoadout = "vocal,vocoder";
+    settings.keysLoadout = "keys";
+    params.set (rig::pCompOn, 1.0f);
+    params.set (rig::pDriveOn, 1.0f);
+    rig::AudioEngine engine (params);
+    rig::MainComponent main (params, engine, settings);
+    main.setSize (390, 844);
+
+    const auto shoot = [&] (const char* name)
+    {
+        juce::Image img (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
+        {
+            juce::Graphics g (img);
+            main.paintEntireComponent (g, true);
+        }
+        writePng (img, outDir.getChildFile (juce::String ("phone-") + name + ".png"));
+        problems += countBlankButtons (main, juce::String ("phone ") + name);
+    };
+
+    shoot ("board");
+    main.selectFxForSnapshot();
+    shoot ("editor");
+    main.selectEqForSnapshot();
+    shoot ("eq");
+    main.selectVocalForSnapshot();
+    shoot ("vocal");
+    main.selectKeysForSnapshot();
+    shoot ("keys");
+    main.showPhoneTab (rig::MainComponent::PhoneTab::loop);
+    shoot ("loop");
+    main.showPhoneTab (rig::MainComponent::PhoneTab::tune);
+    shoot ("tune");
+    main.showPhoneTab (rig::MainComponent::PhoneTab::foot);
+    shoot ("foot");
+
+    std::printf (problems == 0 ? "phone: no problems\n" : "phone: %d problems\n", problems);
+    return problems == 0 ? 0 : 1;
+}
+
 int main (int argc, char* argv[])
 {
+    if (argc > 2 && juce::String (argv[2]) == "--phone")
+    {
+        const juce::File dir (argv[1]);
+        dir.createDirectory();
+        juce::ScopedJuceInitialiser_GUI juceInit;
+        rig::RigLookAndFeel lookAndFeel;
+        juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
+        const int result = phoneShots (dir);
+        juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
+        return result;
+    }
+
     const juce::File outDir (argc > 1 ? juce::String (argv[1])
                                       : juce::File::getCurrentWorkingDirectory().getFullPathName());
     outDir.createDirectory();

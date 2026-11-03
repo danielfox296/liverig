@@ -165,7 +165,7 @@ public:
 class ParamRow : public juce::Component
 {
 public:
-    static constexpr int preferredHeight = 30;
+    static inline int preferredHeight = 30;
 
     ParamRow (SlotParams& p, int paramId) : params (p), id (paramId)
     {
@@ -175,8 +175,9 @@ public:
                             ? (int) std::lround ((s.maxValue - s.minValue) / s.step) + 1
                             : 0;
 
+        // Named steps read best as a menu, however many there are.
         mode = steps == 2 ? Mode::toggle
-                          : (steps >= 3 && steps <= 5 ? Mode::menu : Mode::fader);
+                          : ((steps >= 3 && steps <= 5) || (s.choices != nullptr && steps > 2) ? Mode::menu : Mode::fader);
 
         name.setText (s.label, juce::dontSendNotification);
         name.setFont (rigFont (12.0f));
@@ -227,7 +228,9 @@ public:
         slider.setSliderStyle (juce::Slider::LinearHorizontal);
         slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         slider.setDoubleClickReturnValue (true, (double) s.defaultValue);
-        slider.setSliderSnapsToMousePosition (true);   // tap anywhere to jump there
+        // Desktop: click anywhere to jump there. Phone: drag only, so a stray
+        // tap mid-song never moves a knob.
+        slider.setSliderSnapsToMousePosition (! kTouchLayout);
         slider.setValue ((double) params.get (id), juce::dontSendNotification);
         slider.onValueChange = [this]
         {
@@ -260,8 +263,8 @@ public:
 
     void resized() override
     {
-        auto b = getLocalBounds().reduced (0, 2);
-        name.setBounds (b.removeFromLeft (82));
+        auto b = getLocalBounds().reduced (0, kTouchLayout ? 4 : 2);
+        name.setBounds (b.removeFromLeft (kTouchLayout ? 104 : 82));
 
         if (mode == Mode::menu)
         {
@@ -269,11 +272,11 @@ public:
             return;
         }
 
-        value.setBounds (b.removeFromRight (78));
+        value.setBounds (b.removeFromRight (kTouchLayout ? 84 : 78));
         b.removeFromRight (6);
 
         if (mode == Mode::toggle)
-            toggle.setBounds (b.removeFromLeft (40).reduced (0, 4));
+            toggle.setBounds (b.removeFromLeft (kTouchLayout ? 56 : 40).reduced (0, 4));
         else
             slider.setBounds (b);
     }
@@ -298,9 +301,9 @@ private:
         void paintButton (juce::Graphics& g, bool, bool) override
         {
             auto b = getLocalBounds().toFloat();
-            const float h = juce::jmin (18.0f, b.getHeight());
+            const float h = juce::jmin (kTouchLayout ? 28.0f : 18.0f, b.getHeight());
             const juce::Rectangle<float> pill (b.getX(), b.getCentreY() - h * 0.5f,
-                                               juce::jmin (36.0f, b.getWidth()), h);
+                                               juce::jmin (h * 2.0f, b.getWidth()), h);
 
             g.setColour (juce::Colour (on ? 0xff3f9d4a : 0xff32343c));
             g.fillRoundedRectangle (pill, h * 0.5f);
@@ -506,19 +509,19 @@ private:
 class FxPanel : public juce::Component
 {
 public:
-    static constexpr int headerHeight = 34;
+    static inline int headerHeight = 34;
 
     // muteStyle turns the corner button red and inverts its meaning: lit is
     // silenced, because muting a live input is a feature, not a bypass.
     FxPanel (SlotParams& p, const juce::String& titleText, int bypassParam,
              bool canDrag, juce::Component* extra = nullptr, int extraWidthPx = 90,
              bool muteStyle = false)
-        : params (p), bypassId (bypassParam), draggable (canDrag),
-          extraComponent (extra), extraWidth (extraWidthPx)
+        : params (p), bypassId (bypassParam), muteRow (muteStyle), draggable (canDrag),
+          extraComponent (extra), extraWidth (kTouchLayout ? extraWidthPx + 30 : extraWidthPx)
     {
         // Chain rows read as faceplate caps; the editor keeps mixed case.
         title.setText (titleText.toUpperCase(), juce::dontSendNotification);
-        title.setFont (rigFont (12.0f, true));
+        title.setFont (rigFont (kTouchLayout ? 14.0f : 12.0f, true));
         title.setInterceptsMouseClicks (false, false);
         addAndMakeVisible (title);
 
@@ -530,7 +533,7 @@ public:
             power.setToggleState (params.getBool (bypassId), juce::dontSendNotification);
             power.setColour (juce::TextButton::buttonOnColourId,
                              juce::Colour (muteStyle ? 0xffe4483c : 0xff3f9d4a));
-            power.onClick = [this] { params.set (bypassId, power.getToggleState() ? 1.0f : 0.0f); };
+            power.onClick = [this] { params.set (bypassId, power.getToggleState() ? 1.0f : 0.0f); repaint(); };
             addAndMakeVisible (power);
         }
 
@@ -573,15 +576,29 @@ public:
     {
         if (bypassId >= 0)
             power.setToggleState (params.getBool (bypassId), juce::dontSendNotification);
+
+        if (kTouchLayout)
+            repaint();
     }
 
     // Selection happens on release, so starting a drag never also toggles the
     // editor underneath the move.
-    void mouseDown (const juce::MouseEvent&) override   { dragging = false; }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        dragging = false;
+
+        // On a phone the list scrolls under a thumb: only the grip picks a
+        // row up, and only a grab there keeps the list from scrolling.
+        if (kTouchLayout)
+            setViewportIgnoreDragFlag (draggable && e.x < gripZone());
+    }
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (! draggable)
+            return;
+
+        if (kTouchLayout && e.getMouseDownX() >= gripZone())
             return;
 
         if (! dragging && e.getDistanceFromDragStart() < 5)
@@ -607,43 +624,64 @@ public:
             if (onContextMenu != nullptr)
                 onContextMenu();
         }
+        else if (kTouchLayout && e.mouseWasDraggedSinceMouseDown())
+        {
+            // that was the list scrolling, not a tap
+        }
         else if (onSelect != nullptr)
         {
             onSelect();
         }
     }
 
+    // Lit rows read from across a stage: the phone fills the whole row.
+    bool isLit() const noexcept { return bypassId >= 0 && ! muteRow && params.getBool (bypassId); }
+
     void paint (juce::Graphics& g) override
     {
         // Selection is a full border and a raised fill — one convention for
         // every module, no edge bars.
-        g.setColour (juce::Colour (selected ? 0xff2a2d36 : 0xff1c1e24));
-        g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
-        g.setColour (juce::Colour (selected ? 0xffd87b3a : 0xff41444e));
+        const float radius = kTouchLayout ? 10.0f : 4.0f;
+        const bool lit = kTouchLayout && isLit();
+        g.setColour (juce::Colour (lit ? 0xff2b2018 : (selected ? 0xff2a2d36 : 0xff1c1e24)));
+        g.fillRoundedRectangle (getLocalBounds().toFloat(), radius);
+
+        if (lit)
+        {
+            // a warm wash from the left, like a lamp behind the faceplate
+            juce::ColourGradient wash (juce::Colour (0x55d87b3a), 0.0f, 0.0f,
+                                       juce::Colour (0x00d87b3a), (float) getWidth() * 0.7f, 0.0f, false);
+            g.setGradientFill (wash);
+            g.fillRoundedRectangle (getLocalBounds().toFloat(), radius);
+        }
+
+        g.setColour (juce::Colour (selected || lit ? 0xffd87b3a : 0xff41444e));
         g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (selected ? 0.75f : 0.5f),
-                                4.0f, selected ? 1.5f : 1.0f);
+                                radius, selected ? 1.5f : 1.0f);
 
         if (draggable)
         {
             // The gripper: a three-by-three dot grid — the sign this row can
             // be picked up and moved.
             const float cy = (float) getHeight() * 0.5f;
+            const float pitch = kTouchLayout ? 6.0f : 4.5f, dot = kTouchLayout ? 3.2f : 2.5f;
+            const float cx = kTouchLayout ? 20.0f : 17.5f;
             g.setColour (juce::Colour (dragging ? 0xff9a9da6 : 0xff565963));
 
             for (int row = -1; row <= 1; ++row)
                 for (int col = -1; col <= 1; ++col)
-                    g.fillEllipse (17.5f + (float) col * 4.5f - 1.25f,
-                                   cy + (float) row * 4.5f - 1.25f, 2.5f, 2.5f);
+                    g.fillEllipse (cx + (float) col * pitch - dot * 0.5f,
+                                   cy + (float) row * pitch - dot * 0.5f, dot, dot);
         }
     }
 
     void resized() override
     {
-        auto header = getLocalBounds().reduced (12, 5);
-        header.removeFromLeft (22);   // gripper zone; kept on every row so titles align
+        auto header = getLocalBounds().reduced (12, kTouchLayout ? 8 : 5);
+        header.removeFromLeft (kTouchLayout ? 30 : 22);   // gripper zone; kept on every row so titles align
 
         if (bypassId >= 0)
-            power.setBounds (header.removeFromRight (58));
+            power.setBounds (header.removeFromRight (kTouchLayout ? 78 : 58));
 
         if (extraComponent != nullptr)
         {
@@ -655,8 +693,11 @@ public:
     }
 
 private:
+    static int gripZone() noexcept { return 48; }
+
     SlotParams& params;
     int bypassId;
+    bool muteRow = false;
     bool draggable = false;
     bool selected = false;
     bool dragging = false;
@@ -727,7 +768,7 @@ private:
 class ChannelStrip : public juce::Component
 {
 public:
-    static constexpr int preferredHeight = 54;
+    static inline int preferredHeight = 54;
 
     ChannelStrip (const juce::String& channelKey, const juce::String& nameText,
                   LevelMeter* meterToShow)
@@ -841,7 +882,7 @@ public:
     {
         auto b = getLocalBounds().reduced (10, 7);
         auto nameRow = b.removeFromTop (18);
-        detail.setBounds (nameRow.removeFromRight (detail.getText().isNotEmpty() ? 76 : 0));
+        detail.setBounds (nameRow.removeFromRight (detail.getText().isNotEmpty() ? juce::jmin (76, nameRow.getWidth() / 2) : 0));
         name.setBounds (nameRow);
         b.removeFromTop (5);
 
@@ -872,7 +913,7 @@ public:
         placeholder.setColour (juce::Label::textColourId, juce::Colour (0xff70737c));
         addAndMakeVisible (placeholder);
 
-        title.setFont (rigFont (13.0f, true));
+        title.setFont (rigFont (kTouchLayout ? 17.0f : 13.0f, true));
         addChildComponent (title);
 
         presetBox.setEditableText (true);
@@ -938,6 +979,21 @@ public:
     // The amp's capture rides its presets: the provider names what is loaded
     // at save time, and the apply hook restores it (string-or-void semantics
     // as PresetStore documents them).
+    // How tall the editor wants to be for what it is showing: the phone's
+    // sheet is sized from this.
+    int getPreferredHeight() const
+    {
+        int h = 16 + (kTouchLayout ? 40 : 26) + 4;
+
+        if (extraComponent != nullptr)
+            h += extraHeight + 4;
+
+        if (hasPresets)
+            h += presetRowHeight + 2;
+
+        return h + rows.size() * ParamRow::preferredHeight;
+    }
+
     std::function<juce::String()> ampCaptureProvider;
     std::function<void (const juce::var&)> onAmpCapture;
 
@@ -978,6 +1034,9 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        if (kTouchLayout)
+            return;   // on the phone it sits on the sheet's own panel
+
         g.setColour (juce::Colour (0xff17181c));
         g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
         g.setColour (juce::Colour (0xff26272d));
@@ -988,9 +1047,9 @@ public:
     {
         placeholder.setBounds (getLocalBounds());
 
-        auto b = getLocalBounds().reduced (12, 8);
+        auto b = getLocalBounds().reduced (kTouchLayout ? 16 : 12, 8);
 
-        title.setBounds (b.removeFromTop (26));
+        title.setBounds (b.removeFromTop (kTouchLayout ? 40 : 26));
         b.removeFromTop (4);
 
         if (extraComponent != nullptr)
@@ -1002,9 +1061,9 @@ public:
         if (hasPresets)
         {
             auto row = b.removeFromTop (presetRowHeight).reduced (0, 3);
-            presetDelete.setBounds (row.removeFromRight (44));
+            presetDelete.setBounds (row.removeFromRight (kTouchLayout ? 60 : 44));
             row.removeFromRight (4);
-            presetSave.setBounds (row.removeFromRight (52));
+            presetSave.setBounds (row.removeFromRight (kTouchLayout ? 66 : 52));
             row.removeFromRight (6);
             presetBox.setBounds (row);
             b.removeFromTop (2);
@@ -1014,8 +1073,10 @@ public:
             r->setBounds (b.removeFromTop (ParamRow::preferredHeight));
     }
 
+public:
+    static inline int presetRowHeight = 30;
+
 private:
-    static constexpr int presetRowHeight = 30;
 
     void reloadPresetList (const juce::String& selectName = {})
     {
@@ -1087,5 +1148,18 @@ private:
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FxEditor)
 };
+
+//==============================================================================
+// Called once, before any component is built, by the iPhone app (and the
+// snapshot tool's --phone renders): thumb-sized rows, bigger type.
+inline void useTouchLayout()
+{
+    kTouchLayout = true;
+    kTypeScale = 1.3f;
+    ParamRow::preferredHeight = 48;
+    FxPanel::headerHeight = 58;
+    ChannelStrip::preferredHeight = 50;
+    FxEditor::presetRowHeight = 46;
+}
 
 } // namespace rig

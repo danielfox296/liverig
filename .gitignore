@@ -4,3 +4,4 @@ NeuralAmpModelerCore/
 .DS_Store
 *.wav
 *.mp3
+build-*/

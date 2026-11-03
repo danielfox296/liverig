@@ -1,0 +1,12 @@
+{
+  "name": "LiveRig",
+  "short_name": "LiveRig",
+  "description": "A live rig for bass and guitar: effects board, looper, tuner, MIDI and foot control.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#101114",
+  "theme_color": "#101114",
+  "icons": [{ "src": "icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }]
+}

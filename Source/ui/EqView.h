@@ -20,7 +20,8 @@ class EqView : public juce::Component,
                private juce::Timer
 {
 public:
-    static constexpr int preferredHeight = 306;
+    // The curve, then the touched band's three faders under a caption.
+    static int preferredHeight() { return (kTouchLayout ? 230 : 196) + 3 * ParamRow::preferredHeight + captionHeight; }
 
     explicit EqView (SlotParams& p) : params (p)
     {

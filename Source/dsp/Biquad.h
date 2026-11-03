@@ -45,6 +45,15 @@ struct Biquad
                          1.0 + al, -2.0 * cs, 1.0 - al);
     }
 
+    // Constant 0 dB peak at the centre: one band of a filter bank.
+    void setBandpass (double sr, double freq, double q) noexcept
+    {
+        const double w0 = 6.283185307179586 * clampFreq (sr, freq);
+        const double cs = std::cos (w0), sn = std::sin (w0);
+        const double al = sn / (2.0 * q);
+        setCoefficients (al, 0.0, -al, 1.0 + al, -2.0 * cs, 1.0 - al);
+    }
+
     void setHighpass (double sr, double freq, double q) noexcept
     {
         const double w0 = 6.283185307179586 * clampFreq (sr, freq);
