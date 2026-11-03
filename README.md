@@ -12,6 +12,9 @@ Song folder (stems) ─> Stem player (4 tracks, gain/mute) ─┐
 Live input (ch 1) ──> FX chain ──> live lane gain ────────┘
 ```
 
+**On a phone:** [`web/`](web/README.md) is a browser port of everything here
+except the backing tracks, with an interface designed for one thumb.
+
 ---
 
 ## Using it
