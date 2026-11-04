@@ -37,6 +37,10 @@ git checkout claude/happy-edison-qha9oo
 cmake -B build-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS
 ```
 
+The first time, that step needs the internet and takes a few minutes: it
+downloads the JUCE version the phone uses (8.0.17). The desktop app keeps its
+own, older JUCE.
+
 ```bash
 open build-ios/LiveRig.xcodeproj
 ```

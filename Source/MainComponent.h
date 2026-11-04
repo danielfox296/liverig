@@ -422,6 +422,9 @@ private:
 
     // --- the phone face -------------------------------------------------
     bool phone = false;
+   #if JUCE_IOS
+    int safeAreaChecksLeft = 150;   // about five seconds of the 30 Hz timer
+   #endif
     PhoneTab phoneTab = PhoneTab::board;
     int statusTick = 0;
     juce::Viewport railViewport;

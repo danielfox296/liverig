@@ -13,9 +13,20 @@ static juce::File cacheFile()
               .getChildFile ("plugins.xml");
 }
 
+// JUCE moved this out of the manager in 8.0.9; the iPhone is past that and the
+// desktop is not.
+static void addDefaultPluginFormats (juce::AudioPluginFormatManager& manager)
+{
+   #if JUCE_VERSION >= 0x080009
+    juce::addDefaultFormatsToManager (manager);
+   #else
+    manager.addDefaultFormats();
+   #endif
+}
+
 InstrumentHost::InstrumentHost()
 {
-    formats.addDefaultFormats();
+    addDefaultPluginFormats (formats);
     scratch.setSize (2, 512);
     midi.ensureSize (512);
 
@@ -95,7 +106,7 @@ void InstrumentHost::runScanWorker (const juce::String& formatName,
                                     const juce::String& identifier)
 {
     juce::AudioPluginFormatManager workerFormats;
-    workerFormats.addDefaultFormats();
+    addDefaultPluginFormats (workerFormats);
 
     for (int i = 0; i < workerFormats.getNumFormats(); ++i)
     {

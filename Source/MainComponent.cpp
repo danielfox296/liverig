@@ -3438,6 +3438,22 @@ void MainComponent::saveSettings()
 
 void MainComponent::timerCallback()
 {
+   #if JUCE_IOS
+    // JUCE reads the safe area once, before iOS has connected the window to
+    // its scene, and keeps the empty answer. Ask again until the real one comes.
+    if (phone && safeAreaChecksLeft > 0)
+    {
+        --safeAreaChecksLeft;
+        const_cast<juce::Displays&> (juce::Desktop::getInstance().getDisplays()).refresh();
+
+        if (! safeArea().isEmpty())
+        {
+            safeAreaChecksLeft = 0;
+            resized();
+        }
+    }
+   #endif
+
     // Retired NAM models come back from the audio thread to be freed here.
     engine.getFxChain().getAmp().collectGarbage();
 

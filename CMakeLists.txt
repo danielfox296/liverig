@@ -47,14 +47,23 @@ if (APPLE AND NOT RIG_IOS)
 endif()
 
 # --- JUCE -------------------------------------------------------------------
-# Prefer a local checkout at ./JUCE; fall back to fetching it.
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
+# The desktop rig prefers a local checkout at ./JUCE and falls back to fetching
+# 8.0.4. The iPhone always fetches its own, newer JUCE: anything built with the
+# iOS 27 SDK dies at launch unless it adopts the UIScene life cycle, which JUCE
+# has from 8.0.9. The desktop stays where it is, proven through the Scarlett.
+if (RIG_IOS)
+    set(RIG_JUCE_TAG 8.0.17-security)
+else()
+    set(RIG_JUCE_TAG 8.0.4)
+endif()
+
+if (NOT RIG_IOS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
     add_subdirectory(JUCE)
 else()
     include(FetchContent)
     FetchContent_Declare(JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-        GIT_TAG        8.0.4
+        GIT_TAG        ${RIG_JUCE_TAG}
         GIT_SHALLOW    TRUE)
     FetchContent_MakeAvailable(JUCE)
 endif()
