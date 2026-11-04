@@ -194,6 +194,11 @@ private:
 
             setUsingNativeTitleBar (true);
             setContentOwned (content, true);
+
+           #if JUCE_IOS
+            // A phone has one window size: the whole screen.
+            setFullScreen (true);
+           #else
             setResizable (true, false);
             setResizeLimits (860, 560, 2400, 1800);
             int height = getHeight();
@@ -202,6 +207,8 @@ private:
                 height = juce::jmin (height, display->userArea.getHeight() - 60);
 
             centreWithSize (getWidth(), height);
+           #endif
+
             setVisible (true);
         }
 
