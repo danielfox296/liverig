@@ -212,7 +212,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     addChildComponent (loopView);
 
     fxDefs = {
-        { "input",  -1,                false, "",       "Input",      pInMute,   { pInGain } },
+        { "input",  -1,                false, "",       "Input",      pInMute,   { pInGain, pInRange } },
         { "vocal",  -1,                false, "",       "Autotune",   pVocalOn,  { pVocalGain, pVocalGate, pVocalLevel, pTuneKey, pTuneScale, pTuneSpeed, pTuneAmount } },
         { "vocoder",-1,                false, "",       "Vocoder",    pVocoderOn,{ pVocalGain, pVocalGate, pVocoderLevel, pVocoderSib, pVocoderRelease } },
         { "keys",   -1,                false, "keys",   "Keys",       pInstOn,   { pInstLevel } },
@@ -338,8 +338,20 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
     engine.getFoot().setCommandNotifier ([this] { triggerAsyncUpdate(); });
     fxEditor.clear();
 
-    tunerView.setBassMode (settings.tuner != "guitar");
-    tunerView.onModeChanged = [this] { saveSettings(); };
+    // The tuner's BASS / GUITAR switch and the first strip's Range are one
+    // setting: the tuner reads that strip's tracker, so what it shows and
+    // what it listens for must agree. A tuner left on GUITAR by an older
+    // build brings the tracker along with it.
+    if (settings.tuner == "guitar")
+        params.set (0, pInRange, 1.0f);
+
+    tunerView.setBassMode (! params.getBool (0, pInRange));
+    tunerView.onModeChanged = [this]
+    {
+        params.set (0, pInRange, tunerView.isBassMode() ? 0.0f : 1.0f);
+        refreshAllControls();
+        saveSettings();
+    };
 
     midiStatus.onPanic = [this] { engine.getMidi().panic(); };
 
@@ -3603,6 +3615,9 @@ void MainComponent::timerCallback()
         refreshStatusLine();
         refreshSheetSwitch();
     }
+
+    if (tunerView.isBassMode() == params.getBool (0, pInRange))
+        tunerView.setBassMode (! params.getBool (0, pInRange));   // Range moved on the Input row
 
     if (tunerShowing())
         tunerView.update (engine.getFxChain().getTrackedHz(),

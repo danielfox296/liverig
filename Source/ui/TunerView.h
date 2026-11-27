@@ -48,6 +48,7 @@ public:
     {
         bassButton.setToggleState (bass, juce::dontSendNotification);
         guitarButton.setToggleState (! bass, juce::dontSendNotification);
+        repaint();
     }
 
     // Fed from the UI timer while the tab is showing.

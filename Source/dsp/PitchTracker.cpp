@@ -298,10 +298,8 @@ float PitchTracker::refineAtFullRate (float coarsePeriodIn, float* scoreOut, flo
         }
     }
 
-    if (scoreOut != nullptr)
-        *scoreOut = bestVal;
-
     float result = (float) bestLag;
+    float peakScore = bestVal;
 
     if (bestLag > lo && bestLag < hi)
     {
@@ -311,8 +309,20 @@ float PitchTracker::refineAtFullRate (float coarsePeriodIn, float* scoreOut, flo
         const float denom = s0 + s2 - 2.0f * s1;
 
         if (std::abs (denom) > 1.0e-12f)
+        {
             result = (float) bestLag - 0.5f * (s2 - s0) / denom;
+
+            // The score at the true, fractional lag, not at the nearest
+            // whole one. A short period that falls between two samples
+            // would otherwise lose to its own octave below, whose doubled
+            // lag happens to land nearer a whole sample (a high guitar
+            // note was handed down an octave this way).
+            peakScore = std::min (1.0f, s1 - 0.125f * (s2 - s0) * (s2 - s0) / denom);
+        }
     }
+
+    if (scoreOut != nullptr)
+        *scoreOut = peakScore;
 
     return std::clamp (result, 8.0f, maxPeriod);
 }

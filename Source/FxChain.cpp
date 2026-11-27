@@ -83,7 +83,8 @@ void FxChain::prepare (double sampleRate, int maxBlockSize)
 
     amp.prepare (sr, maxBlock);
 
-    tracker.prepare (sr);
+    bassTracker.prepare (sr);
+    guitarTracker.prepare (sr, 12000.0, 60.0, 1500.0);
     segmenter.prepare (sr);
     shifter.prepare (sr);
     shifter2.prepare (sr);
@@ -188,7 +189,8 @@ void FxChain::reset() noexcept
     if (os != nullptr)
         os->reset();
 
-    tracker.reset();
+    bassTracker.reset();
+    guitarTracker.reset();
     shifter.reset();
     shifter2.reset();
 
@@ -940,24 +942,26 @@ void FxChain::process (float* mono, float* left, float* right, int numSamples) n
 
     // Side-chain: pitch runs off the trimmed input, ahead of the movable
     // stages, so no arrangement of dirt or modulation can fool the detector.
-    tracker.process (mono, numSamples);
-    shifter.setPeriod (tracker.getPeriodSamples());
-    shifter2.setPeriod (tracker.getPeriodSamples());
-    subOctave.setPeriod (tracker.getPeriodSamples());
-    timbre.setPitch (tracker.getPeriodSamples(), tracker.getConfidence());
+    // The strip's Range picks which tracker listens.
+    tracker = params.getBool (pInRange) ? &guitarTracker : &bassTracker;
+    tracker->process (mono, numSamples);
+    shifter.setPeriod (tracker->getPeriodSamples());
+    shifter2.setPeriod (tracker->getPeriodSamples());
+    subOctave.setPeriod (tracker->getPeriodSamples());
+    timbre.setPitch (tracker->getPeriodSamples(), tracker->getConfidence());
 
     midiEventCount = 0;
 
     if (params.getBool (pMidiOn))
-        midiEventCount = segmenter.process (mono, numSamples, tracker.getPeriodSamples(),
-                                            tracker.getConfidence(), midiEvents, 8);
+        midiEventCount = segmenter.process (mono, numSamples, tracker->getPeriodSamples(),
+                                            tracker->getConfidence(), midiEvents, 8);
     else if (segmenter.getSoundingNote() >= 0)
         midiEventCount = segmenter.flush (midiEvents, 8);
 
     soundingNote.store (segmenter.getSoundingNote(), std::memory_order_relaxed);
-    synTargetPeriod = tracker.getPeriodSamples();
-    liveHz.store (tracker.getFrequency(), std::memory_order_relaxed);
-    liveConf.store (tracker.getConfidence(), std::memory_order_relaxed);
+    synTargetPeriod = tracker->getPeriodSamples();
+    liveHz.store (tracker->getFrequency(), std::memory_order_relaxed);
+    liveConf.store (tracker->getConfidence(), std::memory_order_relaxed);
 
     const uint64_t order = orderPacked.load (std::memory_order_relaxed);
 

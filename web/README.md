@@ -57,6 +57,7 @@ Built for one thumb, standing up, with an instrument in the other hand.
 | Drag to reorder, ADD EFFECT, remove         | Same                                                                      |
 | Strips: bass, mic, keys, generic channels   | Same; each strip picks Input 1 / Input 2                                  |
 | Tuner tab                                   | Tune tab (same median/slew/hysteresis filter)                             |
+| Input row Range: Bass / Guitar              | Same; the Tune tab's BASS / GUITAR switch sets it for the tuned strip     |
 | Looper pane                                 | Loop tab, with the same latency compensation                              |
 | FOOT tab, layouts, learn, jobs, verbs       | Foot tab; also learns **keys** so Bluetooth page-turner pedals work       |
 | MIDI out from the tracker, PANIC            | Web MIDI out to a chosen port                                             |

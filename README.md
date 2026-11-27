@@ -714,6 +714,13 @@ granular shifter rather than dropping out.
 The tracker runs from 26 Hz to 500 Hz, so a 5-string low B and the drop tunings
 under it are inside the range rather than pinned against its floor.
 
+**Range** on a strip's Input row says what its tracker listens for: **Bass**
+(26-500 Hz, as above) or **Guitar** (60-1500 Hz, up past the high E's 24th
+fret). Everything that rides the tracker follows it: the octave, the sub, the
+synth, Timbre, MIDI out and the tuner. The tuner's BASS / GUITAR switch is
+the same setting for the first strip. Left on Bass, a guitar loses the
+tracker above the B string's 12th fret and the octave turns to warble.
+
 Latency is roughly half a period plus the crossfade, so it scales with the note
 rather than being a fixed worst case: 20 ms on a low B, 15 ms on a low E,
 5–9 ms an octave up. The footer reports the live figure, smoothed, so it reads

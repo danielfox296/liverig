@@ -8,6 +8,8 @@ import { SPECS as RAW, FACTORY_EFFECT_PRESETS, FACTORY_CHAIN_PRESETS } from './d
 // windows in the desktop app (pitch corrector, vocoder) are native here.
 const KEYS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const EXTRA = [
+    // What the strip's pitch tracker listens for: bass (26-500 Hz) or guitar (60-1500 Hz).
+    { id: 'inRange', label: 'Range', min: 0, max: 1, def: 0, skew: 0, step: 1, suffix: '', dec: 0, toggle: false, choices: ['Bass', 'Guitar'] },
     { id: 'tuneKey', label: 'Key', min: 0, max: 11, def: 0, skew: 0, step: 1, suffix: '', dec: 0, toggle: false, choices: KEYS },
     { id: 'tuneScale', label: 'Scale', min: 0, max: 5, def: 1, skew: 0, step: 1, suffix: '', dec: 0, toggle: false,
       choices: ['Chromatic', 'Major', 'Minor', 'Maj pent', 'Min pent', 'Blues'] },
@@ -23,7 +25,7 @@ export const SPEC = Object.fromEntries (SPECS.map ((s) => [s.id, s]));
 // Channel-scoped: one value per strip. Everything else exists once.
 const ids = RAW.map ((s) => s.id);
 const iIn = ids.indexOf ('inGain'), iRv = ids.indexOf ('rvMix');
-export const CHANNEL_IDS = new Set (ids.slice (iIn, iRv + 1).concat (['liveOut', 'liveMute']));
+export const CHANNEL_IDS = new Set (ids.slice (iIn, iRv + 1).concat (['liveOut', 'liveMute', 'inRange']));
 export const isChannel = (id) => CHANNEL_IDS.has (id);
 export const isMomentary = (id) => id === 'frzOn';
 
@@ -61,7 +63,7 @@ export function fmt (s, v)
 // ---------- the rows ----------
 // key, display name, on/switch param, editor params, movable, preset scope
 export const FX = [
-    { key: 'input',   name: 'Input',      on: 'inMute',    ids: ['inGain'], kind: 'mute' },
+    { key: 'input',   name: 'Input',      on: 'inMute',    ids: ['inGain', 'inRange'], kind: 'mute' },
     { key: 'vocal',   name: 'Autotune',   on: 'vocalOn',   ids: ['vocalGain', 'vocalGate', 'vocalLevel'], lane: 'mic',
       style: ['tuneKey', 'tuneScale', 'tuneSpeed', 'tuneAmount'] },
     { key: 'vocoder', name: 'Vocoder',    on: 'vocoderOn', ids: ['vocalGain', 'vocalGate', 'vocoderLvl'], lane: 'mic', style: ['vocSib', 'vocRelease'] },
@@ -93,7 +95,7 @@ export const isLoadable = (d) => d.movable || d.key === 'reverb' || !! LANES[d.k
 
 // A row's one-line summary under its name, so the board reads without opening anything.
 const SUMMARY = {
-    input: ['inGain'], vocal: ['tuneKey', 'tuneScale'], vocoder: ['vocoderLvl'], keys: ['instLevel'], midi: ['midiTrans', 'midiCh'],
+    input: ['inRange', 'inGain'], vocal: ['tuneKey', 'tuneScale'], vocoder: ['vocoderLvl'], keys: ['instLevel'], midi: ['midiTrans', 'midiCh'],
     comp: ['compThr', 'compRatio'], eq: [], filter: ['fltFrom', 'fltTo'], boost: ['bstGain'], drive: ['odVoice', 'odDrive'],
     amp: ['ampIn'], cab: ['cabBumpF', 'cabTop'], octave: ['octInt', 'octMix'], sub: ['subDiv', 'subLevel'], synth: ['syShape', 'syMix'],
     phaser: ['phRate', 'phDepth'], chorus: ['chVoices', 'chMix'], delay: ['dlTime', 'dlFb'], tape: ['tpDrive', 'tpMix'],

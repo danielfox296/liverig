@@ -12,9 +12,9 @@ const chanIds = new Set ();
 // channel params: inGain..rvMix + liveOut/liveMute
 let inRange = false;
 for (const s of SPECS) { if (s.id === 'inGain') inRange = true; if (inRange) chanIds.add (s.id); if (s.id === 'rvMix') inRange = false; }
-chanIds.add ('liveOut'); chanIds.add ('liveMute');
-const extra = [ { id: 'tuneKey', def: 0 }, { id: 'tuneScale', def: 0 }, { id: 'tuneSpeed', def: 20 }, { id: 'tuneAmount', def: 1 }, { id: 'vocSib', def: 0.3 }, { id: 'vocRelease', def: 60 } ];
-const specs = SPECS.map (s => ({ id: s.id, def: s.def, channel: chanIds.has (s.id) })).concat (extra.map (e => ({ ...e, channel: false })));
+chanIds.add ('liveOut'); chanIds.add ('liveMute'); chanIds.add ('inRange');
+const extra = [ { id: 'inRange', def: 0 }, { id: 'tuneKey', def: 0 }, { id: 'tuneScale', def: 0 }, { id: 'tuneSpeed', def: 20 }, { id: 'tuneAmount', def: 1 }, { id: 'vocSib', def: 0.3 }, { id: 'vocRelease', def: 60 } ];
+const specs = SPECS.map (s => ({ id: s.id, def: s.def, channel: chanIds.has (s.id) })).concat (extra.map (e => ({ ...e, channel: chanIds.has (e.id) })));
 
 function bass (f, secs, amp = 0.3) {
   const n = Math.floor (secs * sr), x = new Float32Array (n);
@@ -104,3 +104,15 @@ for (const name of Object.keys (M.PATCHES)) { ek.instrument.setPatch (name); ek.
   for (let b = 0; b < 200; ++b) { ek.process ([new Float32Array (128)], bl, br, 128); for (const v of bl) { if (!Number.isFinite (v)) bad++; pk = Math.max (pk, Math.abs (v)); } }
   ek.note (false, 60, 0); ek.note (false, 64, 0); for (let b = 0; b < 400; ++b) ek.process ([new Float32Array (128)], bl, br, 128);
   console.log (`patch ${name}: peak ${pk.toFixed (3)}, bad ${bad}`); }
+
+// 6. guitar range: the strip's tracker must follow every string up the neck
+for (const f of [82.41, 246.94, 329.63, 493.88, 659.26, 987.77, 1318.51]) {
+  const row = [];
+  for (const range of [0, 1]) {
+    const e = makeEngine (['octave'], { inRange: range, octOn: 1, octInt: 12, octMix: 1 });
+    run (e, bass (f, 1.0));
+    const t = e.chains[0].tracker, c = 1200 * Math.log2 (t.frequency / f);
+    row.push (`${range ? 'GUITAR' : 'bass'} ${t.frequency.toFixed (1)} Hz (${c.toFixed (1)} c, conf ${t.confidence.toFixed (2)})${range && (Math.abs (c) > 8 || t.confidence < 0.5) ? ' <-- FAIL' : ''}`);
+  }
+  console.log (`tracker on ${f} Hz: ${row.join ('   ')}`);
+}

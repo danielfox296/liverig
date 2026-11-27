@@ -9,6 +9,7 @@ static const char* const voiceChoices[] { "Green", "Gold", "Plexi" };
 static const char* const offOnChoices[] { "Off", "On" };
 static const char* const expressionChoices[] { "Off", "CC1 mod", "CC11 expr" };
 static const char* const divideChoices[] { "-1 oct", "-2 oct" };
+static const char* const rangeChoices[] { "Bass", "Guitar" };
 static const char* const keyChoices[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
 static const char* const scaleChoices[] { "Chromatic", "Major", "Minor", "Maj pent", "Min pent", "Blues" };
 
@@ -27,6 +28,7 @@ static const ParamSpec specs[] =
 
     { "inGain",    "In",       -24.0f,  24.0f,   0.0f,     0.0f, 0.0f, " dB",  1, false },
     { "inMute",    "Mute",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
+    { "inRange",   "Range",      0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, false, rangeChoices },
 
     { "compOn",    "Comp",       0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
     { "compThr",   "Thresh",   -60.0f,   0.0f, -18.0f,     0.0f, 0.0f, " dB",  1, false },
