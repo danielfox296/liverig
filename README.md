@@ -148,6 +148,7 @@ any order in the app; Input, Reverb and Live out hold their places.
 | 11 | Delay | time, feedback, mix, high cut, mod rate, mod depth, sat |
 | 12 | Tape | drive, soften, bump, mix — tape-machine warmth |
 | — | Freeze | level, fade in, fade out, motion — its switch holds what is sounding for as long as it is lit |
+| — | Timbre | instrument, blend — the played note re-voiced with another instrument's harmonics |
 | 13 | Pedal | a hosted AU/VST3 effect as a chain insert — pick it, drag it anywhere |
 | 14 | Reverb | size, damping, mix — Freeverb, mono in / stereo out |
 | 15 | Live out | lane gain |
@@ -200,6 +201,38 @@ Five of the stages are modelled on specific boxes rather than invented:
   **Bump** is the tape head bump — up to +4.5 dB at 80 Hz, free weight for
   bass — and quiet playing always passes at unity, so it can idle engaged.
   It defaults to sitting just before the reverb and drags anywhere.
+
+### The timbre pedal
+
+**Timbre** keeps the note you played and changes what it is made of. It
+finds the note's fundamental, throws the string's own harmonics away, and
+plays another instrument's set in their place — at the level you played,
+on the pitch you played, for as long as the string rings.
+
+- **Instrument** picks the set: Cello, Clarinet, Trumpet, Flute, Organ,
+  Bell. They are first sketches, not measurements of those instruments. Each
+  is one entry in `Source/dsp/TimbreProfiles.h` — sixteen harmonic levels,
+  how the series carries on above them, up to two resonances that stay put
+  while the note moves, and any partials that sit off the harmonic series
+  (the bell's). A new entry there is a new instrument in the menu.
+- **Blend** runs from the bass as it is to the new voice alone. The new
+  fundamental is locked in phase with the string's, so half blend adds the
+  two rather than thinning the bottom.
+- **The pluck stays yours.** The pedal only speaks once it knows the note —
+  about a twentieth of a second after the pluck on the low strings, less
+  higher up — and until then the bass goes by untouched. So every note
+  starts as a bass and becomes the instrument. Dead notes, slaps and chords
+  have no single pitch to follow and pass as they are.
+- **It adds no latency** and nothing is delayed to match it.
+- **Brass is spiky.** At the same loudness the Trumpet's peaks stand about
+  8 dB over the dry bass's, so a drive below it bites harder and the master
+  limiter may work.
+
+It follows the same pitch tracker as the Octave and the Synth, which hears
+the channel's input — so it wants a single clean note, and where it stands
+among the other pedals changes what it blends against, not what it tracks.
+`rig_tests --timbre` checks it; `rig_tests --timbre-demo <folder>` writes
+each instrument out as a WAV for listening away from the rig.
 
 ### The freeze
 
@@ -730,7 +763,8 @@ Three places, very unevenly:
   zero-latency; delay and reverb are wet mixes on top of an uncoloured dry
   path; the drive's oversampler costs about a tenth of a millisecond. The
   freeze adds none either: it only ever looks back at what was already
-  played, and the live signal does not pass through it.
+  played, and the live signal does not pass through it. Nor does the
+  timbre pedal: its voice is built from the note's phase as it arrives.
 
 One stage trick falls out of this: the synth's **Sub** is an octave-down
 voice with effectively no latency (a 2.5 ms envelope), so when a part needs

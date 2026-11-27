@@ -125,6 +125,7 @@ set(RIG_DSP_SOURCES
     Source/dsp/OctaveShifter.cpp
     Source/dsp/PlateVerb.cpp
     Source/dsp/SpectralFreeze.cpp
+    Source/dsp/TimbreVoice.cpp
     Source/dsp/AmpModel.cpp
     Source/FxChain.cpp
     Source/StemPlayer.cpp

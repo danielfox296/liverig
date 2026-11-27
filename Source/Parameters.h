@@ -66,6 +66,11 @@ enum ParamId
     // off to let it go. A gesture, not a setting (see isMomentaryParam).
     pFreezeOn, pFreezeLevel, pFreezeFadeIn, pFreezeFadeOut, pFreezeMotion,
 
+    // Timbre: the played note re-voiced as another instrument's harmonics.
+    // Voice picks the instrument; Blend runs from the bass as it is to the
+    // new voice alone.
+    pTimbreOn, pTimbreVoice, pTimbreBlend,
+
     pRevOn, pRevSize, pRevDamp, pRevPre, pRevMod, pRevMix,
 
     // MIDI out: the tracker as a note source, aimed at swells and pads.

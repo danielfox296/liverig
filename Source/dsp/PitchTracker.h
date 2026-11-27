@@ -38,7 +38,12 @@ public:
 
 private:
     void analyse() noexcept;
-    float refineAtFullRate (float coarsePeriodIn) noexcept;
+    // How well the best lag near the coarse one lines up, -1 to 1, goes to
+    // scoreOut; it is left alone when there is too little history to say.
+    // The correlation runs over one coarse period unless windowPeriod names
+    // another length.
+    float refineAtFullRate (float coarsePeriodIn, float* scoreOut = nullptr,
+                            float windowPeriod = 0.0f) noexcept;
 
     double sr = 48000.0;
     int decim = 16;

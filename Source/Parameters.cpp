@@ -1,5 +1,7 @@
 #include "Parameters.h"
 
+#include "dsp/TimbreProfiles.h"
+
 namespace rig
 {
 
@@ -141,6 +143,10 @@ static const ParamSpec specs[] =
     { "frzIn",     "Fade in",    0.0f,1000.0f, 100.0f,   200.0f, 0.0f, " ms",  0, false },
     { "frzOut",    "Fade out",   0.0f,1000.0f, 150.0f,   200.0f, 0.0f, " ms",  0, false },
     { "frzMotion", "Motion",     0.0f,   1.0f,   0.3f,     0.0f, 0.0f, "",     2, false },
+
+    { "tmbOn",     "Timbre",     0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
+    { "tmbVoice",  "Instrument", 0.0f, (float) (numTimbreProfiles - 1), 0.0f, 0.0f, 1.0f, "", 0, false, timbreProfileNames.data() },
+    { "tmbBlend",  "Blend",      0.0f,   1.0f,   1.0f,     0.0f, 0.0f, "",     2, false },
 
     { "rvOn",      "Reverb",     0.0f,   1.0f,   0.0f,     0.0f, 1.0f, "",     0, true  },
     { "rvSize",    "Size",       0.0f,   1.0f,   0.5f,     0.0f, 0.0f, "",     2, false },

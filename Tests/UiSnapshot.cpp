@@ -133,7 +133,7 @@ int main (int argc, char* argv[])
         rig::SettingsStore settings;
         settings.channelList = "bass,mic,keys";   // stage the full rail the snapshots document
         settings.bassLoadout = "midi,comp,eq,filter,boost,drive,amp,cab,octave,sub,synth,"
-                               "phaser,chorus,delay,tape,freeze,reverb";
+                               "phaser,chorus,delay,tape,freeze,timbre,reverb";
         settings.micLoadout = "vocal,vocoder";
         settings.keysLoadout = "keys";
         rig::AudioEngine engine (params);          // deliberately not opened
@@ -234,6 +234,20 @@ int main (int argc, char* argv[])
         writePng (freezeShot, outDir.getChildFile ("freeze.png"));
         problems += countBlankButtons (main, "the freeze editor");
         params.set (rig::pFreezeOn, 0.0f);
+
+        // The timbre pedal: its switch, the instrument menu and the blend.
+        params.set (rig::pTimbreOn, 1.0f);
+        params.set (rig::pTimbreVoice, 2.0f);
+        main.selectTimbreForSnapshot();
+
+        juce::Image timbreShot (juce::Image::ARGB, main.getWidth(), main.getHeight(), true);
+        {
+            juce::Graphics g (timbreShot);
+            main.paintEntireComponent (g, true);
+        }
+        writePng (timbreShot, outDir.getChildFile ("timbre.png"));
+        problems += countBlankButtons (main, "the timbre editor");
+        params.set (rig::pTimbreOn, 0.0f);
 
         // The autotune strip: the switch, its three faders, and the status line.
         params.set (rig::pVocalOn, 1.0f);

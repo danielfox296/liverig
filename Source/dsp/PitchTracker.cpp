@@ -185,7 +185,25 @@ void PitchTracker::analyse() noexcept
 
         if (cmnd[(size_t) doubled] < 0.5f * cmnd[(size_t) best]
              && cmnd[(size_t) doubled] < 0.03f)
-            best = doubled;
+        {
+            // High on the neck that tell can lie. A period is only a dozen
+            // decimated samples there, so a true period of 11.5 looks
+            // mediocre at lag 11 or 12 for no reason but the half-sample
+            // miss, while twice it lands square on lag 23 and looks
+            // excellent — and a clean high note was handed down an octave.
+            // At the full rate there is no such miss, so the two lags are
+            // asked again there, and the longer one has to be really better.
+            // Both are judged over the longer one's window: across half a
+            // period the fundamental and its octave do not average apart,
+            // and the shorter lag can flatter itself.
+            const float longPeriod = (float) (doubled * decim);
+            float shortScore = -2.0f, longScore = -2.0f;
+            refineAtFullRate ((float) (best * decim), &shortScore, longPeriod);
+            refineAtFullRate (longPeriod, &longScore, longPeriod);
+
+            if (shortScore < -1.5f || longScore < -1.5f || longScore > shortScore + 0.005f)
+                best = doubled;
+        }
     }
 
     const float quality = cmnd[(size_t) best];
@@ -227,14 +245,14 @@ void PitchTracker::analyse() noexcept
     confidence = conf;
 }
 
-float PitchTracker::refineAtFullRate (float coarsePeriodIn) noexcept
+float PitchTracker::refineAtFullRate (float coarsePeriodIn, float* scoreOut, float windowPeriod) noexcept
 {
     const int p0 = (int) std::lround (coarsePeriodIn);
     const int search = std::max (1, decim);
     const int lo = std::max (8, p0 - search);
     const int hi = p0 + search;
 
-    const int Wf = std::clamp (p0, 256, 1024);
+    const int Wf = std::clamp (windowPeriod > 0.0f ? (int) std::lround (windowPeriod) : p0, 256, 1024);
 
     if (Wf + hi + 4 >= (int) frBuf.size())
         return coarsePeriodIn;
@@ -279,6 +297,9 @@ float PitchTracker::refineAtFullRate (float coarsePeriodIn) noexcept
             bestLag = lag;
         }
     }
+
+    if (scoreOut != nullptr)
+        *scoreOut = bestVal;
 
     float result = (float) bestLag;
 

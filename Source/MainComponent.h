@@ -50,6 +50,7 @@ public:
     void selectInputForSnapshot();
     void selectEqForSnapshot();
     void selectFreezeForSnapshot();
+    void selectTimbreForSnapshot();
     void selectVocalForSnapshot();
     void selectVocoderForSnapshot();
     void selectKeysForSnapshot();

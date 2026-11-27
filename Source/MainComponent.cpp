@@ -232,6 +232,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
         { "delay",  FxChain::stDelay,  true,  "delay",  "Delay",      pDelayOn,  { pDelayTime, pDelayFeedback, pDelayMix, pDelayHighcut, pDelayModRate, pDelayModDepth, pDelaySat, pDelaySmear } },
         { "tape",   FxChain::stTape,   true,  "tape",   "Tape",       pTapeOn,   { pTapeDrive, pTapeSoften, pTapeBump, pTapeMix } },
         { "freeze", FxChain::stFreeze, true,  "freeze", "Freeze",     pFreezeOn, { pFreezeLevel, pFreezeFadeIn, pFreezeFadeOut, pFreezeMotion } },
+        { "timbre", FxChain::stTimbre, true,  "timbre", "Timbre",     pTimbreOn, { pTimbreVoice, pTimbreBlend } },
         { "reverb", -1,                false, "reverb", "Reverb",     pRevOn,    { pRevSize, pRevDamp, pRevPre, pRevMod, pRevMix } },
         { "out",    -1,                false, "",       "Live out",   pLiveMute, { pLiveOut } },
         { "master", -1,                false, "",       "Master",     pMasterMute,{ pMasterGain } },
@@ -655,6 +656,18 @@ void MainComponent::selectEqForSnapshot()
     for (int i = 0; i < (int) fxDefs.size(); ++i)
     {
         if (fxDefs[(size_t) i].key == "eq")
+        {
+            selectFx (i);
+            return;
+        }
+    }
+}
+
+void MainComponent::selectTimbreForSnapshot()
+{
+    for (int i = 0; i < (int) fxDefs.size(); ++i)
+    {
+        if (fxDefs[(size_t) i].key == "timbre")
         {
             selectFx (i);
             return;

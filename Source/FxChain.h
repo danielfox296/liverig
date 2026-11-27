@@ -17,6 +17,7 @@
 #include "dsp/PlateVerb.h"
 #include "dsp/SpectralFreeze.h"
 #include "dsp/SubOctave.h"
+#include "dsp/TimbreVoice.h"
 
 namespace rig
 {
@@ -40,7 +41,9 @@ public:
     {
         stComp = 0, stEq, stFilter, stBoost, stDrive, stAmp, stCab,
         stOctave, stSub, stSynth, stPhaser, stChorus, stDelay, stTape, stFreeze,
-        numMovableStages   // 15 stages, 4 bits each — the order word holds 16
+        stTimbre,
+        numMovableStages   // 16 stages, 4 bits each — the order word is full;
+                           // a seventeenth needs a wider word first
     };
 
     // The chain is one channel's pedalboard: it reads that channel's copies
@@ -244,11 +247,17 @@ private:
     std::vector<float> frzBuf;
     bool frzHold = false;
 
+    // Timbre: the tracked note re-voiced as another instrument's harmonics,
+    // blended against the bass as it came in. Adds no latency.
+    TimbreVoice timbre;
+    juce::SmoothedValue<float> timbreMix;
+
     PlateVerb reverb;
     juce::SmoothedValue<float> reverbMix;
 
     juce::SmoothedValue<float> bypComp, bypEq, bypFilter, bypBoost, bypDrive, bypAmp, bypOct,
-                               bypSynth, bypPhaser, bypChorus, bypDelay, bypTape, bypReverb, bypCab, bypSub;
+                               bypSynth, bypPhaser, bypChorus, bypDelay, bypTape, bypReverb, bypCab, bypSub,
+                               bypTimbre;
 
     std::vector<float> carrierBuf;
 

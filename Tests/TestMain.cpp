@@ -32,6 +32,7 @@
 #include "dsp/OctaveShifter.h"
 #include "dsp/PitchTracker.h"
 #include "dsp/PlateVerb.h"
+#include "dsp/TimbreVoice.h"
 #include "dsp/VoiceTools.h"
 
 using namespace rig;
@@ -5236,6 +5237,621 @@ static void testFreezeOnRealBass (const juce::File& stem, int block)
     }
 }
 
+// High on the neck a period is only a dozen of the tracker's decimated
+// samples, and a clean note used to be handed down an octave whenever twice
+// its period happened to land squarer on a whole lag than the period did.
+static void testTrackerHighOnTheNeck (double sr, int block)
+{
+    std::printf ("\n Tracker high on the neck (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    int wrong = 0, looks = 0;
+    juce::String worstNote;
+    int worstCount = 0;
+
+    // Every semitone from the D string's octave to the top of a 24-fret neck.
+    for (int semitone = 0; semitone <= 17; ++semitone)
+    {
+        const double f0 = 146.83 * std::exp2 (semitone / 12.0);
+        const int n = (int) (sr * 1.5);
+        std::vector<float> in ((size_t) n);
+
+        for (int i = 0; i < n; ++i)
+        {
+            double s = 0.0;
+
+            for (int h = 0; h < 6; ++h)
+                s += std::sin (6.283185307179586 * f0 * (h + 1) * i / sr + 0.7 * h) / std::pow (h + 1.0, 1.2);
+
+            in[(size_t) i] = (float) (s * 0.2 * (1.0 - std::exp (-(i / sr) * 80.0)));
+        }
+
+        PitchTracker tracker;
+        tracker.prepare (sr);
+        int here = 0;
+
+        for (int i = 0; i + block <= n; i += block)
+        {
+            tracker.process (in.data() + i, block);
+
+            if (i < (int) (sr * 0.3))
+                continue;
+
+            ++looks;
+
+            if (tracker.getConfidence() < 0.5f || std::abs (cents (tracker.getFrequency(), f0)) > 30.0)
+            {
+                ++wrong;
+                ++here;
+            }
+        }
+
+        if (here > worstCount)
+        {
+            worstCount = here;
+            worstNote = juce::String (f0, 1) + " Hz";
+        }
+    }
+
+    report ("every note from D3 to G4 in its own octave", wrong == 0,
+            wrong == 0 ? juce::String (looks) + " looks, none off"
+                       : juce::String (wrong) + " of " + juce::String (looks) + " looks off, worst at " + worstNote);
+}
+
+//==============================================================================
+// The Timbre pedal.
+
+// A steady stack of harmonics at chosen levels — no envelope, no vibrato, so
+// a harmonic's level can be read to a fraction of a dB.
+static void makeStack (std::vector<float>& out, double sr, double f0, double seconds,
+                       float amp, const std::vector<double>& levels)
+{
+    const int n = (int) (sr * seconds);
+    out.assign ((size_t) n, 0.0f);
+
+    for (int i = 0; i < n; ++i)
+    {
+        const double fade = 1.0 - std::exp (-(i / sr) * 80.0);
+        double s = 0.0;
+
+        for (size_t h = 0; h < levels.size(); ++h)
+            s += levels[h] * std::sin (6.283185307179586 * f0 * (double) (h + 1) * i / sr + 0.7 * (double) h);
+
+        out[(size_t) i] = (float) (s * fade * amp);
+    }
+}
+
+// Nearer a real string than makeNote: the partials run sharp of whole
+// multiples the way a stiff string's do, the high ones die first, and each
+// note starts with a burst of pick noise. Notes are laid end to end.
+static void makeRiff (std::vector<float>& out, double sr, const std::vector<double>& notes,
+                      double noteSeconds, float amp)
+{
+    const int per = (int) (sr * noteSeconds);
+    out.assign ((size_t) per * notes.size(), 0.0f);
+    uint32_t seed = 22222u;
+
+    for (size_t k = 0; k < notes.size(); ++k)
+    {
+        const double f0 = notes[k];
+        static constexpr int partials = 12;
+        double phase[partials] {};
+
+        for (int i = 0; i < per; ++i)
+        {
+            const double t = i / sr;
+            double s = 0.0;
+
+            for (int h = 0; h < partials; ++h)
+            {
+                const double m = (double) (h + 1);
+                const double f = f0 * m * std::sqrt (1.0 + 2.0e-4 * m * m);
+                s += std::exp (-t * (1.2 + 0.9 * h)) / std::pow (m, 1.1) * std::sin (phase[h]);
+                phase[h] += 6.283185307179586 * f / sr;
+            }
+
+            seed = seed * 1664525u + 1013904223u;
+            const double pick = (double) (int32_t) seed * 4.6566129e-10 * 0.5 * std::exp (-t * 400.0);
+            const double release = std::min (1.0, (per - i) / (sr * 0.004));
+
+            out[per * k + (size_t) i] = (float) ((s * (1.0 - std::exp (-t * 900.0)) + pick) * release * amp * 0.5);
+        }
+    }
+}
+
+// Runs a chain with the Timbre pedal on, optionally changing one parameter
+// part-way through.
+static std::vector<float> renderTimbre (ParamStore& params, const std::vector<float>& in,
+                                        double sr, int block,
+                                        int changeAt = -1, int changeParam = -1, float changeTo = 0.0f)
+{
+    FxChain chain (params);
+    chain.prepare (sr, block);
+
+    std::vector<float> mono ((size_t) block), left ((size_t) block), right ((size_t) block);
+    std::vector<float> out;
+    out.reserve (in.size());
+
+    for (int i = 0; i + block <= (int) in.size(); i += block)
+    {
+        if (changeParam >= 0 && i >= changeAt)
+            params.set (changeParam, changeTo);
+
+        std::copy (in.begin() + i, in.begin() + i + block, mono.begin());
+        juce::ScopedNoDenormals noDenormals;
+        chain.process (mono.data(), left.data(), right.data(), block);
+
+        for (int k = 0; k < block; ++k)
+            out.push_back (left[(size_t) k]);
+    }
+
+    return out;
+}
+
+static int timbreIndex (const char* name)
+{
+    for (int i = 0; i < numTimbreProfiles; ++i)
+        if (juce::String (timbreProfiles[i].name) == name)
+            return i;
+
+    return 0;
+}
+
+static void testTimbre (double sr, int block)
+{
+    std::printf ("\nTimbre  (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    const auto at = [sr, block] (double seconds) { return ((int) (sr * seconds) / block) * block; };
+    const auto dB = [] (double ratio) { return 20.0 * std::log10 (ratio + 1.0e-12); };
+
+    const auto voiced = [] (ParamStore& p, const char* instrument, float blend = 1.0f)
+    {
+        p.set (pTimbreOn, 1.0f);
+        p.set (pTimbreVoice, (float) timbreIndex (instrument));
+        p.set (pTimbreBlend, blend);
+    };
+
+    const std::vector<double> stringish { 1.0, 0.45, 0.30, 0.22, 0.17, 0.13 };
+    const int from = at (0.8), len = at (1.0);
+
+    // Blend at nothing is the bass, sample for sample.
+    {
+        std::vector<float> note;
+        makeNote (note, sr, 55.0, 2.0, 0.4f);
+
+        ParamStore off;
+        ParamStore on;
+        voiced (on, "Trumpet", 0.0f);
+
+        const auto plain = renderChain (off, note, sr, block);
+        const auto zero = renderChain (on, note, sr, block);
+
+        report ("Blend at zero is the bass untouched", plain == zero,
+                "sample for sample the same as a board without the pedal");
+    }
+
+    // The voice sits on the played pitch, all the way up the neck.
+    {
+        double worst = 0.0;
+        juce::String worstAt;
+
+        for (double f0 : { 30.87, 41.20, 55.00, 82.41, 110.00, 146.83, 196.00, 261.63, 392.00 })
+        {
+            std::vector<float> in;
+            makeStack (in, sr, f0, 2.0, 0.25f, stringish);
+
+            ParamStore p;
+        voiced (p, "Cello");
+            const auto out = renderTimbre (p, in, sr, block);
+            const double off = cents (estimateF0 (out.data() + from, at (0.6), sr, f0 * 0.6, f0 * 1.7), f0);
+
+            if (std::abs (off) > std::abs (worst))
+            {
+                worst = off;
+                worstAt = juce::String (f0, 1) + " Hz";
+            }
+        }
+
+        report ("on pitch from low B to the top of the neck", std::abs (worst) < 3.0,
+                "worst " + juce::String (worst, 2) + " cents, at " + worstAt);
+    }
+
+    // The table is what comes out. The organ has no resonances to bend the
+    // numbers, so its harmonics should land where its entry says.
+    {
+        const double f0 = 110.0;
+        std::vector<float> in;
+        makeStack (in, sr, f0, 2.2, 0.25f, stringish);
+
+        ParamStore p;
+        voiced (p, "Organ");
+        const auto out = renderTimbre (p, in, sr, block);
+        const auto h = [&] (int n) { return goertzel (out.data() + from, len, sr, f0 * n); };
+
+        const auto& organ = timbreProfiles[timbreIndex ("Organ")];
+        double worst = 0.0;
+
+        for (int n : { 2, 3, 4, 5, 6, 8 })
+            worst = std::max (worst, std::abs (dB (h (n) / h (1)) - dB (organ.harmonic[n - 1])));
+
+        report ("harmonics land where the profile says", worst < 0.5,
+                "organ's 2nd-8th within " + juce::String (worst, 2) + " dB of its table");
+        report ("a harmonic the profile leaves out is out", dB (h (7) / h (1)) < -50.0,
+                "organ's 7th at " + juce::String (dB (h (7) / h (1)), 1) + " dB, the string's was at "
+                    + juce::String (dB (goertzel (in.data() + from, len, sr, f0 * 2) / goertzel (in.data() + from, len, sr, f0)), 1)
+                    + " dB for its 2nd");
+    }
+
+    // Taking away: a string whose second harmonic towers over its
+    // fundamental, voiced as a clarinet, which has almost none.
+    {
+        const double f0 = 55.0;
+        std::vector<float> in;
+        makeStack (in, sr, f0, 2.2, 0.2f, { 0.2, 1.0, 0.15 });
+
+        ParamStore p;
+        voiced (p, "Clarinet");
+        const auto out = renderTimbre (p, in, sr, block);
+
+        const double before = dB (goertzel (in.data() + from, len, sr, 2 * f0) / goertzel (in.data() + from, len, sr, f0));
+        const double after = dB (goertzel (out.data() + from, len, sr, 2 * f0) / goertzel (out.data() + from, len, sr, f0));
+        const double pitch = cents (estimateF0 (out.data() + from, at (0.6), sr, 35.0, 90.0), f0);
+
+        report ("an existing harmonic is taken away", before > 10.0 && after < -20.0 && std::abs (pitch) < 5.0,
+                "2nd against fundamental: " + juce::String (before, 1) + " dB in, " + juce::String (after, 1)
+                    + " dB out, still on " + juce::String (f0, 0) + " Hz");
+    }
+
+    // Adding: a pure tone has no harmonics to shape, and brass needs them.
+    {
+        const double f0 = 82.41;
+        std::vector<float> in;
+        makeSine (in, sr, f0, 2.2, 0.25f);
+
+        ParamStore p;
+        voiced (p, "Trumpet");
+        const auto out = renderTimbre (p, in, sr, block);
+
+        const double before = dB (goertzel (in.data() + from, len, sr, 5 * f0) / goertzel (in.data() + from, len, sr, f0));
+        const double after = dB (goertzel (out.data() + from, len, sr, 5 * f0) / goertzel (out.data() + from, len, sr, f0));
+
+        report ("a missing harmonic is put in", before < -50.0 && after > -6.0,
+                "5th against fundamental: " + juce::String (before, 1) + " dB in, " + juce::String (after, 1) + " dB out");
+    }
+
+    // The instruments are different sounds, and each as loud as the bass.
+    {
+        const double f0 = 82.41;
+        std::vector<float> in;
+        makeStack (in, sr, f0, 2.2, 0.25f, stringish);
+
+        const double inRms = rmsOf (in.data() + from, len);
+        double worstLevel = 0.0, closest = 1.0e9;
+        std::vector<std::vector<double>> spectra;
+
+        for (int v = 0; v < numTimbreProfiles; ++v)
+        {
+            ParamStore p;
+            p.set (pTimbreOn, 1.0f);
+            p.set (pTimbreVoice, (float) v);
+
+            const auto out = renderTimbre (p, in, sr, block);
+            const double level = dB (rmsOf (out.data() + from, len) / inRms);
+
+            if (std::abs (level) > std::abs (worstLevel))
+                worstLevel = level;
+
+            std::vector<double> s;
+
+            for (int n = 1; n <= 16; ++n)
+                s.push_back (std::max (-60.0, dB (goertzel (out.data() + from, len, sr, f0 * n)
+                                                    / goertzel (out.data() + from, len, sr, f0))));
+
+            for (const auto& other : spectra)
+            {
+                double apart = 0.0;
+
+                for (size_t n = 0; n < s.size(); ++n)
+                    apart = std::max (apart, std::abs (s[n] - other[n]));
+
+                closest = std::min (closest, apart);
+            }
+
+            spectra.push_back (s);
+        }
+
+        report ("every instrument plays at the level of the bass", std::abs (worstLevel) < 1.0,
+                "furthest is " + juce::String (worstLevel, 2) + " dB from what was played");
+        report ("no two instruments are the same sound", closest > 10.0,
+                "the two nearest still differ by " + juce::String (closest, 1) + " dB on some harmonic");
+    }
+
+    // In phase with the string, so a blend adds the two fundamentals instead
+    // of letting them cancel. Steady, and through vibrato wider than a hand's.
+    {
+        const double f0 = 110.0;
+        const int n = (int) (sr * 3.0);
+
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            std::vector<float> in ((size_t) n);
+            double phase = 0.0;
+
+            for (int i = 0; i < n; ++i)
+            {
+                const double bend = pass == 0 ? 1.0
+                                              : std::exp2 (0.30 / 12.0 * std::sin (6.283185307179586 * 5.0 * i / sr));
+                in[(size_t) i] = (float) (0.25 * std::sin (phase));
+                phase += 6.283185307179586 * f0 * bend / sr;
+            }
+
+            ParamStore p;
+        voiced (p, "Flute");
+            const auto out = renderTimbre (p, in, sr, block);
+
+            double xy = 0.0, xx = 0.0;
+
+            for (int i = from; i < from + at (1.8); ++i)
+            {
+                xy += (double) in[(size_t) i] * out[(size_t) i];
+                xx += (double) in[(size_t) i] * in[(size_t) i];
+            }
+
+            // The flute's fundamental carries 0.93 of its level; anything
+            // under that is phase lost.
+            const double inPhase = xy / xx;
+
+            report (pass == 0 ? "the new fundamental is in phase with the string's"
+                              : "and stays in phase through a 30-cent vibrato",
+                    inPhase > 0.88 && inPhase < 0.98,
+                    juce::String (inPhase, 3) + " of the string's fundamental lands in phase (0.93 is all of it)");
+        }
+    }
+
+    // A bell is not a harmonic series: its minor third sits between them.
+    {
+        const double f0 = 110.0;
+        std::vector<float> in;
+        makeStack (in, sr, f0, 2.2, 0.25f, stringish);
+
+        ParamStore p;
+        voiced (p, "Bell");
+        const auto out = renderTimbre (p, in, sr, block);
+
+        const double third = dB (goertzel (out.data() + from, len, sr, f0 * 2.4) / goertzel (out.data() + from, len, sr, f0));
+        const double was = dB (goertzel (in.data() + from, len, sr, f0 * 2.4) / goertzel (in.data() + from, len, sr, f0));
+
+        report ("the bell has partials between the harmonics", third > -12.0 && was < -40.0,
+                "at 2.4x the note: " + juce::String (std::max (-120.0, was), 1) + " dB in, " + juce::String (third, 1) + " dB out");
+    }
+
+    // What it cannot name it leaves alone.
+    {
+        std::vector<float> silence ((size_t) at (1.0), 0.0f);
+        ParamStore p;
+        voiced (p, "Cello");
+        const auto quiet = renderTimbre (p, silence, sr, block);
+
+        report ("silence in, silence out", rmsOf (quiet.data(), (int) quiet.size()) < 1.0e-6,
+                "rms " + juce::String (rmsOf (quiet.data(), (int) quiet.size()), 8));
+
+        std::vector<float> noise ((size_t) at (2.0));
+        uint32_t seed = 12345u;
+
+        for (auto& s : noise)
+        {
+            seed = seed * 1664525u + 1013904223u;
+            s = (float) (int32_t) seed * 4.6566129e-10f * 0.1f;
+        }
+
+        ParamStore off;
+        const auto plain = renderChain (off, noise, sr, block);
+        const auto through = renderTimbre (p, noise, sr, block);
+
+        double diff = 0.0;
+
+        for (size_t i = 0; i < plain.size(); ++i)
+            diff += (double) (plain[i] - through[i]) * (plain[i] - through[i]);
+
+        const double changed = dB (std::sqrt (diff / plain.size()) / rmsOf (plain.data(), (int) plain.size()));
+
+        report ("a sound with no pitch passes as it came", changed < -40.0,
+                changed < -200.0 ? juce::String ("noise comes out sample for sample as it went in") : "noise comes out " + juce::String (changed, 1) + " dB changed");
+    }
+
+    // Real playing: plucked notes end to end, each with its pick noise and a
+    // stiff string's sharp partials. The old note must not sing on under the
+    // new one, and the new one must arrive on pitch.
+    {
+        const std::vector<double> notes { 55.0, 82.41, 41.20, 61.74, 110.0, 73.42 };
+        const double each = 0.6;
+        std::vector<float> in;
+        makeRiff (in, sr, notes, each, 0.5f);
+
+        ParamStore p;
+        voiced (p, "Clarinet");
+        const auto out = renderTimbre (p, in, sr, block);
+
+        double worstPitch = 0.0, worstGhost = -200.0, worstPeak = 0.0;
+        bool finite = true;
+
+        for (float s : out)
+            finite = finite && std::isfinite (s);
+
+        for (size_t k = 0; k < notes.size(); ++k)
+        {
+            const int start = (int) (sr * each) * (int) k;
+            const int body = start + (int) (sr * 0.25);
+            const int bodyLen = (int) (sr * 0.3);
+
+            if (body + bodyLen > (int) out.size())
+                break;
+
+            const double got = estimateF0 (out.data() + body, bodyLen, sr, notes[k] * 0.6, notes[k] * 1.7);
+            const double off = cents (got, notes[k]);
+
+            if (std::abs (off) > std::abs (worstPitch))
+                worstPitch = off;
+
+            // The clarinet's third harmonic of the previous note, looked for
+            // in the first 60 ms of this one, against how loud this one is.
+            if (k > 0)
+            {
+                const int w = (int) (sr * 0.06);
+                const double ghostHz = notes[k - 1] * 3.0;
+                const double ghost = goertzel (out.data() + start, w, sr, ghostHz);
+                const double dry = goertzel (in.data() + start, w, sr, ghostHz);
+                const double loud = rmsOf (out.data() + start, w) * 1.414;
+
+                worstGhost = std::max (worstGhost, dB (std::max (0.0, ghost - dry) / loud));
+            }
+
+            for (int i = start; i < start + (int) (sr * each) && i < (int) out.size(); ++i)
+                worstPeak = std::max (worstPeak, (double) std::abs (out[(size_t) i]));
+        }
+
+        float inPeak = 0.0f;
+
+        for (float s : in)
+            inPeak = std::max (inPeak, std::abs (s));
+
+        report ("each plucked note arrives on its own pitch", std::abs (worstPitch) < 10.0,
+                "worst " + juce::String (worstPitch, 1) + " cents across six notes");
+        report ("the last note does not sing on under the next", worstGhost < -20.0,
+                "its harmonic is " + juce::String (worstGhost, 1) + " dB under the new note's first 60 ms");
+        report ("no blow-ups on note changes", finite && worstPeak < inPeak * 2.0,
+                "peak " + juce::String (worstPeak, 3) + " against " + juce::String (inPeak, 3) + " played");
+    }
+
+    // Changing instrument, or stepping on the pedal, in the middle of a
+    // held note: no click.
+    {
+        const double f0 = 110.0;
+        std::vector<float> in;
+        makeStack (in, sr, f0, 2.4, 0.25f, stringish);
+
+        ParamStore swap;
+        voiced (swap, "Flute");
+        const auto swapped = renderTimbre (swap, in, sr, block, at (1.2), pTimbreVoice, (float) timbreIndex ("Trumpet"));
+
+        ParamStore steady;
+        voiced (steady, "Trumpet");
+        const auto reference = renderTimbre (steady, in, sr, block);
+
+        const double usual = largestStep (reference, at (1.8), at (2.2));
+        const double atSwap = largestStep (swapped, at (1.2) - 8, at (1.3));
+
+        report ("changing instrument mid-note does not click", atSwap < usual * 1.3,
+                "largest step " + juce::String (atSwap, 4) + " at the change, " + juce::String (usual, 4) + " in the steady tone");
+
+        ParamStore stomp;
+        stomp.set (pTimbreVoice, (float) timbreIndex ("Trumpet"));
+        const auto stomped = renderTimbre (stomp, in, sr, block, at (1.2), pTimbreOn, 1.0f);
+        const double atStomp = largestStep (stomped, at (1.2) - 8, at (1.3));
+
+        report ("stepping on it mid-note does not click", atStomp < usual * 1.3,
+                "largest step " + juce::String (atStomp, 4) + " at the stomp");
+
+        const double settled = dB (rmsOf (stomped.data() + at (1.8), at (0.4)) / rmsOf (reference.data() + at (1.8), at (0.4)));
+
+        report ("and it is fully there within the bypass fade", std::abs (settled) < 0.2,
+                juce::String (settled, 2) + " dB against a pedal that was on all along");
+    }
+
+    // What it costs on its worst note: a low E as brass, every partial lit.
+    {
+        std::vector<float> in;
+        makeStack (in, sr, 41.2, 4.0, 0.25f, stringish);
+
+        PitchTracker tracker;
+        tracker.prepare (sr);
+        TimbreVoice voice;
+        voice.prepare (sr);
+        voice.setProfile (timbreIndex ("Trumpet"));
+
+        std::vector<float> buf ((size_t) block);
+        double total = 0.0, worst = 0.0;
+        int blocks = 0;
+
+        for (int i = 0; i + block <= (int) in.size(); i += block)
+        {
+            std::copy (in.begin() + i, in.begin() + i + block, buf.begin());
+            tracker.process (buf.data(), block);
+            voice.setPitch (tracker.getPeriodSamples(), tracker.getConfidence());
+
+            juce::ScopedNoDenormals noDenormals;
+            const auto t0 = std::chrono::steady_clock::now();
+            voice.process (buf.data(), block, true);
+            const double us = std::chrono::duration<double, std::micro> (std::chrono::steady_clock::now() - t0).count();
+
+            if (i > at (1.0))
+            {
+                total += us;
+                worst = std::max (worst, us);
+                ++blocks;
+            }
+        }
+
+        const double budget = 1.0e6 * block / sr;
+        const double share = 100.0 * (total / blocks) / budget;
+
+        report ("cheap enough to leave on", share < 3.0 && voice.getVoicing() > 0.99f,
+                juce::String (share, 2) + "% of a block on average, worst block "
+                    + juce::String (worst, 1) + " of " + juce::String (budget, 0) + " us");
+    }
+}
+
+// Writes what the pedal does to a played line, one file per instrument, for
+// listening to away from the rig. The line is a stand-in for a bass — real
+// playing is the test that counts.
+static void writeTimbreDemos (const juce::File& dir)
+{
+    const double sr = 48000.0;
+    const int block = 64;
+
+    dir.createDirectory();
+
+    std::vector<float> line;
+    makeRiff (line, sr, { 41.20, 41.20, 55.00, 61.74, 82.41, 73.42, 55.00, 49.00,
+                          110.00, 98.00, 82.41, 61.74, 55.00, 41.20 }, 0.55, 0.3f);
+
+    const auto write = [&] (const juce::String& name, const std::vector<float>& x)
+    {
+        const auto file = dir.getChildFile (name + ".wav");
+        file.deleteFile();
+
+        juce::WavAudioFormat wav;
+        auto stream = std::unique_ptr<juce::FileOutputStream> (file.createOutputStream());
+
+        if (stream == nullptr)
+            return;
+
+        auto writer = std::unique_ptr<juce::AudioFormatWriter> (
+                          wav.createWriterFor (stream.get(), sr, 1, 24, {}, 0));
+
+        if (writer == nullptr)
+            return;
+
+        stream.release();
+        const float* channels[1] { x.data() };
+        writer->writeFromFloatArrays (channels, 1, (int) x.size());
+        std::printf ("  wrote %s\n", file.getFullPathName().toRawUTF8());
+    };
+
+    ParamStore off;
+    write ("0 dry", renderChain (off, line, sr, block));
+
+    for (int v = 0; v < numTimbreProfiles; ++v)
+    {
+        ParamStore p;
+        p.set (pTimbreOn, 1.0f);
+        p.set (pTimbreVoice, (float) v);
+        write (juce::String (v + 1) + " " + timbreProfiles[v].name, renderTimbre (p, line, sr, block));
+
+        p.set (pTimbreBlend, 0.5f);
+        write (juce::String (v + 1) + " " + timbreProfiles[v].name + " half blend", renderTimbre (p, line, sr, block));
+    }
+}
+
 static void testChannelParams()
 {
     std::printf ("\nChannel parameter store\n");
@@ -6477,6 +7093,24 @@ int main (int argc, char* argv[])
         return failures == 0 ? 0 : 1;
     }
 
+    // The timbre pedal on its own.
+    if (argc == 2 && juce::String (argv[1]) == "--timbre")
+    {
+        testTimbre (48000.0, 64);
+        testTimbre (44100.0, 128);
+        testTimbre (96000.0, 256);
+        std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASS" : "FAILURES",
+                     failures, failures == 1 ? "" : "s");
+        return failures == 0 ? 0 : 1;
+    }
+
+    // And its sound, written out for listening.
+    if (argc == 3 && juce::String (argv[1]) == "--timbre-demo")
+    {
+        writeTimbreDemos (juce::File (juce::String (argv[2])));
+        return 0;
+    }
+
     // The freeze on its own, for the same reason.
     if (argc == 2 && juce::String (argv[1]) == "--freeze")
     {
@@ -6512,6 +7146,8 @@ int main (int argc, char* argv[])
     testFreeze (48000.0, 64);
     testFreeze (44100.0, 64);
     testFreeze (96000.0, 256);
+    testTimbre (48000.0, 64);
+    testTimbre (44100.0, 128);
     testAmpStage (48000.0, 64);
     testVoiceTools (48000.0, 64);
     testCaptureLibrary();
@@ -6542,6 +7178,9 @@ int main (int argc, char* argv[])
     testTransposeComesBackTrue (48000.0, 64);
     testHoldSurvivesRealTracking (48000.0, 64);
     testTrackerOnDominantSecondHarmonic (48000.0, 64);
+    testTrackerHighOnTheNeck (48000.0, 64);
+    testTrackerHighOnTheNeck (44100.0, 64);
+    testTrackerHighOnTheNeck (96000.0, 256);
     testMidiThruGatesTheLiveLane (48000.0, 64);
     testLiveOutMute (48000.0, 64);
     testTunerFilter();
