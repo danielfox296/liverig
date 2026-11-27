@@ -947,8 +947,11 @@ function renderTune ()
         h ('div', { class: 'needle-wrap' }, h ('div', { class: 'needle-scale' }), h ('div', { class: 'needle-zone' }), needle),
         h ('div', { class: 'ticks' }, h ('span', {}, '−50'), h ('span', {}, '−25'), h ('span', {}, '0'), h ('span', {}, '+25'), h ('span', {}, '+50')),
         strings));
-    view.append (h ('div', { style: { marginTop: '14px' } }, segmented ({ options: [[0, 'BASS'], [1, 'GUITAR']], get: () => (state.tunerMode === 'guitar' ? 1 : 0),
-        set: (v) => { state.tunerMode = v ? 'guitar' : 'bass'; scheduleSave (); drawStrings (); } })));
+    // The switch is the strip's Range: it sets what the tracker listens for
+    // (octave, sub, synth and MIDI follow it too), not only the string row.
+    state.tunerMode = getP (strip.slot, 'inRange') > 0.5 ? 'guitar' : 'bass';
+    view.append (h ('div', { style: { marginTop: '14px' } }, segmented ({ options: [[0, 'BASS'], [1, 'GUITAR']], get: () => (getP (strip.slot, 'inRange') > 0.5 ? 1 : 0),
+        set: (v) => { setP (strip.slot, 'inRange', v); state.tunerMode = v ? 'guitar' : 'bass'; scheduleSave (); drawStrings (); } })));
     view.append (h ('p', { class: 'fine' }, 'Listening to ', h ('b', {}, strip.name), ' (pick another strip at the top). The reading is deliberately steadier than the tracker: a median over ~300 ms, a gliding needle and a note name that holds.'));
     Object.assign (tuneUi, { note, cents, needle, strings });
     function drawStrings ()

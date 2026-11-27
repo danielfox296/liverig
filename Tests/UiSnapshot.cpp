@@ -86,6 +86,8 @@ static int phoneShots (const juce::File& outDir)
     };
 
     shoot ("board");
+    main.selectInputForSnapshot();
+    shoot ("input");
     main.selectFxForSnapshot();
     shoot ("editor");
     main.selectEqForSnapshot();

@@ -7128,6 +7128,69 @@ static void testVoiceTools (double sr, int block)
     }
 }
 
+//==============================================================================
+// Guitar range: the strip's Range set to Guitar must track every string up
+// past the high E's 24th fret, and the octave-up must follow it there. The
+// bass tracker tops out at 500 Hz, which is the B string's 13th fret.
+static void testGuitarRange (double sr, int block)
+{
+    std::printf ("\nGuitar range  (%.0f Hz, %d-sample blocks)\n", sr, block);
+
+    // low E, A, D, G, B, high E open; then up the neck to the 24th fret
+    const double notes[] { 82.41, 110.00, 146.83, 196.00, 246.94, 329.63, 493.88, 659.26, 987.77, 1318.51 };
+
+    for (double f0 : notes)
+    {
+        std::vector<float> note;
+        makeNote (note, sr, f0, 0.9);
+
+        PitchTracker tracker;
+        tracker.prepare (sr, 12000.0, 60.0, 1500.0);
+
+        for (int i = 0; i + block <= (int) note.size(); i += block)
+            tracker.process (note.data() + i, block);
+
+        const double detected = sr / tracker.getPeriodSamples();
+        const double err = cents (detected, f0);
+
+        report (("tracks " + juce::String (f0, 2) + " Hz").toRawUTF8(),
+                std::abs (err) < 8.0 && tracker.getConfidence() > 0.5f,
+                juce::String (detected, 2) + " Hz, " + juce::String (err, 2) + " cents, conf "
+                    + juce::String (tracker.getConfidence(), 2));
+    }
+
+    for (double f0 : { 246.94, 659.26, 987.77 })
+    {
+        std::vector<float> note;
+        makeNote (note, sr, f0, 2.0, 0.35f);
+
+        PitchTracker tracker;
+        OctaveShifter shifter;
+        tracker.prepare (sr, 12000.0, 60.0, 1500.0);
+        shifter.prepare (sr);
+        shifter.setSemitones (12.0f);
+
+        std::vector<float> out ((size_t) note.size(), 0.0f);
+
+        for (int i = 0; i + block <= (int) note.size(); i += block)
+        {
+            tracker.process (note.data() + i, block);
+            shifter.setPeriod (tracker.getPeriodSamples());
+            std::copy (note.begin() + i, note.begin() + i + block, out.begin() + i);
+            shifter.process (out.data() + i, block);
+        }
+
+        const double expected = f0 * 2.0;
+        const int start = (int) (sr * 0.6), len = (int) (sr * 0.5);
+        const double measured = estimateF0 (out.data() + start, len, sr, expected * 0.45, expected * 2.2);
+        const double err = cents (measured, expected);
+
+        report (("octave up from " + juce::String (f0, 1) + " Hz").toRawUTF8(),
+                std::abs (err) < 12.0,
+                juce::String (measured, 2) + " Hz (" + juce::String (err, 1) + " cents)");
+    }
+}
+
 int main (int argc, char* argv[])
 {
     // The scan spawns this same binary as its disposable per-plugin worker.
@@ -7158,6 +7221,18 @@ int main (int argc, char* argv[])
     {
         testLooper (48000.0, 64);
         testLooper (44100.0, 128);
+        std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASS" : "FAILURES",
+                     failures, failures == 1 ? "" : "s");
+        return failures == 0 ? 0 : 1;
+    }
+
+    // The guitar range on its own.
+    if (argc == 2 && juce::String (argv[1]) == "--guitar")
+    {
+        testGuitarRange (48000.0, 64);
+        testGuitarRange (44100.0, 128);
+        testGuitarRange (48000.0, 256);
+        testGuitarRange (96000.0, 64);
         std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASS" : "FAILURES",
                      failures, failures == 1 ? "" : "s");
         return failures == 0 ? 0 : 1;
@@ -7212,6 +7287,7 @@ int main (int argc, char* argv[])
     testTrackerHard (48000.0, 64);
     testShifter (48000.0, 64);
     testShifter (44100.0, 32);
+    testGuitarRange (48000.0, 64);
     testNoteChanges (48000.0, 64);
     testOctaveStack (48000.0, 64);
     testEnvelopeFilter (48000.0, 64);

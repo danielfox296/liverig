@@ -414,7 +414,20 @@ export class PitchTracker
         {
             let doubled = 2 * best;
             for (let tau = 2 * best - 2; tau <= 2 * best + 2; ++tau) if (cmnd[tau] < cmnd[doubled]) doubled = tau;
-            if (cmnd[doubled] < 0.5 * cmnd[best] && cmnd[doubled] < 0.03) best = doubled;
+            if (cmnd[doubled] < 0.5 * cmnd[best] && cmnd[doubled] < 0.03)
+            {
+                // High on the neck a period is only a few decimated samples,
+                // so the true lag can look mediocre for no reason but a
+                // half-sample miss while twice it lands square. Ask again at
+                // the full rate, both over the longer lag's window, and take
+                // the octave below only if it really is better.
+                const longPeriod = doubled * this.decim;
+                this.refine (best * this.decim, longPeriod);
+                const shortScore = this.lastScore;
+                this.refine (longPeriod, longPeriod);
+                const longScore = this.lastScore;
+                if (shortScore < -1.5 || longScore < -1.5 || longScore > shortScore + 0.005) best = doubled;
+            }
         }
         const quality = cmnd[best];
         if (quality > 0.4) { this.confidence = 0; return; }
@@ -430,11 +443,15 @@ export class PitchTracker
         if (conf < 0.7 && delta > 0.05 * this.period && this.confidence > 0.5) { this.confidence = conf * 0.5; return; }
         this.period = refined; this.confidence = conf;
     }
-    refine (coarse)
+    // The fractional best lag near `coarse`; its score (-1..1, at the
+    // interpolated peak) is left in lastScore, -2 when there was too little
+    // history to say. The correlation runs over windowPeriod when given.
+    refine (coarse, windowPeriod = 0)
     {
+        this.lastScore = -2;
         const p0 = Math.round (coarse), search = Math.max (1, this.decim);
         const lo = Math.max (8, p0 - search), hi = p0 + search;
-        const Wf = clamp (p0, 256, 1024);
+        const Wf = clamp (windowPeriod > 0 ? Math.round (windowPeriod) : p0, 256, 1024);
         if (Wf + hi + 4 >= this.frBuf.length) return coarse;
         const total = Wf + hi, fs = this.frScratch, fb = this.frBuf, m = this.frMask, fw = this.frWrite;
         for (let i = 0; i < total; ++i) fs[i] = fb[(fw - total + i) & m];
@@ -451,12 +468,17 @@ export class PitchTracker
             df[lag - lo] = score;
             if (score > bestVal) { bestVal = score; bestLag = lag; }
         }
-        let result = bestLag;
+        let result = bestLag, peak = bestVal;
         if (bestLag > lo && bestLag < hi)
         {
             const s0 = df[bestLag - 1 - lo], s1 = df[bestLag - lo], s2 = df[bestLag + 1 - lo], den = s0 + s2 - 2 * s1;
-            if (Math.abs (den) > 1e-12) result = bestLag - 0.5 * (s2 - s0) / den;
+            if (Math.abs (den) > 1e-12)
+            {
+                result = bestLag - 0.5 * (s2 - s0) / den;
+                peak = Math.min (1, s1 - 0.125 * (s2 - s0) * (s2 - s0) / den);
+            }
         }
+        this.lastScore = peak;
         return clamp (result, 8, this.maxPeriod);
     }
 }

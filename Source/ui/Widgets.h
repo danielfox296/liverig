@@ -176,8 +176,12 @@ public:
                             : 0;
 
         // Named steps read best as a menu, however many there are.
-        mode = steps == 2 ? Mode::toggle
-                          : ((steps >= 3 && steps <= 5) || (s.choices != nullptr && steps > 2) ? Mode::menu : Mode::fader);
+        // An Off / On pair is a switch; any other pair of names (Bass /
+        // Guitar) reads as a choice, not as a thing switched on.
+        const bool named = s.choices != nullptr && juce::String (s.choices[0]) != "Off";
+
+        mode = steps == 2 && ! named ? Mode::toggle
+                          : ((steps >= 2 && steps <= 5) || (named && steps > 2) ? Mode::menu : Mode::fader);
 
         name.setText (s.label, juce::dontSendNotification);
         name.setFont (rigFont (12.0f));

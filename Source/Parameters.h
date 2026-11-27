@@ -22,6 +22,11 @@ enum ParamId
     pInGain,
     pInMute,
 
+    // What the pitch tracker listens for on this strip: a bass (26-500 Hz)
+    // or a guitar (60-1500 Hz, up past the high E's 24th fret). The octave,
+    // sub, synth, timbre, MIDI and tuner all ride the tracker.
+    pInRange,
+
     pCompOn, pCompThresh, pCompRatio, pCompAttack, pCompRelease, pCompMakeup, pCompBlend,
     pCompSidechain,
 

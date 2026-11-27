@@ -63,7 +63,10 @@ export class Chain
         this.ampIn = R (); this.ampOut = R (); this.amp = new Convolver ();
         this.cab = new CabSim (sr);
         this.sub = new SubOctave (sr); this.subLevel = R (); this.subBuf = new Float32Array (B); this.subDiv = 1;
-        this.tracker = new PitchTracker (sr);
+        // One tracker per Range; only the strip's chosen one runs.
+        this.bassTracker = new PitchTracker (sr);
+        this.guitarTracker = new PitchTracker (sr, { decRateTarget: 12000, fMin: 60, fMax: 1500 });
+        this.tracker = this.bassTracker;
         this.segmenter = new NoteSegmenter (sr);
         this.shifter = new OctaveShifter (sr); this.shifter2 = new OctaveShifter (sr);
         this.octMix = R (); this.oct2Lvl = R (); this.octBuf = new Float32Array (B);
@@ -482,6 +485,7 @@ export class Chain
 
         if (this.needTracker)
         {
+            this.tracker = this.p ('inRange') > 0.5 ? this.guitarTracker : this.bassTracker;
             this.tracker.process (mono, n);
             const per = this.tracker.period;
             this.shifter.setPeriod (per); this.shifter2.setPeriod (per); this.sub.setPeriod (per);

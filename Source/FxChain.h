@@ -183,7 +183,10 @@ private:
     int midiEventCount = 0;
     std::atomic<int> soundingNote { -1 };
 
-    PitchTracker tracker;
+    // Two trackers, one per range; only the strip's chosen one runs. Both
+    // are prepared up front so switching never allocates on the audio thread.
+    PitchTracker bassTracker, guitarTracker;
+    PitchTracker* tracker = &bassTracker;
     OctaveShifter shifter, shifter2;
     juce::SmoothedValue<float> octMix, oct2Lvl;
     std::vector<float> octBuf;

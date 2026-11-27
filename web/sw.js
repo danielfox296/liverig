@@ -1,5 +1,5 @@
 // Offline shell: the rig keeps working at a gig with no signal.
-const CACHE = 'liverig-v1';
+const CACHE = 'liverig-v2';
 const FILES = ['./', 'index.html', 'style.css', 'icon.png', 'manifest.webmanifest',
                'js/app.js', 'js/model.js', 'js/foot.js', 'js/data.js', 'js/dsp.js', 'js/engine.js', 'js/worklet-main.js'];
 self.addEventListener ('install', (e) => e.waitUntil (caches.open (CACHE).then ((c) => c.addAll (FILES)).then (() => self.skipWaiting ())));
