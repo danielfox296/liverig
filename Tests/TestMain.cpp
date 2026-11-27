@@ -5757,6 +5757,82 @@ static void testTimbre (double sr, int block)
                 juce::String (settled, 2) + " dB against a pedal that was on all along");
     }
 
+    // Bloom: how long the voice takes to open out of the pluck. A longer
+    // bloom must be a slower rise from the same moment, never a later one.
+    {
+        std::vector<float> in;
+        makeRiff (in, sr, { 55.0, 82.41 }, 1.2, 0.5f);
+
+        const auto riseOf = [&] (float bloomMs, double& startsAt)
+        {
+            PitchTracker tracker;
+            tracker.prepare (sr);
+            TimbreVoice voice;
+            voice.prepare (sr);
+            voice.setBloom (bloomMs);
+
+            std::vector<float> buf ((size_t) block);
+            const int second = (int) (sr * 1.2);
+            double low = -1.0, high = -1.0;
+
+            for (int i = 0; i + block <= (int) in.size(); i += block)
+            {
+                std::copy (in.begin() + i, in.begin() + i + block, buf.begin());
+                tracker.process (buf.data(), block);
+                voice.setPitch (tracker.getPeriodSamples(), tracker.getConfidence());
+                voice.process (buf.data(), block, true);
+
+                // The second note: the voice has let go at its pluck and
+                // comes back.
+                const double ms = 1000.0 * (i + block - second) / sr;
+
+                if (ms < 20.0)
+                    continue;
+
+                if (low < 0.0 && voice.getVoicing() > 0.02f)   low = ms;
+                if (high < 0.0 && voice.getVoicing() > 0.98f)  high = ms;
+            }
+
+            startsAt = low;
+            return high - low;
+        };
+
+        double quickStart = 0.0, slowStart = 0.0;
+        const double quick = riseOf (0.0f, quickStart);
+        const double slow = riseOf (300.0f, slowStart);
+        const double blockMs = 1000.0 * block / sr;
+
+        report ("Bloom at zero is as quick as it was", quick < 12.0,
+                "the voice is up " + juce::String (quick, 1) + " ms after it starts");
+        report ("Bloom at 300 ms takes 300 ms to rise", std::abs (slow - 288.0) < 15.0 + blockMs,
+                juce::String ((int) std::lround (slow)) + " ms from 2% to 98%");
+        report ("and starts at the same moment, not later", std::abs (slowStart - quickStart) <= 2.0 * blockMs + 7.0,
+                "rise begins " + juce::String ((int) std::lround (quickStart)) + " ms after the pluck quick, "
+                    + juce::String ((int) std::lround (slowStart)) + " ms bloomed (its first 2% takes 6 ms longer)");
+
+        // Through the pedal's own fader: the organ's 8th harmonic is in the
+        // voice and not in the string, so its level is the voice's level.
+        const auto eighth = [&] (float bloomMs, double fromSeconds)
+        {
+            ParamStore p;
+            voiced (p, "Organ");
+            p.set (pTimbreBloom, bloomMs);
+
+            std::vector<float> note;
+            makeStack (note, sr, 110.0, 2.0, 0.25f, stringish);
+            const auto out = renderTimbre (p, note, sr, block);
+
+            return goertzel (out.data() + at (fromSeconds), at (0.1), sr, 880.0);
+        };
+
+        const double early = dB (eighth (400.0f, 0.15) / eighth (0.0f, 0.15));
+        const double late = dB (eighth (400.0f, 1.5) / eighth (0.0f, 1.5));
+
+        report ("the Bloom fader reaches the voice", early < -4.0 && std::abs (late) < 0.3,
+                "bloomed voice " + juce::String (early, 1) + " dB under the quick one at 150 ms, "
+                    + juce::String (late, 2) + " dB at 1.5 s");
+    }
+
     // What it costs on its worst note: a low E as brass, every partial lit.
     {
         std::vector<float> in;
@@ -5849,6 +5925,10 @@ static void writeTimbreDemos (const juce::File& dir)
 
         p.set (pTimbreBlend, 0.5f);
         write (juce::String (v + 1) + " " + timbreProfiles[v].name + " half blend", renderTimbre (p, line, sr, block));
+
+        p.set (pTimbreBlend, 1.0f);
+        p.set (pTimbreBloom, 250.0f);
+        write (juce::String (v + 1) + " " + timbreProfiles[v].name + " bloom 250 ms", renderTimbre (p, line, sr, block));
     }
 }
 

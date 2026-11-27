@@ -148,7 +148,7 @@ any order in the app; Input, Reverb and Live out hold their places.
 | 11 | Delay | time, feedback, mix, high cut, mod rate, mod depth, sat |
 | 12 | Tape | drive, soften, bump, mix — tape-machine warmth |
 | — | Freeze | level, fade in, fade out, motion — its switch holds what is sounding for as long as it is lit |
-| — | Timbre | instrument, blend — the played note re-voiced with another instrument's harmonics |
+| — | Timbre | instrument, blend, bloom — the played note re-voiced with another instrument's harmonics |
 | 13 | Pedal | a hosted AU/VST3 effect as a chain insert — pick it, drag it anywhere |
 | 14 | Reverb | size, damping, mix — Freeverb, mono in / stereo out |
 | 15 | Live out | lane gain |
@@ -218,6 +218,12 @@ on the pitch you played, for as long as the string rings.
 - **Blend** runs from the bass as it is to the new voice alone. The new
   fundamental is locked in phase with the string's, so half blend adds the
   two rather than thinning the bottom.
+- **Bloom** is how long the new voice takes to rise once the pedal has the
+  note, from nothing (as quick as it can without a click) to a second. It
+  does not make the voice any later: the rise starts at the same moment
+  wherever the fader is, and the bass underneath gives way at the same
+  rate. So a short wait followed by a switch becomes a note that opens out
+  of its own pluck.
 - **The pluck stays yours.** The pedal only speaks once it knows the note —
   about a twentieth of a second after the pluck on the low strings, less
   higher up — and until then the bass goes by untouched. So every note

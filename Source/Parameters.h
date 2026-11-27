@@ -69,7 +69,8 @@ enum ParamId
     // Timbre: the played note re-voiced as another instrument's harmonics.
     // Voice picks the instrument; Blend runs from the bass as it is to the
     // new voice alone.
-    pTimbreOn, pTimbreVoice, pTimbreBlend,
+    // Bloom is how long the new voice takes to rise out of each pluck.
+    pTimbreOn, pTimbreVoice, pTimbreBlend, pTimbreBloom,
 
     pRevOn, pRevSize, pRevDamp, pRevPre, pRevMod, pRevMix,
 

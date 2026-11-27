@@ -466,6 +466,7 @@ void FxChain::updateFromParams() noexcept
 
     timbre.setProfile ((int) std::lround (params.get (pTimbreVoice)));
     timbreMix.setTargetValue (std::clamp (params.get (pTimbreBlend), 0.0f, 1.0f));
+    timbre.setBloom (params.get (pTimbreBloom));
 
     reverb.setSize (params.get (pRevSize));
     reverb.setDamping (params.get (pRevDamp));

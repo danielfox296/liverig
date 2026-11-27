@@ -52,6 +52,12 @@ public:
 
     void setProfile (int index) noexcept;
 
+    // How long the voice takes to rise once it has the note, in ms. It
+    // starts rising at the same moment whatever this is set to — a longer
+    // bloom is a slower arrival, not a later one — and the bass underneath
+    // gives way at the same rate, so each note opens out of its own pluck.
+    void setBloom (float milliseconds) noexcept;
+
     // From the chain's tracker, once a block.
     void setPitch (float periodSamples, float confidence) noexcept;
 
@@ -109,7 +115,9 @@ private:
     // period before its stillness means anything.
     int settling = 0;
 
-    float gate = 0.0f, gateUp = 0.01f, gateDown = 0.005f;
+    // Up in a straight line over the bloom; down quickly, because a voice
+    // that has lost its note has to be out of the way of the next pluck.
+    float gate = 0.0f, bloomMs = 0.0f, bloomStep = 0.01f, gateDown = 0.005f;
 
     // Partial levels move in straight lines between control ticks.
     int controlLength = 32, untilControl = 0, active = 0;

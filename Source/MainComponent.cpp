@@ -232,7 +232,7 @@ MainComponent::MainComponent (ParamStore& p, AudioEngine& e, SettingsStore& s)
         { "delay",  FxChain::stDelay,  true,  "delay",  "Delay",      pDelayOn,  { pDelayTime, pDelayFeedback, pDelayMix, pDelayHighcut, pDelayModRate, pDelayModDepth, pDelaySat, pDelaySmear } },
         { "tape",   FxChain::stTape,   true,  "tape",   "Tape",       pTapeOn,   { pTapeDrive, pTapeSoften, pTapeBump, pTapeMix } },
         { "freeze", FxChain::stFreeze, true,  "freeze", "Freeze",     pFreezeOn, { pFreezeLevel, pFreezeFadeIn, pFreezeFadeOut, pFreezeMotion } },
-        { "timbre", FxChain::stTimbre, true,  "timbre", "Timbre",     pTimbreOn, { pTimbreVoice, pTimbreBlend } },
+        { "timbre", FxChain::stTimbre, true,  "timbre", "Timbre",     pTimbreOn, { pTimbreVoice, pTimbreBlend, pTimbreBloom } },
         { "reverb", -1,                false, "reverb", "Reverb",     pRevOn,    { pRevSize, pRevDamp, pRevPre, pRevMod, pRevMix } },
         { "out",    -1,                false, "",       "Live out",   pLiveMute, { pLiveOut } },
         { "master", -1,                false, "",       "Master",     pMasterMute,{ pMasterGain } },

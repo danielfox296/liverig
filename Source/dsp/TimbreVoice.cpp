@@ -62,8 +62,9 @@ void TimbreVoice::prepare (double sampleRate)
     controlLength = std::max (16, (int) std::lround (32.0 * sr / 48000.0));
     ampCoef = (float) (1.0 - std::exp (-(double) controlLength / (0.010 * sr)));
 
-    gateUp   = (float) (1.0 - std::exp (-1.0 / (0.006 * sr)));
     gateDown = (float) (1.0 - std::exp (-1.0 / (0.004 * sr)));
+
+    setBloom (bloomMs);   // the same time, at the new rate
 
     profileIndex = -1;
     setProfile (0);
@@ -158,6 +159,15 @@ void TimbreVoice::setProfile (int index) noexcept
 
     // The off-series partials turn at their own rates, set from the pitch.
     setPitch (period, tracked ? 1.0f : 0.0f);
+}
+
+void TimbreVoice::setBloom (float milliseconds) noexcept
+{
+    bloomMs = milliseconds;
+
+    // Never quicker than 5 ms: at nothing, the voice would arrive as a
+    // click.
+    bloomStep = (float) (1.0 / (std::max (5.0, (double) milliseconds) * 0.001 * sr));
 }
 
 void TimbreVoice::setWindow (int length) noexcept
@@ -436,7 +446,10 @@ void TimbreVoice::process (float* data, int numSamples, bool audible) noexcept
         const bool steady = settling == 0 && std::abs (drift) < maxDrift * stepAngle;
 
         const float want = tracked && present && steady ? 1.0f : 0.0f;
-        gate += (want > gate ? gateUp : gateDown) * (want - gate);
+        if (want > gate)
+            gate = std::min (1.0f, gate + bloomStep);
+        else
+            gate += gateDown * (want - gate);
 
         if (! audible)
             continue;
